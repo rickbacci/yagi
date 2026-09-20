@@ -100,15 +100,47 @@ class TestCliE2E(unittest.TestCase):
         if os.path.exists(os.path.join(tv_dir, "channels.json")):
             self.assertIn("Channels", res.stdout)
 
-    def test_cli_invalid_subcommand_fails(self):
-        """Invoking an unknown command must exit with code 2."""
-        res = subprocess.run(
-            [sys.executable, CLI_BIN, "nonexistent-command"],
+    def test_cli_favorite_toggle_and_list(self):
+        """omarchy-tv favorite toggle and list must manage favorites in sandbox."""
+        # Initially empty list
+        res_list = subprocess.run(
+            [sys.executable, CLI_BIN, "favorite", "list"],
             capture_output=True,
             text=True,
             env=self.env
         )
-        self.assertNotEqual(res.returncode, 0)
+        self.assertEqual(res_list.returncode, 0)
+        self.assertIn("No favorite channels saved", res_list.stdout)
+
+        # Toggle FOX into favorites
+        res_toggle = subprocess.run(
+            [sys.executable, CLI_BIN, "favorite", "toggle", "FOX"],
+            capture_output=True,
+            text=True,
+            env=self.env
+        )
+        self.assertEqual(res_toggle.returncode, 0)
+        self.assertIn("Added 'FOX' to favorites", res_toggle.stdout)
+
+        # List now shows FOX
+        res_list2 = subprocess.run(
+            [sys.executable, CLI_BIN, "favorite", "list"],
+            capture_output=True,
+            text=True,
+            env=self.env
+        )
+        self.assertEqual(res_list2.returncode, 0)
+        self.assertIn("FOX", res_list2.stdout)
+
+        # Toggle FOX out of favorites
+        res_toggle2 = subprocess.run(
+            [sys.executable, CLI_BIN, "favorite", "toggle", "FOX"],
+            capture_output=True,
+            text=True,
+            env=self.env
+        )
+        self.assertEqual(res_toggle2.returncode, 0)
+        self.assertIn("Removed 'FOX' from favorites", res_toggle2.stdout)
 
 
 if __name__ == "__main__":

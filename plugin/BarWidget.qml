@@ -22,6 +22,17 @@ BarWidget {
   property double scanFreq: 0
   property var scanSignal: null
   property int scanTotalFound: 0
+  property var favoritesData: []
+  property string channelFilter: "all" // "all" | "favorites"
+
+  readonly property var displayChannels: {
+    if (root.channelFilter === "favorites") {
+      return (root.channelsData || []).filter(function(ch) {
+        return root.favoritesData && root.favoritesData.indexOf(ch.name) !== -1
+      })
+    }
+    return root.channelsData || []
+  }
 
   readonly property string binPath: "omarchy-tv"
 
@@ -87,6 +98,23 @@ BarWidget {
     } catch (e) {
       // ignore transient partial write
     }
+  }
+
+  function applyFavorites(jsonText) {
+    try {
+      root.favoritesData = JSON.parse(jsonText || "[]")
+    } catch (e) {
+      root.favoritesData = []
+    }
+  }
+
+  function isFavorite(chName) {
+    return root.favoritesData && root.favoritesData.indexOf(chName) !== -1
+  }
+
+  function toggleFavorite(chName) {
+    favProc.command = [root.binPath, "favorite", "toggle", chName]
+    favProc.running = true
   }
 
   implicitWidth: row.implicitWidth + Style.space(12)
@@ -180,6 +208,16 @@ BarWidget {
     onFileChanged: reload()
   }
 
+  // Watch favorites.json file
+  FileView {
+    id: favoritesFile
+    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/favorites.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applyFavorites(text())
+    onFileChanged: reload()
+  }
+
   // Watch live scan status file
   FileView {
     id: scanStatusFile
@@ -207,6 +245,14 @@ BarWidget {
   Process {
     id: navProc
     command: []
+  }
+
+  Process {
+    id: favProc
+    command: []
+    onExited: function(code) {
+      favoritesFile.reload()
+    }
   }
 
   Process {
@@ -487,22 +533,145 @@ BarWidget {
         }
       }
 
+      // Now Playing Info Card
+      BorderSurface {
+        visible: root.activeChannelName !== ""
+        width: parent.width
+        radius: Style.spacing.labelGap
+        color: Style.selectedFillFor(root.bar.foreground, Color.accent)
+        borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
+
+        Column {
+          anchors.fill: parent
+          anchors.margins: Style.space(10)
+          spacing: Style.space(4)
+
+          Row {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Text {
+              textFormat: Text.PlainText
+              text: "󰐊 LIVE STREAM"
+              color: Color.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+
+            Item {
+              width: Math.max(8, parent.width - Style.space(200))
+              height: 1
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              text: "720p HD · AC-3 Digital"
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Text {
+            textFormat: Text.PlainText
+            text: root.activeChannelName
+            color: root.bar.foreground
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.subtitle
+            font.bold: true
+          }
+        }
+      }
+
       PanelSeparator {
         width: parent.width
         foreground: root.bar.foreground
       }
 
-      // Channels List Title
-      Text {
-        textFormat: Text.PlainText
-        text: "CHANNEL GUIDE"
-        color: Qt.darker(root.bar.foreground, 1.6)
-        font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.caption
-        font.bold: true
+      // Channel Guide Header with Filter Tabs
+      Row {
+        width: parent.width
+        spacing: Style.space(6)
+
+        Item {
+          width: parent.width - filterTabRow.width - Style.space(6)
+          height: filterTabRow.height
+
+          Text {
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: "CHANNEL GUIDE"
+            color: Qt.darker(root.bar.foreground, 1.6)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+          }
+        }
+
+        Row {
+          id: filterTabRow
+          spacing: Style.space(4)
+          anchors.verticalCenter: parent.verticalCenter
+
+          // "All" Tab
+          BorderSurface {
+            height: Style.space(22)
+            width: allTabText.implicitWidth + Style.space(14)
+            radius: 4
+            color: root.channelFilter === "all" ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
+            borderSpec: root.channelFilter === "all" ? Border.controlSpec("normal", root.bar.foreground, Color.accent) : Border.controlSpec("normal", root.bar.foreground, "transparent")
+
+            Text {
+              id: allTabText
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: "All (" + root.channelsData.length + ")"
+              color: root.channelFilter === "all" ? Color.accent : Qt.darker(root.bar.foreground, 1.6)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: root.channelFilter === "all"
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.channelFilter = "all"
+            }
+          }
+
+          // "Favorites" Tab
+          BorderSurface {
+            height: Style.space(22)
+            width: favTabText.implicitWidth + Style.space(14)
+            radius: 4
+            color: root.channelFilter === "favorites" ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
+            borderSpec: root.channelFilter === "favorites" ? Border.controlSpec("normal", root.bar.foreground, Color.accent) : Border.controlSpec("normal", root.bar.foreground, "transparent")
+
+            Text {
+              id: favTabText
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              text: "★ Favs (" + root.favoritesData.length + ")"
+              color: root.channelFilter === "favorites" ? "#f9e2af" : (root.favoritesData.length > 0 ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.8))
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: root.channelFilter === "favorites"
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.channelFilter = "favorites"
+            }
+          }
+        }
       }
 
-      // Empty State
+      // Empty State (No Channels Scanned)
       Item {
         visible: root.channelsData.length === 0 && !root.isScanning
         width: parent.width
@@ -528,10 +697,37 @@ BarWidget {
         }
       }
 
+      // Empty State (No Favorites Selected)
+      Item {
+        visible: root.channelsData.length > 0 && root.channelFilter === "favorites" && root.displayChannels.length === 0
+        width: parent.width
+        height: Style.space(70)
+
+        Column {
+          anchors.centerIn: parent
+          spacing: Style.space(4)
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "⭐ No favorite channels yet"
+            color: Qt.darker(root.bar.foreground, 1.3)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: true
+          }
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: "Click the ☆ star on any station below to pin it here."
+            color: Qt.darker(root.bar.foreground, 1.8)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
+      }
+
       // Channel List Scroll Area
       Item {
         id: channelScrollContainer
-        visible: root.channelsData.length > 0
+        visible: root.displayChannels.length > 0
         width: parent.width
         height: Math.min(Style.space(260), channelListView.implicitHeight)
         clip: true
@@ -551,7 +747,7 @@ BarWidget {
             spacing: Style.space(4)
 
             Repeater {
-              model: root.channelsData
+              model: root.displayChannels
 
               BorderSurface {
                 id: chItem
@@ -569,8 +765,8 @@ BarWidget {
                   anchors.right: parent.right
                   anchors.verticalCenter: parent.verticalCenter
                   anchors.leftMargin: Style.space(10)
-                  anchors.rightMargin: Style.space(10)
-                  spacing: Style.space(10)
+                  anchors.rightMargin: Style.space(8)
+                  spacing: Style.space(8)
 
                   Text {
                     textFormat: Text.PlainText
@@ -582,7 +778,7 @@ BarWidget {
                   }
 
                   Column {
-                    width: parent.width - Style.space(90)
+                    width: parent.width - Style.space(110)
                     spacing: Style.space(1)
                     anchors.verticalCenter: parent.verticalCenter
 
@@ -607,7 +803,7 @@ BarWidget {
                   }
 
                   BorderSurface {
-                    width: Style.space(48)
+                    width: Style.space(40)
                     height: Style.space(22)
                     radius: Style.spacing.labelGap
                     color: Style.normalFillFor(root.bar.foreground, Color.accent)
@@ -622,10 +818,37 @@ BarWidget {
                       font.pixelSize: Style.font.caption
                     }
                   }
+
+                  // Favorite Star Button
+                  Item {
+                    width: Style.space(26)
+                    height: Style.space(26)
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Text {
+                      anchors.centerIn: parent
+                      text: root.isFavorite(chItem.modelData.name) ? "★" : "☆"
+                      color: root.isFavorite(chItem.modelData.name) ? "#f9e2af" : (starMouse.containsMouse ? Color.accent : Qt.darker(root.bar.foreground, 2.2))
+                      font.pixelSize: Style.font.body
+                    }
+
+                    MouseArea {
+                      id: starMouse
+                      anchors.fill: parent
+                      hoverEnabled: true
+                      cursorShape: Qt.PointingHandCursor
+                      onClicked: function(mouse) {
+                        mouse.accepted = true
+                        root.toggleFavorite(chItem.modelData.name)
+                      }
+                      onWheel: function(wheel) { wheel.accepted = false }
+                    }
+                  }
                 }
 
                 MouseArea {
                   anchors.fill: parent
+                  anchors.rightMargin: Style.space(34)
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
                   onClicked: root.playChannel(chItem.modelData.name)

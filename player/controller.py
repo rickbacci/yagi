@@ -104,7 +104,7 @@ class MpvController:
             "--title=Omarchy TV",
             "--force-window=immediate",
             "--hwdec=auto-safe",
-            "--geometry=720x405-20-20",  # Default 16:9 bottom-right placement
+            "--geometry=720x405",
             "--keepaspect-window=yes",
             f"--dvbin-card={adapter_id}",
             f"--dvbin-file={MPV_CHANNELS_CONF}",

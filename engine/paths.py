@@ -6,10 +6,13 @@ Centralizes configuration, socket locations, and directories with secure permiss
 import os
 from typing import Optional
 
-CONFIG_DIR = os.path.expanduser("~/.config/omarchy/tv")
+_XDG_CONFIG = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+CONFIG_DIR = os.path.join(_XDG_CONFIG, "omarchy", "tv")
 CHANNELS_JSON_PATH = os.path.join(CONFIG_DIR, "channels.json")
+FAVORITES_JSON_PATH = os.path.join(CONFIG_DIR, "favorites.json")
+GUIDE_JSON_PATH = os.path.join(CONFIG_DIR, "guide.json")
 SCAN_STATUS_PATH = os.path.join(CONFIG_DIR, "scan_status.json")
-MPV_CHANNELS_CONF = os.path.expanduser("~/.config/mpv/channels.conf")
+MPV_CHANNELS_CONF = os.path.join(_XDG_CONFIG, "mpv", "channels.conf")
 RECORDINGS_DIR = os.path.expanduser("~/Videos/TV")
 
 

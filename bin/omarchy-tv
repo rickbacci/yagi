@@ -16,7 +16,7 @@ if PROJECT_ROOT not in sys.path:
 
 from engine.tuner import TunerManager
 from engine.scanner import AtscScanner, write_scan_status
-from engine.paths import CHANNELS_JSON_PATH
+from engine.paths import CHANNELS_JSON_PATH, FAVORITES_JSON_PATH
 from player.controller import MpvController
 from engine.daemon import TvDaemon, send_daemon_request
 
@@ -91,6 +91,66 @@ def cmd_list(args):
         print(f"{ch.get('name', 'Unknown'):<30} {freq_mhz:<12} {ch.get('modulation', '8VSB'):<10} {ch.get('service_id', '')}")
 
 
+def load_favorites() -> list:
+    if os.path.exists(FAVORITES_JSON_PATH):
+        try:
+            with open(FAVORITES_JSON_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception:
+            pass
+    return []
+
+
+def save_favorites(favorites: list) -> None:
+    os.makedirs(os.path.dirname(FAVORITES_JSON_PATH), exist_ok=True)
+    tmp = FAVORITES_JSON_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(favorites, f, indent=2)
+    os.replace(tmp, FAVORITES_JSON_PATH)
+
+
+def cmd_favorite(args):
+    favs = load_favorites()
+    action = args.action or "list"
+    target = args.channel
+
+    if action == "list" or not target:
+        if not favs:
+            print("No favorite channels saved yet.")
+            print("Add one with: omarchy-tv favorite toggle <channel_name>")
+            return
+        print(f"⭐ Favorite Channels ({len(favs)} total):")
+        for f in favs:
+            print(f"  ★ {f}")
+        return
+
+    if action == "add":
+        if target not in favs:
+            favs.append(target)
+            save_favorites(favs)
+            print(f"★ Added '{target}' to favorites.")
+        else:
+            print(f"'{target}' is already in favorites.")
+    elif action == "remove":
+        if target in favs:
+            favs.remove(target)
+            save_favorites(favs)
+            print(f"Removed '{target}' from favorites.")
+        else:
+            print(f"'{target}' was not in favorites.")
+    elif action == "toggle":
+        if target in favs:
+            favs.remove(target)
+            save_favorites(favs)
+            print(f"☆ Removed '{target}' from favorites.")
+        else:
+            favs.append(target)
+            save_favorites(favs)
+            print(f"★ Added '{target}' to favorites.")
+
+
 def cmd_play(args):
     player = MpvController()
     print(f"📺 Tuning to: {args.channel}...")
@@ -141,6 +201,12 @@ def main():
     # list / channels
     p_list = subparsers.add_parser("list", aliases=["channels"], help="List discovered channels")
     p_list.set_defaults(func=cmd_list)
+
+    # favorite
+    p_fav = subparsers.add_parser("favorite", aliases=["fav", "favorites"], help="Manage favorite channels")
+    p_fav.add_argument("action", nargs="?", choices=["list", "add", "remove", "toggle"], default="list", help="Action to perform")
+    p_fav.add_argument("channel", nargs="?", help="Channel name to favorite")
+    p_fav.set_defaults(func=cmd_favorite)
 
     # play
     p_play = subparsers.add_parser("play", help="Play a channel")
