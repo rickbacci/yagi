@@ -12,6 +12,7 @@ BarWidget {
   property bool popupOpen: false
   onPopupOpenChanged: {
     if (root.popupOpen) {
+      root.guideModalOpen = false
       if (root.favoritesData && root.favoritesData.length > 0) {
         root.channelFilter = "favorites"
       } else {
@@ -33,7 +34,22 @@ BarWidget {
   property int scanTotalFound: 0
   property var favoritesData: []
   property var guideData: ({})
+  property bool guideModalOpen: false
   property string channelFilter: "all" // "all" | "favorites"
+
+  readonly property var guideList: {
+    var list = []
+    if (!root.guideData) return list
+    for (var k in root.guideData) {
+      var item = Object.assign({}, root.guideData[k])
+      item.channel_number = k
+      list.push(item)
+    }
+    list.sort(function(a, b) {
+      return (parseFloat(a.channel_number) || 999) - (parseFloat(b.channel_number) || 999)
+    })
+    return list
+  }
 
   readonly property var displayChannels: {
     if (root.channelFilter === "favorites") {
@@ -355,8 +371,8 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen
-    contentWidth: popup.fittedContentWidth(Style.space(380))
-    contentHeight: popup.fittedContentHeight(Math.min(Style.space(560), mainCol.implicitHeight + Style.space(24)))
+    contentWidth: popup.fittedContentWidth(root.guideModalOpen ? Style.space(620) : Style.space(380))
+    contentHeight: popup.fittedContentHeight(root.guideModalOpen ? Style.space(560) : Math.min(Style.space(560), mainCol.implicitHeight + Style.space(24)))
 
     Column {
       id: mainCol
@@ -364,8 +380,15 @@ BarWidget {
       anchors.right: parent.right
       spacing: Style.space(12)
 
-      // Header
-      Row {
+      // Remote & Drawer View
+      Column {
+        id: remoteView
+        visible: !root.guideModalOpen
+        width: parent.width
+        spacing: Style.space(12)
+
+        // Header
+        Row {
         width: parent.width
         spacing: Style.space(10)
 
@@ -409,14 +432,21 @@ BarWidget {
         }
       }
 
-      // Action Bar: Scan / Stop
+      // Action Bar: Guide / Scan / Stop
       Row {
         width: parent.width
-        spacing: Style.space(8)
+        spacing: Style.space(6)
+
+        Button {
+          iconText: "󰥔"
+          text: "TV Guide"
+          foreground: root.bar.foreground
+          onClicked: root.guideModalOpen = true
+        }
 
         Button {
           iconText: root.isScanning ? "󰑐" : "󰍉"
-          text: root.isScanning ? "Scanning in progress..." : "Scan OTA Channels"
+          text: root.isScanning ? "Scanning..." : "Scan"
           foreground: root.bar.foreground
           enabled: !root.isScanning
           onClicked: root.startScan()
@@ -424,7 +454,7 @@ BarWidget {
 
         Button {
           iconText: "󰓛"
-          text: "Stop Player"
+          text: "Stop"
           foreground: root.bar.foreground
           visible: root.activeChannelName !== ""
           onClicked: root.stopPlayer()
@@ -1024,6 +1054,279 @@ BarWidget {
           text: "Next Ch"
           foreground: root.bar.foreground
           onClicked: root.channelUp()
+        }
+      }
+
+      // ==========================================
+      // FULL ELECTRONIC PROGRAM GUIDE (EPG) GRID
+      // ==========================================
+      Column {
+        id: guideGridView
+        visible: root.guideModalOpen
+        width: parent.width
+        spacing: Style.space(10)
+
+        // Guide Modal Header
+        Row {
+          width: parent.width
+          spacing: Style.space(10)
+
+          BorderSurface {
+            width: Style.space(36)
+            height: Style.space(36)
+            radius: Style.spacing.labelGap
+            color: Style.normalFillFor(root.bar.foreground, Color.accent)
+            borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
+
+            Text {
+              anchors.centerIn: parent
+              text: "󰥔"
+              color: Color.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.subtitle
+            }
+          }
+
+          Column {
+            width: parent.width - Style.space(150)
+            spacing: Style.space(2)
+            anchors.verticalCenter: parent.verticalCenter
+
+            Text {
+              textFormat: Text.PlainText
+              text: "ELECTRONIC PROGRAM GUIDE"
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              text: "Broadcast Schedules · Click show to tune live"
+              color: Qt.darker(root.bar.foreground, 1.5)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Button {
+            iconText: "󰅖"
+            text: "Back"
+            foreground: root.bar.foreground
+            anchors.verticalCenter: parent.verticalCenter
+            onClicked: root.guideModalOpen = false
+          }
+        }
+
+        PanelSeparator {
+          width: parent.width
+          foreground: root.bar.foreground
+        }
+
+        // Timeline Column Header
+        Row {
+          width: parent.width
+          spacing: Style.space(8)
+
+          BorderSurface {
+            width: Style.space(100)
+            height: Style.space(24)
+            color: "transparent"
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(4)
+              anchors.verticalCenter: parent.verticalCenter
+              text: "STATION"
+              color: Qt.darker(root.bar.foreground, 1.7)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.tiny
+              font.bold: true
+            }
+          }
+
+          BorderSurface {
+            width: Style.space(280)
+            height: Style.space(24)
+            color: "transparent"
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(4)
+              anchors.verticalCenter: parent.verticalCenter
+              text: "󰥔 NOW PLAYING"
+              color: Color.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.tiny
+              font.bold: true
+            }
+          }
+
+          BorderSurface {
+            width: parent.width - Style.space(400)
+            height: Style.space(24)
+            color: "transparent"
+            Text {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(4)
+              anchors.verticalCenter: parent.verticalCenter
+              text: "UPCOMING NEXT"
+              color: Qt.darker(root.bar.foreground, 1.7)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.tiny
+              font.bold: true
+            }
+          }
+        }
+
+        // Guide Grid Scroll Area
+        Item {
+          width: parent.width
+          height: Style.space(420)
+          clip: true
+
+          Flickable {
+            id: guideFlickable
+            anchors.fill: parent
+            contentWidth: width
+            contentHeight: guideCol.implicitHeight
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            clip: true
+
+            Column {
+              id: guideCol
+              width: guideFlickable.width
+              spacing: Style.space(6)
+
+              Repeater {
+                model: root.guideList
+
+                BorderSurface {
+                  id: gridRow
+                  required property var modelData
+                  readonly property string netCol: Model.networkColor(modelData.network, Color.accent)
+                  readonly property bool isCurrent: root.activeChannelName === modelData.station || root.activeChannelName === modelData.channel_number
+
+                  width: guideCol.width
+                  height: Style.space(54)
+                  radius: Style.spacing.labelGap
+                  color: isCurrent ? Style.selectedFillFor(root.bar.foreground, Color.accent) : Style.normalFillFor(root.bar.foreground, Color.accent)
+                  borderSpec: isCurrent ? Border.controlSpec("normal", root.bar.foreground, Color.accent) : Border.none()
+
+                  Row {
+                    anchors.fill: parent
+                    anchors.margins: Style.space(6)
+                    spacing: Style.space(8)
+
+                    // Station Pill
+                    BorderSurface {
+                      width: Style.space(90)
+                      height: parent.height
+                      radius: 4
+                      color: Style.normalFillFor(root.bar.foreground, Color.accent)
+                      borderSpec: Border.controlSpec("normal", gridRow.netCol, gridRow.netCol)
+
+                      Column {
+                        anchors.centerIn: parent
+                        spacing: 1
+                        Text {
+                          anchors.horizontalCenter: parent.horizontalCenter
+                          text: gridRow.modelData.channel_number || "OTA"
+                          color: root.bar.foreground
+                          font.family: root.bar.fontFamily
+                          font.pixelSize: Style.font.bodySmall
+                          font.bold: true
+                        }
+                        Text {
+                          anchors.horizontalCenter: parent.horizontalCenter
+                          text: gridRow.modelData.network || ""
+                          color: gridRow.netCol
+                          font.family: root.bar.fontFamily
+                          font.pixelSize: Style.font.tiny
+                          font.bold: true
+                        }
+                      }
+                    }
+
+                    // Current Program Card
+                    BorderSurface {
+                      width: Style.space(280)
+                      height: parent.height
+                      radius: 4
+                      color: "transparent"
+
+                      Column {
+                        anchors.fill: parent
+                        anchors.leftMargin: Style.space(4)
+                        spacing: 2
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        Text {
+                          text: gridRow.modelData.title || "Live Broadcast"
+                          color: gridRow.isCurrent ? Color.accent : root.bar.foreground
+                          font.family: root.bar.fontFamily
+                          font.pixelSize: Style.font.bodySmall
+                          font.bold: true
+                          elide: Text.ElideRight
+                          width: parent.width
+                        }
+
+                        Text {
+                          text: (gridRow.modelData.start_time ? (gridRow.modelData.start_time + " - " + gridRow.modelData.end_time + " · ") : "") + (gridRow.modelData.synopsis || "")
+                          color: Qt.darker(root.bar.foreground, 1.6)
+                          font.family: root.bar.fontFamily
+                          font.pixelSize: Style.font.caption
+                          elide: Text.ElideRight
+                          width: parent.width
+                        }
+                      }
+                    }
+
+                    // Next Program Card
+                    BorderSurface {
+                      width: parent.width - Style.space(390)
+                      height: parent.height
+                      radius: 4
+                      color: "transparent"
+
+                      Column {
+                        anchors.fill: parent
+                        anchors.leftMargin: Style.space(4)
+                        spacing: 2
+                        anchors.verticalCenter: parent.verticalCenter
+
+                        Text {
+                          text: gridRow.modelData.next_title || "Programming"
+                          color: Qt.darker(root.bar.foreground, 1.4)
+                          font.family: root.bar.fontFamily
+                          font.pixelSize: Style.font.caption
+                          font.bold: true
+                          elide: Text.ElideRight
+                          width: parent.width
+                        }
+
+                        Text {
+                          text: "Next Up"
+                          color: Qt.darker(root.bar.foreground, 2.0)
+                          font.family: root.bar.fontFamily
+                          font.pixelSize: Style.font.tiny
+                        }
+                      }
+                    }
+                  }
+
+                  MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: {
+                      root.playChannel(gridRow.modelData.station || gridRow.modelData.channel_number)
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

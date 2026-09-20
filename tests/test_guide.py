@@ -40,5 +40,17 @@ class TestGuide(unittest.TestCase):
             self.assertEqual(abc_prog["network"], "ABC")
 
 
+    def test_get_timeline_grid(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            guide_file = os.path.join(tmp_dir, "guide.json")
+            save_default_guide(guide_path=guide_file)
+            from engine.guide import get_timeline_grid
+            grid = get_timeline_grid(guide_data=load_guide(guide_path=guide_file))
+            self.assertIn("slots", grid)
+            self.assertIn("rows", grid)
+            self.assertGreater(len(grid["rows"]), 0)
+            self.assertEqual(grid["rows"][0]["channel_number"], "3.1")
+
+
 if __name__ == "__main__":
     unittest.main()

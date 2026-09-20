@@ -145,3 +145,36 @@ def get_channel_program(channel_identifier: str, guide_data: Optional[Dict[str, 
             return prog
 
     return None
+
+
+def get_timeline_grid(guide_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Returns structured timeline grid for UI rendering:
+    Slots: ["NOW", "6:30 PM", "7:00 PM", "7:30 PM"]
+    Channels: Array of station rows with their schedule blocks.
+    """
+    if guide_data is None:
+        guide_data = load_guide()
+
+    channels_sched = guide_data.get("channels", {})
+    slots = ["NOW", "6:30 PM", "7:00 PM", "7:30 PM"]
+
+    grid_rows = []
+    for ch_num, info in channels_sched.items():
+        row = {
+            "channel_number": ch_num,
+            "network": info.get("network", "OTA"),
+            "station": info.get("station", ch_num),
+            "current_title": info.get("title", "Live Broadcast"),
+            "next_title": info.get("next_title", "Evening Programming"),
+            "time_window": f"{info.get('start_time', '')} - {info.get('end_time', '')}",
+            "synopsis": info.get("synopsis", "")
+        }
+        grid_rows.append(row)
+
+    grid_rows.sort(key=lambda x: float(x["channel_number"]) if x["channel_number"].replace('.', '', 1).isdigit() else 999)
+    return {
+        "slots": slots,
+        "rows": grid_rows
+    }
+
