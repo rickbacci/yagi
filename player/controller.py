@@ -95,6 +95,7 @@ class MpvController:
             except OSError:
                 pass
 
+        hud_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "tv_hud.lua")
         cmd = [
             "mpv",
             "--idle=yes",
@@ -108,11 +109,15 @@ class MpvController:
             "--keepaspect-window=yes",
             f"--dvbin-card={adapter_id}",
             f"--dvbin-file={MPV_CHANNELS_CONF}",
+            "--no-osc",
+            f"--script={hud_script}",
             "--osd-level=1",
             "--osd-font=sans-serif",
-            "--osd-font-size=28",
+            "--osd-font-size=24",
             "--osd-color=#cdd6f4",
             "--osd-border-color=#11111b",
+            "--osd-back-color=#11111b80",
+            "--osd-shadow-offset=0",
         ]
 
         if channel_name:
