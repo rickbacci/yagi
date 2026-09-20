@@ -10,6 +10,15 @@ BarWidget {
   moduleName: "richardb.omarchy-tv"
 
   property bool popupOpen: false
+  onPopupOpenChanged: {
+    if (root.popupOpen) {
+      if (root.favoritesData && root.favoritesData.length > 0) {
+        root.channelFilter = "favorites"
+      } else {
+        root.channelFilter = "all"
+      }
+    }
+  }
   property var channelsData: []
   property var activeChannel: null
   property string activeChannelName: ""
@@ -102,9 +111,15 @@ BarWidget {
     }
   }
 
+  property bool filterInitialized: false
+
   function applyFavorites(jsonText) {
     try {
       root.favoritesData = JSON.parse(jsonText || "[]")
+      if (!root.filterInitialized) {
+        root.channelFilter = (root.favoritesData && root.favoritesData.length > 0) ? "favorites" : "all"
+        root.filterInitialized = true
+      }
     } catch (e) {
       root.favoritesData = []
     }
