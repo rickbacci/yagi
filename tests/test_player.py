@@ -5,22 +5,32 @@ Unit tests for Omarchy TV - MPV Player Controller & Channel Cycling
 import os
 import json
 import unittest
+import tempfile
 from unittest.mock import patch, MagicMock
 
-from player.controller import MpvController
+from player.controller import MpvController, update_player_state
 from engine.tuner import TunerAdapter
 
 
 class TestMpvPlayerController(unittest.TestCase):
     def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.state_path = os.path.join(self.tmp_dir.name, "player_state.json")
+        self._state_patcher = patch("player.controller.PLAYER_STATE_PATH", self.state_path)
+        self._state_patcher.start()
+
         self.mock_channels = [
             {"id": "53.1", "name": "53.1 Daystar", "frequency": 177028615},
             {"id": "53.2", "name": "53.2 WCDN", "frequency": 177028615},
             {"id": "7.1", "name": "7.1 WABC", "frequency": 177028615},
         ]
-        self.controller = MpvController(socket_path="/tmp/test-mpv.sock")
+        self.controller = MpvController(socket_path=os.path.join(self.tmp_dir.name, "mpv.sock"))
         self.controller._load_channels = MagicMock(return_value=self.mock_channels)
         self.controller.channels = self.mock_channels
+
+    def tearDown(self):
+        self._state_patcher.stop()
+        self.tmp_dir.cleanup()
 
     def test_channel_load(self):
         self.assertEqual(len(self.controller.channels), 3)
@@ -91,6 +101,39 @@ class TestMpvPlayerController(unittest.TestCase):
         cmd_called = mock_popen.call_args[0][0]
         self.assertIn("--dvbin-card=1", cmd_called)
         self.assertIn("dvb://53.1 Daystar", cmd_called)
+
+    def test_update_player_state_atomic(self):
+        update_player_state(True, channel="53.1 Daystar", station="Daystar", pid=99)
+        self.assertTrue(os.path.exists(self.state_path))
+        leftovers = [name for name in os.listdir(self.tmp_dir.name) if ".tmp." in name]
+        self.assertEqual(leftovers, [])
+        with open(self.state_path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertTrue(data["running"])
+        self.assertEqual(data["channel"], "53.1 Daystar")
+        self.assertEqual(data["station"], "Daystar")
+        self.assertEqual(data["pid"], 99)
+        self.assertIsInstance(data["updated_at"], (int, float))
+
+    def test_missing_socket_does_not_create_state_file(self):
+        self.assertFalse(os.path.exists(self.state_path))
+        self.assertFalse(self.controller.is_running())
+        self.assertFalse(os.path.exists(self.state_path))
+
+    def test_is_running_clears_stale_state_when_socket_missing(self):
+        update_player_state(True, channel="53.1 Daystar", pid=1)
+        self.assertFalse(self.controller.is_running())
+        with open(self.state_path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertFalse(data["running"])
+
+    @patch("player.controller.update_player_state")
+    @patch.object(MpvController, "send_command", return_value=None)
+    def test_is_running_does_not_clear_state_on_ipc_failure(self, mock_send, mock_update):
+        with patch("os.path.exists", return_value=True):
+            running = self.controller.is_running()
+        self.assertFalse(running)
+        mock_update.assert_not_called()
 
 
 if __name__ == "__main__":

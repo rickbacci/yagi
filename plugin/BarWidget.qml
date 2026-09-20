@@ -13,6 +13,7 @@ BarWidget {
   onPopupOpenChanged: {
     if (root.popupOpen) {
       root.guideModalOpen = false
+      playerStateFile.reload()
       if (root.favoritesData && root.favoritesData.length > 0) {
         root.channelFilter = "favorites"
       } else {
@@ -269,6 +270,7 @@ BarWidget {
 
     function reloadStatus(): void {
       scanStatusFile.reload()
+      playerStateFile.reload()
     }
 
     function reloadChannels(): void {
@@ -358,23 +360,53 @@ BarWidget {
     }
   }
 
+  function applyPlayerState(jsonText) {
+    try {
+      var raw = (jsonText || "").trim()
+      if (!raw) return
+      var s = JSON.parse(raw)
+      if (s.running === true) {
+        if (s.channel) root.activeChannelName = s.channel
+      } else if (s.running === false) {
+        root.activeChannelName = ""
+      }
+    } catch (e) {
+      // ignore transient partial write
+    }
+  }
+
+  // Watch live playback state
+  FileView {
+    id: playerStateFile
+    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/player_state.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applyPlayerState(text())
+    onFileChanged: reload()
+  }
+
   Timer {
     id: scanPollTimer
     interval: 500
     running: true
     repeat: true
-    onTriggered: scanStatusFile.reload()
+    onTriggered: {
+      scanStatusFile.reload()
+      playerStateFile.reload()
+    }
   }
 
   // Processes for tuning & scan
   Process {
     id: tuneProc
     command: []
+    onExited: playerStateFile.reload()
   }
 
   Process {
     id: navProc
     command: []
+    onExited: playerStateFile.reload()
   }
 
   Process {
@@ -388,6 +420,7 @@ BarWidget {
   Process {
     id: stopProc
     command: [root.binPath, "stop"]
+    onExited: playerStateFile.reload()
   }
 
   Process {
@@ -413,6 +446,7 @@ BarWidget {
       channelsFile.reload()
       scanStatusFile.reload()
       recordingsActiveFile.reload()
+      playerStateFile.reload()
     })
   }
 
@@ -1115,6 +1149,7 @@ BarWidget {
           foreground: root.bar.foreground
           onClicked: root.channelUp()
         }
+      }
       }
 
       // ==========================================

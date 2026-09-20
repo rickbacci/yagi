@@ -19,6 +19,7 @@ end
 local CHANNELS_PATH = xdg_config .. "/omarchy/tv/channels.json"
 local GUIDE_PATH = xdg_config .. "/omarchy/tv/guide.json"
 local RECORDINGS_PATH = xdg_config .. "/omarchy/tv/recordings_active.json"
+local PLAYER_STATE_PATH = xdg_config .. "/omarchy/tv/player_state.json"
 
 local cached_channels = {}
 local cached_guide = {}
@@ -60,6 +61,29 @@ local function reload_data()
     end
 end
 
+local function json_escape(s)
+    s = tostring(s or "")
+    return s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r")
+end
+
+local function write_player_state(running, channel, station)
+    local pid = mp.get_property_number("pid", 0) or 0
+    local json = string.format(
+        '{"running": %s, "channel": "%s", "station": "%s", "pid": %d, "updated_at": %d}',
+        running and "true" or "false",
+        json_escape(channel),
+        json_escape(station),
+        pid,
+        os.time()
+    )
+    local tmp = PLAYER_STATE_PATH .. ".tmp." .. tostring(pid)
+    local f = io.open(tmp, "w")
+    if not f then return end
+    f:write(json)
+    f:close()
+    os.rename(tmp, PLAYER_STATE_PATH)
+end
+
 local function get_active_info()
     local path = mp.get_property("path") or ""
     local tune_name = path:gsub("^dvb://", "")
@@ -99,6 +123,13 @@ local function get_active_info()
     end
 
     return matched_ch, prog
+end
+
+local function sync_player_state()
+    local ch = select(1, get_active_info())
+    if ch then
+        write_player_state(true, ch.tune_name or ch.name or "", ch.display_name or "")
+    end
 end
 
 local function get_network_color(net)
@@ -230,6 +261,11 @@ end
 -- Hook Events
 mp.register_event("file-loaded", function()
     show_hud()
+    sync_player_state()
+end)
+
+mp.register_event("shutdown", function()
+    write_player_state(false, "", "")
 end)
 
 mp.observe_property("path", "string", function(_, _)

@@ -71,6 +71,29 @@ class SchemaValidator:
 
         return errors
 
+    @staticmethod
+    def validate_player_state_json(data: Dict[str, Any]) -> List[str]:
+        errors = []
+        if not isinstance(data, dict):
+            return ["Root must be a JSON object"]
+
+        if "running" not in data or not isinstance(data["running"], bool):
+            errors.append("Missing or invalid 'running' (must be boolean)")
+
+        if "channel" not in data or not isinstance(data["channel"], str):
+            errors.append("Missing or invalid 'channel' (must be string)")
+
+        if "station" in data and not isinstance(data["station"], str):
+            errors.append("Field 'station' must be string")
+
+        if "pid" in data and not isinstance(data["pid"], int):
+            errors.append("Field 'pid' must be integer")
+
+        if "updated_at" not in data or not isinstance(data["updated_at"], (int, float)):
+            errors.append("Missing or invalid 'updated_at' (must be timestamp number)")
+
+        return errors
+
 
 class TestContracts(unittest.TestCase):
     def test_save_channels_contract(self):
@@ -150,6 +173,37 @@ class TestContracts(unittest.TestCase):
         now = time.time()
         is_stale = (now - stale_status["updated_at"]) > 15.0
         self.assertTrue(is_stale, "Status older than 15 seconds must be flagged as stale")
+
+    def test_update_player_state_contract(self):
+        """update_player_state must strictly adhere to player_state.json schema."""
+        from player.controller import update_player_state
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = os.path.join(tmp_dir, "player_state.json")
+            update_player_state(
+                True,
+                channel="Daystar",
+                station="53.1 Daystar",
+                pid=42,
+                state_path=state_path,
+            )
+
+            with open(state_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            errors = SchemaValidator.validate_player_state_json(data)
+            self.assertEqual(errors, [], f"Schema validation failed: {errors}")
+            self.assertTrue(data["running"])
+            self.assertEqual(data["channel"], "Daystar")
+            self.assertGreater(data["updated_at"], 0)
+
+            update_player_state(False, state_path=state_path)
+            with open(state_path, "r", encoding="utf-8") as f:
+                idle = json.load(f)
+
+            errors = SchemaValidator.validate_player_state_json(idle)
+            self.assertEqual(errors, [], f"Idle schema validation failed: {errors}")
+            self.assertFalse(idle["running"])
 
 
 if __name__ == "__main__":

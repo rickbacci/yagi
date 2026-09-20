@@ -11,8 +11,47 @@ import socket
 import subprocess
 from typing import Optional, Dict, Any, List
 
-from engine.paths import MPV_SOCKET_PATH, CHANNELS_JSON_PATH, RECORDINGS_DIR, MPV_CHANNELS_CONF
+from engine.paths import MPV_SOCKET_PATH, CHANNELS_JSON_PATH, RECORDINGS_DIR, MPV_CHANNELS_CONF, PLAYER_STATE_PATH
 from engine.tuner import TunerManager
+
+
+def update_player_state(
+    running: bool,
+    channel: str = "",
+    station: str = "",
+    pid: int = 0,
+    state_path: Optional[str] = None,
+) -> None:
+    """Writes live playback state atomically for Quickshell UI reactivity."""
+    target_path = state_path or PLAYER_STATE_PATH
+    try:
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        tmp = f"{target_path}.tmp.{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({
+                "running": running,
+                "channel": channel,
+                "station": station,
+                "pid": pid,
+                "updated_at": time.time()
+            }, f, indent=2)
+        os.replace(tmp, target_path)
+    except Exception:
+        pass
+
+
+def _clear_player_state_if_running(state_path: Optional[str] = None) -> None:
+    """Clears stale now-playing state when the MPV socket is gone."""
+    target_path = state_path or PLAYER_STATE_PATH
+    try:
+        if not os.path.exists(target_path):
+            return
+        with open(target_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("running") is True:
+            update_player_state(False, state_path=target_path)
+    except Exception:
+        pass
 
 
 class MpvController:
@@ -34,6 +73,7 @@ class MpvController:
 
     def is_running(self) -> bool:
         if not os.path.exists(self.socket_path):
+            _clear_player_state_if_running()
             return False
         try:
             res = self.send_command(["get_property", "playback-time"])
@@ -135,10 +175,14 @@ class MpvController:
         while time.time() - start_time < 3.0:
             if os.path.exists(self.socket_path):
                 time.sleep(0.1)
+                update_player_state(True, channel=channel_name or "", pid=self.proc.pid if self.proc else 0)
                 return True
             time.sleep(0.05)
 
-        return os.path.exists(self.socket_path)
+        ready = os.path.exists(self.socket_path)
+        if ready:
+            update_player_state(True, channel=channel_name or "", pid=self.proc.pid if self.proc else 0)
+        return ready
 
     def tune(self, channel_name: str) -> bool:
         """Tunes to specified channel name, number, or callsign."""
@@ -157,7 +201,15 @@ class MpvController:
 
         res = self.send_command(["loadfile", f"dvb://{target_name}", "replace"])
         self.show_osd(osd_label)
-        return res is not None and res.get("error") == "success"
+        success = res is not None and res.get("error") == "success"
+        if success:
+            update_player_state(
+                True,
+                channel=target_name,
+                station=matched.get("display_name", "") if matched else "",
+                pid=self.proc.pid if self.proc else 0
+            )
+        return success
 
     def get_active_channel_name(self) -> Optional[str]:
         """Queries running MPV instance for the currently playing DVB channel."""
@@ -229,6 +281,7 @@ class MpvController:
     def stop(self) -> None:
         if self.is_running():
             self.send_command(["quit"])
+        update_player_state(False)
 
 
 if __name__ == "__main__":
