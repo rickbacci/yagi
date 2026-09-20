@@ -11,7 +11,8 @@ import socket
 import subprocess
 from typing import Optional, Dict, Any, List
 
-from engine.paths import MPV_SOCKET_PATH, CHANNELS_JSON_PATH, RECORDINGS_DIR
+from engine.paths import MPV_SOCKET_PATH, CHANNELS_JSON_PATH, RECORDINGS_DIR, MPV_CHANNELS_CONF
+from engine.tuner import TunerManager
 
 
 class MpvController:
@@ -46,21 +47,20 @@ class MpvController:
             return None
 
         try:
-            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            s.settimeout(timeout)
-            s.connect(self.socket_path)
-            payload = json.dumps({"command": cmd}) + "\n"
-            s.sendall(payload.encode("utf-8"))
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(timeout)
+                s.connect(self.socket_path)
+                payload = json.dumps({"command": cmd}) + "\n"
+                s.sendall(payload.encode("utf-8"))
 
-            response = ""
-            while True:
-                chunk = s.recv(4096).decode("utf-8")
-                if not chunk:
-                    break
-                response += chunk
-                if "\n" in chunk:
-                    break
-            s.close()
+                response = ""
+                while True:
+                    chunk = s.recv(4096).decode("utf-8")
+                    if not chunk:
+                        break
+                    response += chunk
+                    if "\n" in chunk:
+                        break
 
             # Parse JSON line
             for line in response.splitlines():
@@ -76,12 +76,17 @@ class MpvController:
         except Exception:
             return None
 
-    def launch(self, channel_name: Optional[str] = None, adapter_id: int = 0) -> bool:
+    def launch(self, channel_name: Optional[str] = None, adapter_id: Optional[int] = None) -> bool:
         """Launches MPV instance with Wayland configuration."""
         if self.is_running():
             if channel_name:
                 self.tune(channel_name)
             return True
+
+        # Dynamic tuner allocation: select first available ATSC tuner if not specified
+        if adapter_id is None:
+            available = TunerManager.get_available_tuner(require_atsc=True)
+            adapter_id = available.adapter_id if available else 0
 
         # Remove old dead socket if exists
         if os.path.exists(self.socket_path):
@@ -102,6 +107,7 @@ class MpvController:
             "--geometry=720x405-20-20",  # Default 16:9 bottom-right placement
             "--keepaspect-window=yes",
             f"--dvbin-card={adapter_id}",
+            f"--dvbin-file={MPV_CHANNELS_CONF}",
             "--osd-level=1",
             "--osd-font=sans-serif",
             "--osd-font-size=28",
@@ -138,20 +144,53 @@ class MpvController:
         self.show_osd(f"📺 Tuning {channel_name}...")
         return res is not None and res.get("error") == "success"
 
+    def get_active_channel_name(self) -> Optional[str]:
+        """Queries running MPV instance for the currently playing DVB channel."""
+        if not self.is_running():
+            return None
+        res = self.send_command(["get_property", "path"])
+        if res and res.get("error") == "success":
+            data = res.get("data")
+            if isinstance(data, str) and data.startswith("dvb://"):
+                return data.replace("dvb://", "", 1)
+        return None
+
     def channel_up(self) -> None:
+        """Surfs forward to the next channel based on current playing station."""
         self.channels = self._load_channels()
         if not self.channels:
             return
-        self.current_channel_index = (self.current_channel_index + 1) % len(self.channels)
-        ch = self.channels[self.current_channel_index]
+
+        active_name = self.get_active_channel_name()
+        current_idx = 0
+        if active_name:
+            for idx, ch in enumerate(self.channels):
+                if ch.get("name") == active_name:
+                    current_idx = idx
+                    break
+
+        next_idx = (current_idx + 1) % len(self.channels)
+        self.current_channel_index = next_idx
+        ch = self.channels[next_idx]
         self.tune(ch.get("name", ""))
 
     def channel_down(self) -> None:
+        """Surfs backward to the previous channel based on current playing station."""
         self.channels = self._load_channels()
         if not self.channels:
             return
-        self.current_channel_index = (self.current_channel_index - 1) % len(self.channels)
-        ch = self.channels[self.current_channel_index]
+
+        active_name = self.get_active_channel_name()
+        current_idx = 0
+        if active_name:
+            for idx, ch in enumerate(self.channels):
+                if ch.get("name") == active_name:
+                    current_idx = idx
+                    break
+
+        prev_idx = (current_idx - 1) % len(self.channels)
+        self.current_channel_index = prev_idx
+        ch = self.channels[prev_idx]
         self.tune(ch.get("name", ""))
 
     def toggle_pause(self) -> None:

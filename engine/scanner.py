@@ -14,14 +14,18 @@ from engine.tuner import TunerManager, TunerAdapter
 from engine.paths import CHANNELS_JSON_PATH, MPV_CHANNELS_CONF, SCAN_STATUS_PATH
 
 
-def write_scan_status(status_dict: Dict[str, Any]) -> None:
+def write_scan_status(status_dict: Dict[str, Any], status_path: Optional[str] = None) -> None:
     """Writes scan progress atomically for Quickshell UI."""
+    target_path = status_path or SCAN_STATUS_PATH
     try:
-        os.makedirs(os.path.dirname(SCAN_STATUS_PATH), exist_ok=True)
-        tmp = SCAN_STATUS_PATH + ".tmp"
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        tmp = target_path + ".tmp"
+        payload = dict(status_dict)
+        if "updated_at" not in payload:
+            payload["updated_at"] = time.time()
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(status_dict, f)
-        os.replace(tmp, SCAN_STATUS_PATH)
+            json.dump(payload, f)
+        os.replace(tmp, target_path)
     except Exception:
         pass
 
@@ -129,6 +133,7 @@ class AtscScanner:
         discovered_channels: List[Dict[str, Any]] = []
         current_freq_index = 0
         current_signal: Optional[float] = None
+        scan_completed = False
 
         try:
             proc = subprocess.Popen(
@@ -258,10 +263,19 @@ class AtscScanner:
             }
             write_scan_status(ev_done)
             yield ev_done
+            scan_completed = True
 
             return discovered_channels
 
         finally:
+            if not scan_completed:
+                write_scan_status({
+                    "status": "idle",
+                    "is_scanning": False,
+                    "percent": 0,
+                    "total_found": len(discovered_channels),
+                    "channels": discovered_channels
+                })
             if os.path.exists(in_conf_path):
                 try:
                     os.unlink(in_conf_path)
@@ -314,29 +328,47 @@ class AtscScanner:
         return channels
 
     @classmethod
-    def save_channels(cls, channels: List[Dict[str, Any]]) -> None:
+    def save_channels(cls, channels: List[Dict[str, Any]], json_path: Optional[str] = None, mpv_path: Optional[str] = None) -> None:
         """Saves channels to JSON and MPV format."""
-        os.makedirs(os.path.dirname(CHANNELS_JSON_PATH), exist_ok=True)
-        with open(CHANNELS_JSON_PATH, "w", encoding="utf-8") as f:
+        target_json = json_path or CHANNELS_JSON_PATH
+        target_mpv = mpv_path or MPV_CHANNELS_CONF
+        os.makedirs(os.path.dirname(target_json), exist_ok=True)
+        with open(target_json, "w", encoding="utf-8") as f:
             json.dump({
                 "updated_at": time.time(),
                 "total": len(channels),
                 "channels": channels
             }, f, indent=2)
 
-        # Write MPV channels.conf (DVBv5 format or legacy format)
-        os.makedirs(os.path.dirname(MPV_CHANNELS_CONF), exist_ok=True)
-        with open(MPV_CHANNELS_CONF, "w", encoding="utf-8") as f:
+        # Write MPV channels.conf in ATSC format (NAME:FREQ:8VSB:VPID:APID:SID)
+        os.makedirs(os.path.dirname(target_mpv), exist_ok=True)
+        with open(target_mpv, "w", encoding="utf-8") as f:
             for ch in channels:
                 name = ch.get("name", "Unknown")
                 freq = ch.get("frequency", 0)
                 sid = ch.get("service_id", 1)
-                # DVBv5 format that mpv reads
-                f.write(f"[{name}]\n")
-                f.write(f"  DELIVERY_SYSTEM = ATSC\n")
-                f.write(f"  FREQUENCY = {freq}\n")
-                f.write(f"  MODULATION = VSB/8\n")
-                f.write(f"  SERVICE_ID = {sid}\n\n")
+                vpid_raw = ch.get("video_pid", 0)
+                apid_raw = ch.get("audio_pid", 0)
+                vpid = int(str(vpid_raw).split()[0]) if vpid_raw else 0
+                apid = int(str(apid_raw).split()[0]) if apid_raw else 0
+                f.write(f"{name}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
+
+        # Also write channels.conf.atsc if default MPV location
+        if target_mpv == MPV_CHANNELS_CONF:
+            try:
+                atsc_conf = target_mpv + ".atsc"
+                with open(atsc_conf, "w", encoding="utf-8") as f:
+                    for ch in channels:
+                        name = ch.get("name", "Unknown")
+                        freq = ch.get("frequency", 0)
+                        sid = ch.get("service_id", 1)
+                        vpid_raw = ch.get("video_pid", 0)
+                        apid_raw = ch.get("audio_pid", 0)
+                        vpid = int(str(vpid_raw).split()[0]) if vpid_raw else 0
+                        apid = int(str(apid_raw).split()[0]) if apid_raw else 0
+                        f.write(f"{name}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

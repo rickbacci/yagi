@@ -23,37 +23,30 @@ BarWidget {
   property var scanSignal: null
   property int scanTotalFound: 0
 
+  readonly property string binPath: "omarchy-tv"
+
   function close() { root.popupOpen = false }
   function toggle() { root.popupOpen = !root.popupOpen }
 
   function playChannel(chName) {
     root.activeChannelName = chName
-    tuneProc.command = [
-      (Quickshell.env("HOME") || "") + "/Projects/personal/omarchy-tv/bin/omarchy-tv",
-      "play",
-      chName
-    ]
+    tuneProc.command = [root.binPath, "play", chName]
     tuneProc.running = true
   }
 
   function channelUp() {
-    navProc.command = [
-      (Quickshell.env("HOME") || "") + "/Projects/personal/omarchy-tv/bin/omarchy-tv",
-      "next"
-    ]
+    navProc.command = [root.binPath, "next"]
     navProc.running = true
   }
 
   function channelDown() {
-    navProc.command = [
-      (Quickshell.env("HOME") || "") + "/Projects/personal/omarchy-tv/bin/omarchy-tv",
-      "prev"
-    ]
+    navProc.command = [root.binPath, "prev"]
     navProc.running = true
   }
 
   function stopPlayer() {
     root.activeChannelName = ""
+    stopProc.command = [root.binPath, "stop"]
     stopProc.running = true
   }
 
@@ -62,6 +55,8 @@ BarWidget {
     root.scanPercent = 1
     root.scanTotalFound = 0
     root.scanSignal = null
+    scanProc.running = false
+    scanProc.command = [root.binPath, "scan"]
     scanProc.running = true
   }
 
@@ -77,7 +72,9 @@ BarWidget {
   function applyScanStatus(jsonText) {
     try {
       var status = JSON.parse(jsonText || "{}")
-      root.isScanning = status.is_scanning === true
+      var now = Date.now() / 1000
+      var isHeartbeatValid = status.updated_at ? (now - status.updated_at < 15) : false
+      root.isScanning = (status.is_scanning === true) && (isHeartbeatValid || scanProc.running)
       root.scanPercent = status.percent || 0
       root.scanChannel = status.channel || 0
       root.scanBand = status.band || ""
@@ -163,6 +160,14 @@ BarWidget {
     function prev(): void {
       root.channelDown()
     }
+
+    function scan(): void {
+      root.startScan()
+    }
+
+    function toggle(): void {
+      root.toggle()
+    }
   }
 
   // Watch channels.json file
@@ -206,18 +211,12 @@ BarWidget {
 
   Process {
     id: stopProc
-    command: [
-      (Quickshell.env("HOME") || "") + "/Projects/personal/omarchy-tv/bin/omarchy-tv",
-      "stop"
-    ]
+    command: [root.binPath, "stop"]
   }
 
   Process {
     id: scanProc
-    command: [
-      (Quickshell.env("HOME") || "") + "/Projects/personal/omarchy-tv/bin/omarchy-tv",
-      "scan"
-    ]
+    command: [root.binPath, "scan"]
     onExited: function(code) {
       root.isScanning = false
       scanStatusFile.reload()
@@ -240,7 +239,7 @@ BarWidget {
     owner: root
     open: root.popupOpen
     contentWidth: popup.fittedContentWidth(Style.space(380))
-    contentHeight: popup.fittedContentHeight(Math.min(Style.space(540), mainCol.implicitHeight + Style.space(24)))
+    contentHeight: popup.fittedContentHeight(Math.min(Style.space(560), mainCol.implicitHeight + Style.space(24)))
 
     Column {
       id: mainCol
@@ -529,93 +528,131 @@ BarWidget {
         }
       }
 
-      // Channel List Items
-      Column {
-        id: channelListView
+      // Channel List Scroll Area
+      Item {
+        id: channelScrollContainer
         visible: root.channelsData.length > 0
         width: parent.width
-        spacing: Style.space(4)
+        height: Math.min(Style.space(260), channelListView.implicitHeight)
+        clip: true
 
-        Repeater {
-          model: root.channelsData
+        Flickable {
+          id: channelFlickable
+          anchors.fill: parent
+          contentWidth: width
+          contentHeight: channelListView.implicitHeight
+          boundsBehavior: Flickable.StopAtBounds
+          flickableDirection: Flickable.VerticalFlick
+          clip: true
 
-          BorderSurface {
-            id: chItem
-            required property var modelData
-            readonly property bool isCurrent: root.activeChannelName === modelData.name
+          Column {
+            id: channelListView
+            width: channelFlickable.width
+            spacing: Style.space(4)
 
-            width: channelListView.width
-            height: Style.space(42)
-            radius: Style.spacing.labelGap
-            color: isCurrent ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
-            borderSpec: isCurrent ? Border.controlSpec("normal", root.bar.foreground, Color.accent) : Border.none()
-
-            Row {
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              anchors.leftMargin: Style.space(10)
-              anchors.rightMargin: Style.space(10)
-              spacing: Style.space(10)
-
-              Text {
-                textFormat: Text.PlainText
-                text: chItem.isCurrent ? "󰐊" : "󰢹"
-                color: chItem.isCurrent ? Color.accent : Qt.darker(root.bar.foreground, 1.5)
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.body
-                anchors.verticalCenter: parent.verticalCenter
-              }
-
-              Column {
-                width: parent.width - Style.space(90)
-                spacing: Style.space(1)
-                anchors.verticalCenter: parent.verticalCenter
-
-                Text {
-                  textFormat: Text.PlainText
-                  text: Model.cleanChannelName(chItem.modelData.name)
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: chItem.isCurrent
-                  elide: Text.ElideRight
-                  width: parent.width
-                }
-
-                Text {
-                  textFormat: Text.PlainText
-                  text: Model.formatFreq(chItem.modelData.frequency) + (chItem.modelData.band ? (" · " + chItem.modelData.band) : "")
-                  color: Qt.darker(root.bar.foreground, 1.6)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-              }
+            Repeater {
+              model: root.channelsData
 
               BorderSurface {
-                width: Style.space(48)
-                height: Style.space(22)
-                radius: Style.spacing.labelGap
-                color: Style.normalFillFor(root.bar.foreground, Color.accent)
-                anchors.verticalCenter: parent.verticalCenter
+                id: chItem
+                required property var modelData
+                readonly property bool isCurrent: root.activeChannelName === modelData.name
 
-                Text {
-                  anchors.centerIn: parent
-                  textFormat: Text.PlainText
-                  text: chItem.modelData.service_id ? ("#" + chItem.modelData.service_id) : "OTA"
-                  color: Qt.darker(root.bar.foreground, 1.3)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
+                width: channelListView.width
+                height: Style.space(42)
+                radius: Style.spacing.labelGap
+                color: isCurrent ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
+                borderSpec: isCurrent ? Border.controlSpec("normal", root.bar.foreground, Color.accent) : Border.none()
+
+                Row {
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.leftMargin: Style.space(10)
+                  anchors.rightMargin: Style.space(10)
+                  spacing: Style.space(10)
+
+                  Text {
+                    textFormat: Text.PlainText
+                    text: chItem.isCurrent ? "󰐊" : "󰢹"
+                    color: chItem.isCurrent ? Color.accent : Qt.darker(root.bar.foreground, 1.5)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.body
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
+
+                  Column {
+                    width: parent.width - Style.space(90)
+                    spacing: Style.space(1)
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Text {
+                      textFormat: Text.PlainText
+                      text: Model.cleanChannelName(chItem.modelData.name)
+                      color: root.bar.foreground
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      font.bold: chItem.isCurrent
+                      elide: Text.ElideRight
+                      width: parent.width
+                    }
+
+                    Text {
+                      textFormat: Text.PlainText
+                      text: Model.formatFreq(chItem.modelData.frequency) + (chItem.modelData.band ? (" · " + chItem.modelData.band) : "")
+                      color: Qt.darker(root.bar.foreground, 1.6)
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+
+                  BorderSurface {
+                    width: Style.space(48)
+                    height: Style.space(22)
+                    radius: Style.spacing.labelGap
+                    color: Style.normalFillFor(root.bar.foreground, Color.accent)
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Text {
+                      anchors.centerIn: parent
+                      textFormat: Text.PlainText
+                      text: chItem.modelData.service_id ? ("#" + chItem.modelData.service_id) : "OTA"
+                      color: Qt.darker(root.bar.foreground, 1.3)
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                    }
+                  }
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.playChannel(chItem.modelData.name)
+                  onWheel: function(wheel) { wheel.accepted = false }
                 }
               }
             }
+          }
+        }
+        // Scroll indicator track and thumb
+        BorderSurface {
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.bottom: parent.bottom
+          anchors.margins: 2
+          width: 4
+          radius: 2
+          color: Qt.darker(root.bar.foreground, 2.8)
+          visible: channelFlickable.contentHeight > channelFlickable.height
 
-            MouseArea {
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: root.playChannel(chItem.modelData.name)
-            }
+          Rectangle {
+            id: scrollThumb
+            width: parent.width
+            radius: 2
+            color: Color.accent
+            height: Math.max(16, channelFlickable.height * (channelFlickable.height / Math.max(1, channelFlickable.contentHeight)))
+            y: (channelFlickable.contentHeight > channelFlickable.height) ? ((channelFlickable.contentY / (channelFlickable.contentHeight - channelFlickable.height)) * (parent.height - height)) : 0
           }
         }
       }

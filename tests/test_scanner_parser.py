@@ -58,25 +58,31 @@ class TestScannerParser(unittest.TestCase):
             "signal_dbm": -45.5,
             "total_found": 5
         }
-        write_scan_status(test_status)
-        self.assertTrue(os.path.exists(SCAN_STATUS_PATH))
-        with open(SCAN_STATUS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        self.assertEqual(data["percent"], 42)
-        self.assertEqual(data["channel"], 18)
-        self.assertEqual(data["signal_dbm"], -45.5)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            test_status_path = os.path.join(tmp_dir, "scan_status.json")
+            write_scan_status(test_status, status_path=test_status_path)
+            self.assertTrue(os.path.exists(test_status_path))
+            with open(test_status_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.assertEqual(data["percent"], 42)
+            self.assertEqual(data["channel"], 18)
+            self.assertEqual(data["signal_dbm"], -45.5)
 
     def test_save_channels(self):
         sample_channels = [
             {"id": "53.1", "name": "53.1 Daystar", "callsign": "Daystar", "frequency": 177028615, "service_id": 1},
             {"id": "53.2", "name": "53.2 WCDN", "callsign": "WCDN", "frequency": 177028615, "service_id": 2}
         ]
-        AtscScanner.save_channels(sample_channels)
-        self.assertTrue(os.path.exists(CHANNELS_JSON_PATH))
-        with open(CHANNELS_JSON_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        self.assertEqual(data["total"], 2)
-        self.assertEqual(data["channels"][0]["name"], "53.1 Daystar")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            test_json_path = os.path.join(tmp_dir, "channels.json")
+            test_mpv_path = os.path.join(tmp_dir, "channels.conf")
+            AtscScanner.save_channels(sample_channels, json_path=test_json_path, mpv_path=test_mpv_path)
+            self.assertTrue(os.path.exists(test_json_path))
+            with open(test_json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            self.assertEqual(data["total"], 2)
+            self.assertEqual(data["channels"][0]["name"], "53.1 Daystar")
+            self.assertTrue(os.path.exists(test_mpv_path))
 
 
 if __name__ == "__main__":

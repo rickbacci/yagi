@@ -8,14 +8,14 @@ import sys
 import argparse
 import json
 
-# Ensure project root is in sys.path
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Ensure project root is in sys.path (resolving symlinks)
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from engine.tuner import TunerManager
-from engine.scanner import AtscScanner
+from engine.scanner import AtscScanner, write_scan_status
 from engine.paths import CHANNELS_JSON_PATH
 from player.controller import MpvController
 from engine.daemon import TvDaemon, send_daemon_request
@@ -69,6 +69,7 @@ def cmd_scan(args):
                 print(f"Saved to: {CHANNELS_JSON_PATH}")
                 print("=" * 60)
     except KeyboardInterrupt:
+        write_scan_status({"status": "aborted", "is_scanning": False, "percent": 0})
         print("\n\n⚠️ Scan interrupted by user.")
 
 
@@ -137,8 +138,8 @@ def main():
     p_scan.add_argument("--timeout", type=float, default=1.0, help="Timeout multiplier for signal lock")
     p_scan.set_defaults(func=cmd_scan)
 
-    # list
-    p_list = subparsers.add_parser("list", help="List discovered channels")
+    # list / channels
+    p_list = subparsers.add_parser("list", aliases=["channels"], help="List discovered channels")
     p_list.set_defaults(func=cmd_list)
 
     # play
