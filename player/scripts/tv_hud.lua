@@ -18,9 +18,11 @@ if not xdg_config or xdg_config == "" then
 end
 local CHANNELS_PATH = xdg_config .. "/omarchy/tv/channels.json"
 local GUIDE_PATH = xdg_config .. "/omarchy/tv/guide.json"
+local RECORDINGS_PATH = xdg_config .. "/omarchy/tv/recordings_active.json"
 
 local cached_channels = {}
 local cached_guide = {}
+local cached_recordings = {}
 
 local function reload_data()
     -- Load channels.json
@@ -42,6 +44,18 @@ local function reload_data()
         local data = utils.parse_json(content)
         if data and data.channels then
             cached_guide = data.channels
+        end
+    end
+
+    -- Load recordings_active.json
+    cached_recordings = {}
+    local f_rec = io.open(RECORDINGS_PATH, "r")
+    if f_rec then
+        local content = f_rec:read("*all")
+        f_rec:close()
+        local data = utils.parse_json(content)
+        if data and type(data) == "table" then
+            cached_recordings = data
         end
     end
 end
@@ -139,14 +153,25 @@ local function render_hud()
     ass = ass .. string.format("{\\an7\\pos(154,34)\\bord0\\shad0\\fnSans-Serif\\b1\\fs24\\1c&Hcdd6f4&}%s  {\\b0\\fs18\\1c&Ha6adc8&}·  %s\n", display_title, prog_time)
     ass = ass .. string.format("{\\an7\\pos(154,66)\\bord0\\shad0\\fnSans-Serif\\b1\\fs19\\1c%s}%s  {\\b0\\fs15\\1c&Ha6adc8&}·  %s\n", net_col, prog_title, prog_synopsis:sub(1, 75))
 
+    -- Check if active channel is recording
+    local is_recording = false
+    for _, rec in ipairs(cached_recordings) do
+        if rec.channel_number == ch_num or (rec.station and string.lower(rec.station) == string.lower(display_title)) or (rec.tune_name and ch and rec.tune_name == ch.tune_name) then
+            is_recording = true
+            break
+        end
+    end
+    local rec_badge = is_recording and "{\\b1\\fs16\\1c&H7B7BFA&}󰑈 REC  " or ""
+
     -- 4. Right Status Badges
-    ass = ass .. string.format("{\\an9\\pos(1240,40)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16\\1c&Ha6e3a1&}󰐊 LIVE  {\\1c&Hcdd6f4&}·  %s  ·  5.1 AC-3\n", v_quality)
+    ass = ass .. string.format("{\\an9\\pos(1240,40)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16}%s{\\1c&Ha6e3a1&}󰐊 LIVE  {\\1c&Hcdd6f4&}·  %s  ·  5.1 AC-3\n", rec_badge, v_quality)
     ass = ass .. string.format("{\\an9\\pos(1240,70)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&H89b4fa&}%s  {\\1c&Ha6adc8&}·  CC Sub (C)\n", vol_str)
 
     -- 5. Bottom Floating Quick Transport Bar
-    -- Draw bottom pill: x=416, y=654, w=448, h=44
-    ass = ass .. "{\\an7\\pos(416,654)\\bord0\\shad0\\1c&H181825&\\1a&H20&}{\\p1}m 0 10 s 0 0 10 0 l 438 0 s 448 0 448 10 l 448 34 s 448 44 438 44 l 10 44 s 0 44 0 34{\\p0}\n"
-    ass = ass .. "{\\an5\\pos(640,676)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&Hcdd6f4&}{\\b1}󰒮 Prev{\\b0} (j)   ·   {\\b1}󰒭 Next{\\b0} (k)   ·   {\\b1}󰕾 Volume{\\b0} (Wheel)   ·   {\\b1}󰊓 Fullscreen{\\b0} (F)\n"
+    -- Draw bottom pill: x=330, y=654, w=620, h=44
+    ass = ass .. "{\\an7\\pos(330,654)\\bord0\\shad0\\1c&H181825&\\1a&H20&}{\\p1}m 0 10 s 0 0 10 0 l 610 0 s 620 0 620 10 l 620 34 s 620 44 610 44 l 10 44 s 0 44 0 34{\\p0}\n"
+    local rec_prompt = is_recording and "{\\1c&H7B7BFA&}{\\b1}󰓛 Stop REC{\\b0} (r){\\1c&Hcdd6f4&}" or "{\\b1}󰑈 Record{\\b0} (r)"
+    ass = ass .. string.format("{\\an5\\pos(640,676)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&Hcdd6f4&}{\\b1}󰒮 Prev{\\b0} (j)  ·  {\\b1}󰒭 Next{\\b0} (k)  ·  %s  ·  {\\b1}󰕾 Vol{\\b0} (Wheel)  ·  {\\b1}󰊓 Full{\\b0} (F)\n", rec_prompt)
 
     overlay.data = ass
     overlay:update()
@@ -247,6 +272,28 @@ end)
 mp.add_forced_key_binding("c", "tv_sub_cycle", function()
     mp.command("cycle sub")
     show_hud()
+end)
+mp.add_forced_key_binding("r", "tv_record_toggle", function()
+    local ch, _ = get_active_info()
+    if not ch then return end
+    local ch_ident = ch.channel_number or ch.tune_name or ch.name
+    local is_rec = false
+    for _, rec in ipairs(cached_recordings) do
+        if rec.channel_number == ch.channel_number or rec.station == ch.station or rec.tune_name == ch.tune_name then
+            is_rec = true
+            break
+        end
+    end
+    local act = is_rec and "stop" or "start"
+    mp.command_native_async({
+        name = "subprocess",
+        playback_only = false,
+        capture_stdout = true,
+        args = {"omarchy-tv", "record", act, ch_ident}
+    }, function()
+        reload_data()
+        show_hud()
+    end)
 end)
 
 reload_data()

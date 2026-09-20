@@ -142,6 +142,26 @@ class TestCliE2E(unittest.TestCase):
         self.assertEqual(res_toggle2.returncode, 0)
         self.assertIn("Removed 'FOX' from favorites", res_toggle2.stdout)
 
+    def test_cli_record_subcommands(self):
+        """omarchy-tv record list and status must execute cleanly in sandbox."""
+        res_list = subprocess.run(
+            [sys.executable, CLI_BIN, "record", "list"],
+            capture_output=True,
+            text=True,
+            env=self.env
+        )
+        self.assertEqual(res_list.returncode, 0)
+        self.assertIn("No recordings found", res_list.stdout)
+
+        res_status = subprocess.run(
+            [sys.executable, CLI_BIN, "record", "status"],
+            capture_output=True,
+            text=True,
+            env=self.env
+        )
+        self.assertEqual(res_status.returncode, 0)
+        self.assertIn("No active background recordings", res_status.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,7 @@ Detects, queries, and allocates Linux DVB adapters for ATSC OTA television.
 import os
 import glob
 import subprocess
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Set
 
 
 class TunerAdapter:
@@ -100,9 +100,12 @@ class TunerManager:
         return adapters
 
     @classmethod
-    def get_available_tuner(cls, require_atsc: bool = True) -> Optional[TunerAdapter]:
-        """Returns the first non-busy tuner that matches criteria."""
+    def get_available_tuner(cls, require_atsc: bool = True, exclude_adapters: Optional[Set[int]] = None) -> Optional[TunerAdapter]:
+        """Returns the first non-busy tuner that matches criteria, excluding any specified adapters."""
+        exclude = exclude_adapters or set()
         for tuner in cls.list_tuners():
+            if tuner.adapter_id in exclude:
+                continue
             if require_atsc and not tuner.supports_atsc:
                 continue
             if not tuner.is_busy:

@@ -14,6 +14,7 @@ GUIDE_JSON_PATH = os.path.join(CONFIG_DIR, "guide.json")
 SCAN_STATUS_PATH = os.path.join(CONFIG_DIR, "scan_status.json")
 MPV_CHANNELS_CONF = os.path.join(_XDG_CONFIG, "mpv", "channels.conf")
 RECORDINGS_DIR = os.path.expanduser("~/Videos/TV")
+RECORDINGS_ACTIVE_PATH = os.path.join(CONFIG_DIR, "recordings_active.json")
 
 
 def get_runtime_socket(name: str) -> str:

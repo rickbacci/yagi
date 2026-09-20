@@ -34,8 +34,33 @@ BarWidget {
   property int scanTotalFound: 0
   property var favoritesData: []
   property var guideData: ({})
+  property var activeRecordings: []
+  readonly property bool isRecording: root.activeRecordings && root.activeRecordings.length > 0
   property bool guideModalOpen: false
   property string channelFilter: "all" // "all" | "favorites"
+
+  function isChannelRecording(chIdent) {
+    if (!root.activeRecordings || root.activeRecordings.length === 0) return false
+    var q = (chIdent || "").toString().toLowerCase()
+    for (var i = 0; i < root.activeRecordings.length; i++) {
+      var r = root.activeRecordings[i]
+      if ((r.channel_number || "").toLowerCase() === q ||
+          (r.station || "").toLowerCase() === q ||
+          (r.tune_name || "").toLowerCase() === q) {
+        return true
+      }
+    }
+    return false
+  }
+
+  function toggleRecord(chIdent) {
+    if (root.isChannelRecording(chIdent)) {
+      dvrProc.command = [root.binPath, "record", "stop", chIdent]
+    } else {
+      dvrProc.command = [root.binPath, "record", "start", chIdent]
+    }
+    dvrProc.running = true
+  }
 
   readonly property var guideList: {
     var list = []
@@ -205,8 +230,8 @@ BarWidget {
     Text {
       id: iconText
       textFormat: Text.PlainText
-      text: root.isScanning ? "󰛳" : "󰢹"
-      color: root.isScanning ? "#89b4fa" : (root.activeChannelName !== "" ? Color.accent : root.bar.barForeground)
+      text: root.isScanning ? "󰛳" : (root.isRecording ? "󰑈" : "󰢹")
+      color: root.isRecording ? "#f38ba8" : (root.isScanning ? "#89b4fa" : (root.activeChannelName !== "" ? Color.accent : root.bar.barForeground))
       font.family: root.bar.fontFamily
       font.pixelSize: Style.font.body
       anchors.verticalCenter: parent.verticalCenter
@@ -214,10 +239,10 @@ BarWidget {
 
     Text {
       id: label
-      visible: (root.isScanning || root.activeChannelName !== "") && !root.bar.vertical
+      visible: (root.isScanning || root.isRecording || root.activeChannelName !== "") && !root.bar.vertical
       textFormat: Text.PlainText
-      text: root.isScanning ? (root.scanPercent + "% Scanning") : root.activeChannelName
-      color: root.isScanning ? "#89b4fa" : root.bar.barForeground
+      text: root.isScanning ? (root.scanPercent + "% Scanning") : (root.isRecording ? ("REC " + (root.activeRecordings[0] ? (root.activeRecordings[0].station || root.activeRecordings[0].channel_number) : "")) : root.activeChannelName)
+      color: root.isRecording ? "#f38ba8" : (root.isScanning ? "#89b4fa" : root.bar.barForeground)
       font.family: root.bar.fontFamily
       font.pixelSize: Style.font.bodySmall
       font.bold: true
@@ -315,6 +340,24 @@ BarWidget {
     onFileChanged: reload()
   }
 
+  // Watch active DVR recordings
+  FileView {
+    id: recordingsActiveFile
+    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/recordings_active.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applyRecordingsActive(text())
+    onFileChanged: reload()
+  }
+
+  function applyRecordingsActive(raw) {
+    try {
+      root.activeRecordings = JSON.parse(raw) || []
+    } catch(e) {
+      root.activeRecordings = []
+    }
+  }
+
   Timer {
     id: scanPollTimer
     interval: 500
@@ -357,10 +400,19 @@ BarWidget {
     }
   }
 
+  Process {
+    id: dvrProc
+    command: []
+    onExited: function(code) {
+      recordingsActiveFile.reload()
+    }
+  }
+
   Component.onCompleted: {
     Qt.callLater(function() {
       channelsFile.reload()
       scanStatusFile.reload()
+      recordingsActiveFile.reload()
     })
   }
 
@@ -450,6 +502,14 @@ BarWidget {
           foreground: root.bar.foreground
           enabled: !root.isScanning
           onClicked: root.startScan()
+        }
+
+        Button {
+          iconText: root.isChannelRecording(root.activeChannelName) ? "󰓛" : "󰑈"
+          text: root.isChannelRecording(root.activeChannelName) ? "Stop REC" : "Record"
+          foreground: root.isChannelRecording(root.activeChannelName) ? "#f38ba8" : root.bar.foreground
+          visible: root.activeChannelName !== ""
+          onClicked: root.toggleRecord(root.activeChannelName)
         }
 
         Button {
@@ -1284,7 +1344,7 @@ BarWidget {
 
                     // Next Program Card
                     BorderSurface {
-                      width: parent.width - Style.space(390)
+                      width: parent.width - Style.space(404)
                       height: parent.height
                       radius: 4
                       color: "transparent"
@@ -1313,10 +1373,39 @@ BarWidget {
                         }
                       }
                     }
+
+                    // Quick Record Button
+                    BorderSurface {
+                      id: recBtn
+                      readonly property bool isRec: root.isChannelRecording(gridRow.modelData.station || gridRow.modelData.channel_number)
+                      width: Style.space(34)
+                      height: parent.height
+                      radius: 4
+                      color: isRec ? "#f38ba8" : Style.normalFillFor(root.bar.foreground, Color.accent)
+
+                      Text {
+                        anchors.centerIn: parent
+                        text: recBtn.isRec ? "󰓛" : "󰑈"
+                        color: recBtn.isRec ? "#11111b" : (recBtnMouse.containsMouse ? "#f38ba8" : Qt.darker(root.bar.foreground, 1.4))
+                        font.family: root.bar.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                      }
+
+                      MouseArea {
+                        id: recBtnMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                          root.toggleRecord(gridRow.modelData.station || gridRow.modelData.channel_number)
+                        }
+                      }
+                    }
                   }
 
                   MouseArea {
                     anchors.fill: parent
+                    anchors.rightMargin: Style.space(44)
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: {

@@ -40,6 +40,8 @@ class TestPathsSecurity(unittest.TestCase):
     def test_socket_constants(self):
         self.assertTrue(MPV_SOCKET_PATH.endswith("omarchy-tv-mpv.sock"))
         self.assertTrue(DAEMON_SOCKET_PATH.endswith("omarchy-tv-daemon.sock"))
+        from engine.paths import RECORDINGS_ACTIVE_PATH
+        self.assertTrue(RECORDINGS_ACTIVE_PATH.endswith("recordings_active.json"))
 
 
 if __name__ == "__main__":

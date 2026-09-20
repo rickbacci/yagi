@@ -197,6 +197,103 @@ def cmd_stop(args):
     print("Player stopped")
 
 
+def parse_duration_str(d_str):
+    if not d_str:
+        return None
+    d = str(d_str).strip().lower()
+    if d.endswith("h"):
+        return int(float(d[:-1]) * 3600)
+    elif d.endswith("m"):
+        return int(float(d[:-1]) * 60)
+    elif d.endswith("s"):
+        return int(float(d[:-1]))
+    else:
+        return int(float(d))
+
+
+def cmd_record(args):
+    from engine.dvr import DvrManager
+    action = args.action or "list"
+
+    if action == "start":
+        if not args.target:
+            print("Error: Specify a channel to record. Example: omarchy-tv record start 8.1 [duration]")
+            sys.exit(1)
+        duration_sec = parse_duration_str(args.duration)
+        dur_msg = f" for {args.duration}" if args.duration else ""
+        print(f"󰑈 Starting ATSC broadcast recording on {args.target}{dur_msg}...")
+        try:
+            session = DvrManager.start_recording(args.target, duration=duration_sec)
+            print("✅ Recording active:")
+            print(f"   Station:  {session.station} ({session.channel_number})")
+            print(f"   Program:  {session.program_title}")
+            print(f"   Tuner:    adapter{session.adapter_id}")
+            print(f"   File:     {session.file_path}")
+            print(f"   PID:      {session.pid}")
+        except Exception as e:
+            print(f"❌ Recording failed: {e}")
+            sys.exit(1)
+
+    elif action == "stop":
+        stopped = DvrManager.stop_recording(args.target)
+        if not stopped:
+            if args.target:
+                print(f"No active recording found matching '{args.target}'.")
+            else:
+                print("No active recordings to stop.")
+        else:
+            for s in stopped:
+                print(f"⏹️  Stopped recording {s.station} ({s.channel_number}) - PID {s.pid}")
+                print(f"   File: {s.file_path} ({s.to_dict().get('file_size_formatted', '0 B')})")
+
+    elif action in ("status", "active"):
+        active = DvrManager.load_active_sessions()
+        if not active:
+            print("No active background recordings.")
+            return
+        print(f"󰑈 Active Recordings ({len(active)} total):")
+        print("=" * 80)
+        print(f"{'CH':<6} {'STATION':<10} {'PROGRAM':<28} {'TUNER':<8} {'ELAPSED':<10} {'SIZE'}")
+        print("-" * 80)
+        for s in active:
+            d = s.to_dict()
+            elapsed_m = f"{d['elapsed_seconds'] // 60}m {d['elapsed_seconds'] % 60}s"
+            prog = (d['program_title'] or 'Live')[:26]
+            print(f"{d['channel_number']:<6} {d['station']:<10} {prog:<28} adapter{d['adapter_id']:<1} {elapsed_m:<10} {d['file_size_formatted']}")
+        print("=" * 80)
+
+    elif action == "delete":
+        if not args.target:
+            print("Error: Specify recording filename to delete.")
+            sys.exit(1)
+        rec_dir = os.path.expanduser("~/Videos/TV")
+        file_path = os.path.join(rec_dir, args.target) if not os.path.isabs(args.target) else args.target
+        try:
+            deleted = DvrManager.delete_recording(file_path)
+            if deleted:
+                print(f"🗑️  Deleted {args.target}")
+            else:
+                print(f"File not found: {args.target}")
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+    elif action == "list":
+        recordings = DvrManager.list_recordings()
+        if not recordings:
+            print("No recordings found in ~/Videos/TV.")
+            print("Start a recording with: omarchy-tv record start <channel> [duration]")
+            return
+        print(f"📼 Recorded Broadcasts ({len(recordings)} total in ~/Videos/TV):")
+        print("=" * 85)
+        print(f"{'DATE':<17} {'CH':<6} {'STATION':<10} {'PROGRAM TITLE':<32} {'SIZE'}")
+        print("-" * 85)
+        for r in recordings:
+            prog = r["title"][:30]
+            print(f"{r['date_formatted']:<17} {r['channel_number']:<6} {r['station']:<10} {prog:<32} {r['size_formatted']}")
+        print("=" * 85)
+
+
 def cmd_daemon(args):
     daemon = TvDaemon()
     print("Starting Omarchy TV background daemon...")
@@ -241,6 +338,13 @@ def main():
     subparsers.add_parser("next", help="Tune next channel").set_defaults(func=cmd_next)
     subparsers.add_parser("prev", help="Tune previous channel").set_defaults(func=cmd_prev)
     subparsers.add_parser("stop", help="Close TV player").set_defaults(func=cmd_stop)
+
+    # record / dvr
+    p_rec = subparsers.add_parser("record", aliases=["dvr", "rec"], help="DVR recording control")
+    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete"], default="list", help="Record action")
+    p_rec.add_argument("target", nargs="?", help="Channel to record or file to delete")
+    p_rec.add_argument("duration", nargs="?", help="Optional duration limit (e.g. 30m, 1h, 300s)")
+    p_rec.set_defaults(func=cmd_record)
 
     # daemon
     p_daemon = subparsers.add_parser("daemon", help="Run IPC daemon in foreground")

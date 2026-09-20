@@ -1,0 +1,178 @@
+"""
+Unit tests for Dual-Tuner DVR Engine.
+"""
+
+import os
+import json
+import time
+import unittest
+import tempfile
+from unittest.mock import patch, MagicMock
+
+from engine.dvr import (
+    format_bytes,
+    sanitize_filename,
+    DvrSession,
+    DvrManager,
+)
+from engine.tuner import TunerAdapter
+
+
+class TestDvrEngine(unittest.TestCase):
+    def test_format_bytes(self):
+        self.assertEqual(format_bytes(512), "512 B")
+        self.assertEqual(format_bytes(1024 * 50), "50.0 KB")
+        self.assertEqual(format_bytes(1024 * 1024 * 128), "128.0 MB")
+        self.assertEqual(format_bytes(1024 * 1024 * 1024 * 3), "3.00 GB")
+
+    def test_sanitize_filename(self):
+        raw = 'WJW: FOX 8 News / Live? *Special* "Edition" <HD>'
+        sanitized = sanitize_filename(raw)
+        self.assertNotIn(":", sanitized)
+        self.assertNotIn("/", sanitized)
+        self.assertNotIn("?", sanitized)
+        self.assertNotIn("*", sanitized)
+        self.assertNotIn('"', sanitized)
+        self.assertNotIn("<", sanitized)
+        self.assertNotIn(">", sanitized)
+        self.assertTrue(sanitized.startswith("WJW_FOX_8_News"))
+
+    def test_dvr_session_serialization(self):
+        session = DvrSession(
+            session_id="dvr-test-1",
+            channel_number="8.1",
+            station="FOX",
+            tune_name="8.1",
+            program_title="Morning News",
+            start_time=1700000000.0,
+            duration_seconds=1800,
+            adapter_id=1,
+            file_path="/tmp/test.ts",
+            socket_path="/tmp/sock.sock",
+            pid=999999,
+        )
+        d = session.to_dict()
+        self.assertEqual(d["session_id"], "dvr-test-1")
+        self.assertEqual(d["channel_number"], "8.1")
+        self.assertEqual(d["duration_seconds"], 1800)
+        self.assertEqual(d["adapter_id"], 1)
+
+        restored = DvrSession.from_dict(d)
+        self.assertEqual(restored.session_id, "dvr-test-1")
+        self.assertEqual(restored.station, "FOX")
+        self.assertEqual(restored.duration_seconds, 1800)
+
+    def test_active_sessions_save_and_prune(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            active_file = os.path.join(tmp_dir, "recordings_active.json")
+            # Create a session with our current test runner's real PID (alive)
+            live_session = DvrSession(
+                session_id="live-1",
+                channel_number="3.1",
+                station="NBC",
+                tune_name="3.1",
+                program_title="News",
+                start_time=time.time(),
+                duration_seconds=600,
+                adapter_id=0,
+                file_path=os.path.join(tmp_dir, "test.ts"),
+                socket_path=os.path.join(tmp_dir, "sock.sock"),
+                pid=os.getpid(),
+            )
+            # Create a dead session with a non-existent PID
+            dead_session = DvrSession(
+                session_id="dead-1",
+                channel_number="5.1",
+                station="ABC",
+                tune_name="5.1",
+                program_title="Old Show",
+                start_time=time.time() - 3600,
+                duration_seconds=600,
+                adapter_id=1,
+                file_path=os.path.join(tmp_dir, "dead.ts"),
+                socket_path=os.path.join(tmp_dir, "dead.sock"),
+                pid=99999999,
+            )
+
+            DvrManager.save_active_sessions([live_session, dead_session], active_path=active_file)
+            loaded = DvrManager.load_active_sessions(active_path=active_file)
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0].session_id, "live-1")
+
+    def test_list_and_delete_recordings(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            rec_file = os.path.join(tmp_dir, "8.1-FOX_FOX_8_News_20260920_120000.ts")
+            with open(rec_file, "wb") as f:
+                f.write(b"MPEG-TS test content padding" * 100)
+
+            other_file = os.path.join(tmp_dir, "notes.txt")
+            with open(other_file, "w") as f:
+                f.write("ignore me")
+
+            records = DvrManager.list_recordings(recordings_dir=tmp_dir)
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["channel_number"], "8.1")
+            self.assertEqual(records[0]["station"], "FOX")
+            self.assertEqual(records[0]["title"], "FOX 8 News")
+            self.assertGreater(records[0]["size_bytes"], 0)
+
+            # Test delete
+            success = DvrManager.delete_recording(rec_file, recordings_dir=tmp_dir)
+            self.assertTrue(success)
+            self.assertFalse(os.path.exists(rec_file))
+
+            # Test path traversal prevention
+            with self.assertRaises(PermissionError):
+                DvrManager.delete_recording("/etc/shadow", recordings_dir=tmp_dir)
+
+    @patch("subprocess.Popen")
+    @patch("engine.tuner.TunerManager.get_available_tuner")
+    def test_start_and_stop_recording_mocked(self, mock_get_tuner, mock_popen):
+        fake_tuner = MagicMock()
+        fake_tuner.adapter_id = 1
+        fake_tuner.supports_atsc = True
+        fake_tuner.is_busy = False
+        mock_get_tuner.return_value = fake_tuner
+
+        fake_proc = MagicMock()
+        fake_proc.pid = os.getpid()
+        mock_popen.return_value = fake_proc
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            active_file = os.path.join(tmp_dir, "recordings_active.json")
+            channels_file = os.path.join(tmp_dir, "channels.json")
+            with open(channels_file, "w") as f:
+                json.dump([{"channel_number": "8.1", "station": "FOX", "name": "WJW-HD", "tune_name": "8.1"}], f)
+
+            session = DvrManager.start_recording(
+                channel_query="8.1",
+                duration=300,
+                recordings_dir=tmp_dir,
+                channels_file=channels_file,
+                active_path=active_file,
+            )
+
+            self.assertEqual(session.channel_number, "8.1")
+            self.assertEqual(session.station, "FOX")
+            self.assertEqual(session.adapter_id, 1)
+
+            # Second concurrent recording of same channel must raise RuntimeError
+            with self.assertRaises(RuntimeError):
+                DvrManager.start_recording(
+                    channel_query="FOX",
+                    duration=300,
+                    recordings_dir=tmp_dir,
+                    channels_file=channels_file,
+                    active_path=active_file,
+                )
+
+            # Stopping the recording
+            with patch.object(DvrSession, "stop", return_value=True) as mock_stop:
+                stopped = DvrManager.stop_recording("8.1", active_path=active_file)
+                self.assertEqual(len(stopped), 1)
+                self.assertEqual(stopped[0].channel_number, "8.1")
+                mock_stop.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()
