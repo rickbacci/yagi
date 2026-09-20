@@ -21,7 +21,7 @@ Traditional Linux digital TV software (Kaffeine, MythTV, Tvheadend) was designed
 * **Dual-Tuner Intelligent Allocation**: Automatically manages dual tuners (e.g. Hauppauge WinTV-dualHD), allowing you to watch TV on Tuner 0 while Tuner 1 scans frequencies or records in the background.
 * **Exact ATSC Pilot Carrier Offsets**: Hardcodes exact +28.615 kHz carrier offsets (e.g., `177028615 Hz`), guaranteeing immediate carrier lock on modern demodulators.
 * **Picture-in-Picture (PiP) Window Rules**: Powered by `mpv` with hardware VA-API/NVDEC decoding, automatically pinned across all Hyprland workspaces in a floating 16:9 frame.
-* **Zero-Privilege Security**: Runs 100% unprivileged (`richardb`) using systemd user ACLs and secure runtime sockets in `$XDG_RUNTIME_DIR`.
+* **Zero-Privilege Security**: Runs 100% unprivileged (`$USER`) using systemd user ACLs and secure runtime sockets in `$XDG_RUNTIME_DIR`.
 * **Quickshell IPC Bridge**: Fully controllable via keyboard shortcuts or CLI broadcast commands.
 
 ---

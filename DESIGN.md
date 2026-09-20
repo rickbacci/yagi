@@ -70,7 +70,7 @@ Instead of blocking the GUI or forcing the user to guess if a scan is frozen:
 
 ### D. Zero-Privilege Security Boundary
 - **No Root, No Sudo**: The entire stack operates as unprivileged user `1000:1000`.
-- **Systemd Session ACLs**: Hardware access is granted via active seat permissions (`user:richardb:rw-` on `/dev/dvb/*`), requiring zero group modifications or setuid privileges.
+- **Systemd Session ACLs**: Hardware access is granted via active seat permissions (`user:$USER:rw-` on `/dev/dvb/*`), requiring zero group modifications or setuid privileges.
 - **Isolated Sockets**: Sockets (`omarchy-tv-mpv.sock` and `omarchy-tv-daemon.sock`) are anchored in `$XDG_RUNTIME_DIR` (`/run/user/1000/`) with strict `0700` filesystem masks, immune to local user tampering.
 - **Injection-Proof Process Spawning**: All process executions in both Python and QML pass discrete argument arrays (`["omarchy-tv", "play", channel]`) with `shell=False`.
 
