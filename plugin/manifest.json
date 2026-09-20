@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "richardb.omarchy-tv",
+  "name": "Omarchy TV",
+  "version": "0.1.0",
+  "author": "Richard Bacci",
+  "license": "MIT",
+  "description": "Modern Over-The-Air TV tuner manager, channel guide, and player controls.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "TV",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

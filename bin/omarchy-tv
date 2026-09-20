@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""
+Omarchy TV - Command Line Interface
+"""
+
+import os
+import sys
+import argparse
+import json
+
+# Ensure project root is in sys.path
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from engine.tuner import TunerManager
+from engine.scanner import AtscScanner
+from engine.paths import CHANNELS_JSON_PATH
+from player.controller import MpvController
+from engine.daemon import TvDaemon, send_daemon_request
+
+
+def cmd_status(args):
+    res = send_daemon_request("status")
+    if res and res.get("success"):
+        print("Omarchy TV Daemon: Running")
+        print(f"Player active: {res.get('player_running')}")
+        print(f"Channels configured: {res.get('total_channels')}")
+        print("\nTuners:")
+        for t in res.get("tuners", []):
+            status = "BUSY" if t["is_busy"] else "FREE"
+            print(f"  [{t['adapter_id']}] {t['name']} ({status}) - Systems: {t['delivery_systems']}")
+    else:
+        print("Omarchy TV Daemon: Inactive (Running direct hardware query)")
+        tuners = TunerManager.list_tuners()
+        print(f"Discovered {len(tuners)} tuner adapters:")
+        for t in tuners:
+            status = "BUSY" if t.is_busy else "FREE"
+            print(f"  [{t.adapter_id}] {t.name} ({status}) - Systems: {t.delivery_systems}")
+
+
+def cmd_scan(args):
+    print("=" * 60)
+    mode = "Fast Scan (VHF-High + UHF: 30 frequencies)" if args.quick else "Full Scan (All 68 frequencies)"
+    print(f"🛰️  Starting ATSC Over-The-Air Scan ({mode})")
+    print("=" * 60)
+
+    scanner = AtscScanner(adapter_id=args.adapter)
+    found_count = 0
+
+    try:
+        for event in scanner.scan(quick_mode=args.quick, timeout_multiplier=args.timeout):
+            status = event.get("status")
+            if status == "scanning":
+                pct = event.get("percent", 0)
+                ch = event.get("channel", 0)
+                band = event.get("band", "")
+                sig = event.get("signal_dbm")
+                sig_str = f"{sig:5.1f} dBm" if sig is not None else "Searching..."
+                print(f"[{pct:3d}%] Ch {ch:2d} ({band:12s}) | Signal: {sig_str} | Found: {event.get('total_found', 0)}", end="\r")
+            elif status == "channel_found":
+                found_count += 1
+                ch_info = event.get("channel", {})
+                print(f"\n  ✨ [FOUND] {ch_info.get('name')} on Physical Ch {ch_info.get('physical_channel')} ({ch_info.get('band')})")
+            elif status == "complete":
+                print("\n" + "=" * 60)
+                print(f"✅ Scan Complete! Discovered {event.get('total_found', 0)} Over-The-Air channels.")
+                print(f"Saved to: {CHANNELS_JSON_PATH}")
+                print("=" * 60)
+    except KeyboardInterrupt:
+        print("\n\n⚠️ Scan interrupted by user.")
+
+
+def cmd_list(args):
+    if not os.path.exists(CHANNELS_JSON_PATH):
+        print("No channels found. Run `omarchy-tv scan` first!")
+        return
+
+    with open(CHANNELS_JSON_PATH, "r") as f:
+        data = json.load(f)
+
+    channels = data.get("channels", [])
+    print(f"📋 Saved Over-The-Air Channels ({len(channels)} total):")
+    print("-" * 65)
+    print(f"{'Name / Callsign':<30} {'Freq (MHz)':<12} {'Modulation':<10} {'Service ID'}")
+    print("-" * 65)
+    for ch in channels:
+        freq_mhz = f"{ch.get('frequency', 0) / 1000000:.2f}"
+        print(f"{ch.get('name', 'Unknown'):<30} {freq_mhz:<12} {ch.get('modulation', '8VSB'):<10} {ch.get('service_id', '')}")
+
+
+def cmd_play(args):
+    player = MpvController()
+    print(f"📺 Tuning to: {args.channel}...")
+    success = player.tune(args.channel)
+    if not success:
+        print("Failed to launch player or tune channel. Is channels.conf generated?")
+
+
+def cmd_next(args):
+    player = MpvController()
+    player.channel_up()
+    print("Channel Up")
+
+
+def cmd_prev(args):
+    player = MpvController()
+    player.channel_down()
+    print("Channel Down")
+
+
+def cmd_stop(args):
+    player = MpvController()
+    player.stop()
+    print("Player stopped")
+
+
+def cmd_daemon(args):
+    daemon = TvDaemon()
+    print("Starting Omarchy TV background daemon...")
+    daemon.start()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Omarchy TV - Modern Linux Over-The-Air Television")
+    subparsers = parser.add_subparsers(dest="subcommand", required=True)
+
+    # status
+    p_status = subparsers.add_parser("status", help="Show tuner and playback status")
+    p_status.set_defaults(func=cmd_status)
+
+    # scan
+    p_scan = subparsers.add_parser("scan", help="Scan for ATSC broadcast channels")
+    p_scan.add_argument("--full", action="store_false", dest="quick", help="Perform full 68-channel scan (default is fast scan)")
+    p_scan.add_argument("--adapter", type=int, default=None, help="Specific adapter ID to use")
+    p_scan.add_argument("--timeout", type=float, default=1.0, help="Timeout multiplier for signal lock")
+    p_scan.set_defaults(func=cmd_scan)
+
+    # list
+    p_list = subparsers.add_parser("list", help="List discovered channels")
+    p_list.set_defaults(func=cmd_list)
+
+    # play
+    p_play = subparsers.add_parser("play", help="Play a channel")
+    p_play.add_argument("channel", help="Channel name or callsign to tune")
+    p_play.set_defaults(func=cmd_play)
+
+    # next / prev / stop
+    subparsers.add_parser("next", help="Tune next channel").set_defaults(func=cmd_next)
+    subparsers.add_parser("prev", help="Tune previous channel").set_defaults(func=cmd_prev)
+    subparsers.add_parser("stop", help="Close TV player").set_defaults(func=cmd_stop)
+
+    # daemon
+    p_daemon = subparsers.add_parser("daemon", help="Run IPC daemon in foreground")
+    p_daemon.set_defaults(func=cmd_daemon)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,352 @@
+"""
+Omarchy TV - ATSC Frequency Scanner & Channel Discovery Engine
+Performs fast, intelligent OTA broadcast scanning with real-time JSON progress.
+"""
+
+import os
+import sys
+import json
+import time
+import tempfile
+import subprocess
+from typing import List, Dict, Generator, Any, Optional
+from engine.tuner import TunerManager, TunerAdapter
+from engine.paths import CHANNELS_JSON_PATH, MPV_CHANNELS_CONF, SCAN_STATUS_PATH
+
+
+def write_scan_status(status_dict: Dict[str, Any]) -> None:
+    """Writes scan progress atomically for Quickshell UI."""
+    try:
+        os.makedirs(os.path.dirname(SCAN_STATUS_PATH), exist_ok=True)
+        tmp = SCAN_STATUS_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(status_dict, f)
+        os.replace(tmp, SCAN_STATUS_PATH)
+    except Exception:
+        pass
+
+
+# North American ATSC Standard Frequencies
+def get_atsc_frequencies(quick_mode: bool = False) -> List[Dict[str, Any]]:
+    """
+    Returns list of ATSC physical channels and frequencies.
+    Uses exact +28615 Hz ATSC pilot carrier offsets for instant demodulator lock.
+    """
+    channels = []
+
+    if not quick_mode:
+        # VHF-Low: Channels 2-6
+        vhf_low = [
+            (2, 57028615),
+            (3, 63028615),
+            (4, 69028615),
+            (5, 79028615),
+            (6, 85028615)
+        ]
+        for ch, freq in vhf_low:
+            channels.append({"channel": ch, "frequency": freq, "band": "VHF-Low"})
+
+    # VHF-High: Channels 7-13
+    for ch in range(7, 14):
+        freq = 177028615 + (ch - 7) * 6000000
+        channels.append({"channel": ch, "frequency": freq, "band": "VHF-High"})
+
+    # Core UHF: Channels 14-36 (Post-Incentive Auction Repack standard)
+    for ch in range(14, 37):
+        freq = 473028615 + (ch - 14) * 6000000
+        channels.append({"channel": ch, "frequency": freq, "band": "UHF"})
+
+    if not quick_mode:
+        # Legacy UHF: Channels 37-69
+        for ch in range(37, 70):
+            freq = 611028615 + (ch - 37) * 6000000
+            channels.append({"channel": ch, "frequency": freq, "band": "UHF-Extended"})
+
+    return channels
+
+
+def generate_scan_conf(channels: List[Dict[str, Any]]) -> str:
+    """Generate DVBv5 initial configuration file content."""
+    lines = []
+    for ch in channels:
+        lines.append(f"[CH_{ch['channel']}]")
+        lines.append("  DELIVERY_SYSTEM = ATSC")
+        lines.append(f"  FREQUENCY = {ch['frequency']}")
+        lines.append("  MODULATION = VSB/8")
+        lines.append("")
+    return "\n".join(lines)
+
+
+class AtscScanner:
+    def __init__(self, adapter_id: Optional[int] = None):
+        self.adapter_id = adapter_id
+
+    def _resolve_adapter(self) -> int:
+        if self.adapter_id is not None:
+            return self.adapter_id
+        tuner = TunerManager.get_available_tuner(require_atsc=True)
+        if not tuner:
+            # Fall back to adapter 0 if none marked free
+            return 0
+        return tuner.adapter_id
+
+    def scan(self, quick_mode: bool = False, timeout_multiplier: float = 1.0) -> Generator[Dict[str, Any], None, List[Dict[str, Any]]]:
+        """
+        Runs ATSC scan, yielding real-time progress events.
+        Yields dicts with keys: phase, percent, channel, frequency, band, signal_dbm, channels_found
+        """
+        adapter = self._resolve_adapter()
+        freq_list = get_atsc_frequencies(quick_mode=quick_mode)
+        total_freqs = len(freq_list)
+
+        ev_start = {
+            "status": "starting",
+            "is_scanning": True,
+            "adapter_id": adapter,
+            "total_channels": total_freqs,
+            "quick_mode": quick_mode,
+            "percent": 0
+        }
+        write_scan_status(ev_start)
+        yield ev_start
+
+        # Write temp initial config file
+        with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as f_in:
+            f_in.write(generate_scan_conf(freq_list))
+            in_conf_path = f_in.name
+
+        out_conf_path = tempfile.mktemp(suffix=".conf")
+
+        cmd = [
+            "dvbv5-scan",
+            "-v",
+            "-a", str(adapter),
+            "-T", str(timeout_multiplier),
+            "-o", out_conf_path,
+            in_conf_path
+        ]
+
+        discovered_channels: List[Dict[str, Any]] = []
+        current_freq_index = 0
+        current_signal: Optional[float] = None
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1
+            )
+
+            for line in proc.stdout:
+                line_s = line.strip()
+                if not line_s:
+                    continue
+
+                # Parse frequency transition: "Scanning frequency #X YYYYY"
+                if "Scanning frequency #" in line_s:
+                    try:
+                        parts = line_s.split("Scanning frequency #", 1)[-1].split()
+                        current_freq_index = int(parts[0]) - 1
+                    except (ValueError, IndexError):
+                        pass
+
+                    cur_info = freq_list[min(current_freq_index, total_freqs - 1)]
+                    percent = int(((current_freq_index + 1) / total_freqs) * 100)
+                    ev_scan = {
+                        "status": "scanning",
+                        "is_scanning": True,
+                        "index": current_freq_index + 1,
+                        "total": total_freqs,
+                        "percent": percent,
+                        "channel": cur_info["channel"],
+                        "frequency": cur_info["frequency"],
+                        "band": cur_info["band"],
+                        "signal_dbm": current_signal,
+                        "total_found": len(discovered_channels),
+                        "channels": discovered_channels
+                    }
+                    write_scan_status(ev_scan)
+                    yield ev_scan
+
+                # Parse Signal strength: "Signal= -XX.XXdBm"
+                if "Signal=" in line_s:
+                    try:
+                        sig_part = line_s.split("Signal=", 1)[-1].split("dBm")[0].strip()
+                        current_signal = float(sig_part)
+                    except ValueError:
+                        pass
+
+                # Parse ATSC virtual channel: "Virtual channel 53.1, name = Daystar"
+                if "Virtual channel " in line_s:
+                    try:
+                        parts = line_s.split("Virtual channel ", 1)[-1].split(",", 1)
+                        vch_num = parts[0].strip()
+                        vch_name = parts[1].split("name =", 1)[-1].strip() if len(parts) > 1 and "name =" in parts[1] else vch_num
+                        full_name = f"{vch_num} {vch_name}" if vch_name != vch_num else vch_num
+                        if not any(c.get("id") == vch_num or c.get("name") == full_name for c in discovered_channels):
+                            cur_info = freq_list[min(current_freq_index, total_freqs - 1)]
+                            ch_entry = {
+                                "id": vch_num,
+                                "name": full_name,
+                                "callsign": vch_name,
+                                "physical_channel": cur_info["channel"],
+                                "frequency": cur_info["frequency"],
+                                "band": cur_info["band"]
+                            }
+                            discovered_channels.append(ch_entry)
+                            self.save_channels(discovered_channels)
+                            ev_found = {
+                                "status": "channel_found",
+                                "is_scanning": True,
+                                "channel": ch_entry,
+                                "total_found": len(discovered_channels),
+                                "percent": int(((current_freq_index + 1) / total_freqs) * 100),
+                                "channels": discovered_channels
+                            }
+                            write_scan_status(ev_found)
+                            yield ev_found
+                    except Exception:
+                        pass
+
+                # Parse generic found service: "Service NAME, Provider PROVIDER"
+                if "Service " in line_s and "," in line_s:
+                    try:
+                        name_part = line_s.split("Service ", 1)[-1].split(",")[0].strip()
+                        if name_part and not any(c.get("name") == name_part for c in discovered_channels):
+                            cur_info = freq_list[min(current_freq_index, total_freqs - 1)]
+                            ch_entry = {
+                                "id": name_part,
+                                "name": name_part,
+                                "callsign": name_part,
+                                "physical_channel": cur_info["channel"],
+                                "frequency": cur_info["frequency"],
+                                "band": cur_info["band"]
+                            }
+                            discovered_channels.append(ch_entry)
+                            self.save_channels(discovered_channels)
+                            ev_found = {
+                                "status": "channel_found",
+                                "is_scanning": True,
+                                "channel": ch_entry,
+                                "total_found": len(discovered_channels),
+                                "percent": int(((current_freq_index + 1) / total_freqs) * 100),
+                                "channels": discovered_channels
+                            }
+                            write_scan_status(ev_found)
+                            yield ev_found
+                    except Exception:
+                        pass
+
+            proc.wait()
+
+            # Parse full resulting configuration file
+            parsed_channels = self._parse_scan_output(out_conf_path)
+            if parsed_channels:
+                discovered_channels = parsed_channels
+
+            # Save to user configs
+            self.save_channels(discovered_channels)
+
+            ev_done = {
+                "status": "complete",
+                "is_scanning": False,
+                "percent": 100,
+                "total_found": len(discovered_channels),
+                "channels": discovered_channels
+            }
+            write_scan_status(ev_done)
+            yield ev_done
+
+            return discovered_channels
+
+        finally:
+            if os.path.exists(in_conf_path):
+                try:
+                    os.unlink(in_conf_path)
+                except OSError:
+                    pass
+            if os.path.exists(out_conf_path):
+                try:
+                    os.unlink(out_conf_path)
+                except OSError:
+                    pass
+
+    def _parse_scan_output(self, conf_path: str) -> List[Dict[str, Any]]:
+        """Parses DVBv5 channel scan output into structured channel records."""
+        if not os.path.exists(conf_path):
+            return []
+
+        channels = []
+        current = None
+
+        with open(conf_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line_s = line.strip()
+                if not line_s:
+                    continue
+                if line_s.startswith("[") and line_s.endswith("]"):
+                    if current and "name" in current:
+                        channels.append(current)
+                    name = line_s.strip("[]")
+                    current = {"name": name, "raw_name": name}
+                elif "=" in line_s and current is not None:
+                    k, v = line_s.split("=", 1)
+                    k = k.strip().upper()
+                    v = v.strip()
+                    if k == "SERVICE_ID":
+                        current["service_id"] = int(v) if v.isdigit() else v
+                    elif k == "FREQUENCY":
+                        current["frequency"] = int(v) if v.isdigit() else v
+                    elif k == "MODULATION":
+                        current["modulation"] = v
+                    elif k == "DELIVERY_SYSTEM":
+                        current["delivery_system"] = v
+                    elif k == "VIDEO_PID":
+                        current["video_pid"] = int(v) if v.isdigit() else v
+                    elif k == "AUDIO_PID":
+                        current["audio_pid"] = int(v) if v.isdigit() else v
+
+        if current and "name" in current:
+            channels.append(current)
+
+        return channels
+
+    @classmethod
+    def save_channels(cls, channels: List[Dict[str, Any]]) -> None:
+        """Saves channels to JSON and MPV format."""
+        os.makedirs(os.path.dirname(CHANNELS_JSON_PATH), exist_ok=True)
+        with open(CHANNELS_JSON_PATH, "w", encoding="utf-8") as f:
+            json.dump({
+                "updated_at": time.time(),
+                "total": len(channels),
+                "channels": channels
+            }, f, indent=2)
+
+        # Write MPV channels.conf (DVBv5 format or legacy format)
+        os.makedirs(os.path.dirname(MPV_CHANNELS_CONF), exist_ok=True)
+        with open(MPV_CHANNELS_CONF, "w", encoding="utf-8") as f:
+            for ch in channels:
+                name = ch.get("name", "Unknown")
+                freq = ch.get("frequency", 0)
+                sid = ch.get("service_id", 1)
+                # DVBv5 format that mpv reads
+                f.write(f"[{name}]\n")
+                f.write(f"  DELIVERY_SYSTEM = ATSC\n")
+                f.write(f"  FREQUENCY = {freq}\n")
+                f.write(f"  MODULATION = VSB/8\n")
+                f.write(f"  SERVICE_ID = {sid}\n\n")
+
+
+if __name__ == "__main__":
+    scanner = AtscScanner()
+    print("Starting fast ATSC scan...")
+    for event in scanner.scan(quick_mode=True):
+        if event["status"] == "scanning":
+            sig = f"{event['signal_dbm']:.1f} dBm" if event['signal_dbm'] else "No Lock"
+            print(f"[{event['percent']:3d}%] Ch {event['channel']:2d} ({event['band']:8s}) - Signal: {sig} (Found: {event['total_found']})")
+        elif event["status"] == "channel_found":
+            print(f"  >>> FOUND CHANNEL: {event['channel']['name']}")
+        elif event["status"] == "complete":
+            print(f"\nScan complete! Discovered {event['total_found']} channels.")
