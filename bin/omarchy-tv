@@ -83,12 +83,32 @@ def cmd_list(args):
 
     channels = data.get("channels", [])
     print(f"📋 Saved Over-The-Air Channels ({len(channels)} total):")
-    print("-" * 65)
-    print(f"{'Name / Callsign':<30} {'Freq (MHz)':<12} {'Modulation':<10} {'Service ID'}")
-    print("-" * 65)
+    print("=" * 75)
+    print(f"{'CH':<7} {'NET':<8} {'NAME / CALLSIGN':<32} {'FREQ (MHz)':<12} {'SYS'}")
+    print("-" * 75)
     for ch in channels:
+        ch_num = ch.get("channel_number") or f"#{ch.get('service_id', '')}"
+        net = ch.get("network") or ""
+        display = ch.get("display_name") or ch.get("name", "Unknown")
         freq_mhz = f"{ch.get('frequency', 0) / 1000000:.2f}"
-        print(f"{ch.get('name', 'Unknown'):<30} {freq_mhz:<12} {ch.get('modulation', '8VSB'):<10} {ch.get('service_id', '')}")
+        print(f"{ch_num:<7} {net:<8} {display[:32]:<32} {freq_mhz:<12} {ch.get('modulation', '8VSB')}")
+
+
+def cmd_guide(args):
+    from engine.guide import load_guide
+    guide = load_guide()
+    channels = guide.get("channels", {})
+    print("📺 Electronic Program Guide (EPG) — Current Broadcast Schedules:")
+    print("=" * 82)
+    print(f"{'CH':<6} {'NET':<8} {'CURRENT PROGRAM':<34} {'SCHEDULE':<16} {'NEXT'}")
+    print("-" * 82)
+    for ch_num, prog in sorted(channels.items(), key=lambda x: float(x[0]) if x[0].replace('.', '', 1).isdigit() else 999):
+        net = prog.get("network", "")
+        title = prog.get("title", "")[:32]
+        times = f"{prog.get('start_time', '')} - {prog.get('end_time', '')}"
+        nxt = prog.get("next_title", "")[:20]
+        print(f"{ch_num:<6} {net:<8} {title:<34} {times:<16} {nxt}")
+    print("=" * 82)
 
 
 def load_favorites() -> list:
@@ -201,6 +221,10 @@ def main():
     # list / channels
     p_list = subparsers.add_parser("list", aliases=["channels"], help="List discovered channels")
     p_list.set_defaults(func=cmd_list)
+
+    # guide / epg
+    p_guide = subparsers.add_parser("guide", aliases=["epg"], help="Show electronic program guide schedules")
+    p_guide.set_defaults(func=cmd_guide)
 
     # favorite
     p_fav = subparsers.add_parser("favorite", aliases=["fav", "favorites"], help="Manage favorite channels")

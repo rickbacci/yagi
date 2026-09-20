@@ -23,12 +23,14 @@ BarWidget {
   property var scanSignal: null
   property int scanTotalFound: 0
   property var favoritesData: []
+  property var guideData: ({})
   property string channelFilter: "all" // "all" | "favorites"
 
   readonly property var displayChannels: {
     if (root.channelFilter === "favorites") {
       return (root.channelsData || []).filter(function(ch) {
-        return root.favoritesData && root.favoritesData.indexOf(ch.name) !== -1
+        if (!root.favoritesData) return false
+        return root.favoritesData.indexOf(ch.name) !== -1 || (ch.tune_name && root.favoritesData.indexOf(ch.tune_name) !== -1)
       })
     }
     return root.channelsData || []
@@ -110,6 +112,50 @@ BarWidget {
 
   function isFavorite(chName) {
     return root.favoritesData && root.favoritesData.indexOf(chName) !== -1
+  }
+
+  function applyGuide(jsonText) {
+    try {
+      var d = JSON.parse(jsonText || "{}")
+      root.guideData = d.channels || {}
+    } catch (e) {
+      root.guideData = {}
+    }
+  }
+
+  function getProgram(ch) {
+    if (!root.guideData || !ch) return null
+    if (ch.channel_number && root.guideData[ch.channel_number]) {
+      return root.guideData[ch.channel_number]
+    }
+    for (var k in root.guideData) {
+      var p = root.guideData[k]
+      if (p.station && (p.station === ch.name || p.station === ch.raw_name || p.station === ch.tune_name)) return p
+      if (p.network && ch.network && p.network.toLowerCase() === ch.network.toLowerCase()) return p
+    }
+    return null
+  }
+
+  function getActiveDisplayName() {
+    if (!root.activeChannelName) return ""
+    for (var i = 0; i < (root.channelsData || []).length; i++) {
+      var ch = root.channelsData[i]
+      if (ch.name === root.activeChannelName || ch.tune_name === root.activeChannelName) {
+        return Model.getDisplayTitle(ch)
+      }
+    }
+    return root.activeChannelName
+  }
+
+  function getActiveProgram() {
+    if (!root.activeChannelName) return null
+    for (var i = 0; i < (root.channelsData || []).length; i++) {
+      var ch = root.channelsData[i]
+      if (ch.name === root.activeChannelName || ch.tune_name === root.activeChannelName) {
+        return root.getProgram(ch)
+      }
+    }
+    return root.getProgram({ name: root.activeChannelName })
   }
 
   function toggleFavorite(chName) {
@@ -215,6 +261,16 @@ BarWidget {
     watchChanges: true
     printErrors: false
     onLoaded: root.applyFavorites(text())
+    onFileChanged: reload()
+  }
+
+  // Watch guide.json EPG file
+  FileView {
+    id: guideFile
+    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/guide.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applyGuide(text())
     onFileChanged: reload()
   }
 
@@ -535,7 +591,9 @@ BarWidget {
 
       // Now Playing Info Card
       BorderSurface {
+        id: nowPlayingCard
         visible: root.activeChannelName !== ""
+        readonly property var activeProg: root.getActiveProgram()
         width: parent.width
         radius: Style.spacing.labelGap
         color: Style.selectedFillFor(root.bar.foreground, Color.accent)
@@ -560,13 +618,13 @@ BarWidget {
             }
 
             Item {
-              width: Math.max(8, parent.width - Style.space(200))
+              width: Math.max(8, parent.width - Style.space(210))
               height: 1
             }
 
             Text {
               textFormat: Text.PlainText
-              text: "720p HD · AC-3 Digital"
+              text: "720p HD · AC-3 5.1 Digital"
               color: Qt.darker(root.bar.foreground, 1.4)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
@@ -575,11 +633,38 @@ BarWidget {
 
           Text {
             textFormat: Text.PlainText
-            text: root.activeChannelName
+            text: root.getActiveDisplayName()
             color: root.bar.foreground
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.subtitle
             font.bold: true
+            elide: Text.ElideRight
+            width: parent.width
+          }
+
+          Text {
+            visible: nowPlayingCard.activeProg !== null && nowPlayingCard.activeProg.title !== undefined
+            textFormat: Text.PlainText
+            text: nowPlayingCard.activeProg ? ("󰥔 " + nowPlayingCard.activeProg.title + (nowPlayingCard.activeProg.start_time ? (" (" + nowPlayingCard.activeProg.start_time + " - " + nowPlayingCard.activeProg.end_time + ")") : "")) : ""
+            color: Color.accent
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: true
+            elide: Text.ElideRight
+            width: parent.width
+          }
+
+          Text {
+            visible: nowPlayingCard.activeProg !== null && nowPlayingCard.activeProg.synopsis !== undefined
+            textFormat: Text.PlainText
+            text: nowPlayingCard.activeProg ? nowPlayingCard.activeProg.synopsis : ""
+            color: Qt.darker(root.bar.foreground, 1.4)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.WordWrap
+            width: parent.width
+            maximumLineCount: 2
+            elide: Text.ElideRight
           }
         }
       }
@@ -752,10 +837,13 @@ BarWidget {
               BorderSurface {
                 id: chItem
                 required property var modelData
-                readonly property bool isCurrent: root.activeChannelName === modelData.name
+                readonly property bool isCurrent: root.activeChannelName === modelData.name || root.activeChannelName === modelData.tune_name
+                readonly property var program: root.getProgram(modelData)
+                readonly property string channelBadge: Model.getChannelBadge(modelData)
+                readonly property string netColor: Model.networkColor(modelData.network, Color.accent)
 
                 width: channelListView.width
-                height: Style.space(42)
+                height: Style.space(48)
                 radius: Style.spacing.labelGap
                 color: isCurrent ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
                 borderSpec: isCurrent ? Border.controlSpec("normal", root.bar.foreground, Color.accent) : Border.none()
@@ -764,58 +852,81 @@ BarWidget {
                   anchors.left: parent.left
                   anchors.right: parent.right
                   anchors.verticalCenter: parent.verticalCenter
-                  anchors.leftMargin: Style.space(10)
+                  anchors.leftMargin: Style.space(8)
                   anchors.rightMargin: Style.space(8)
                   spacing: Style.space(8)
 
-                  Text {
-                    textFormat: Text.PlainText
-                    text: chItem.isCurrent ? "󰐊" : "󰢹"
-                    color: chItem.isCurrent ? Color.accent : Qt.darker(root.bar.foreground, 1.5)
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.body
-                    anchors.verticalCenter: parent.verticalCenter
-                  }
-
-                  Column {
-                    width: parent.width - Style.space(110)
-                    spacing: Style.space(1)
-                    anchors.verticalCenter: parent.verticalCenter
-
-                    Text {
-                      textFormat: Text.PlainText
-                      text: Model.cleanChannelName(chItem.modelData.name)
-                      color: root.bar.foreground
-                      font.family: root.bar.fontFamily
-                      font.pixelSize: Style.font.bodySmall
-                      font.bold: chItem.isCurrent
-                      elide: Text.ElideRight
-                      width: parent.width
-                    }
-
-                    Text {
-                      textFormat: Text.PlainText
-                      text: Model.formatFreq(chItem.modelData.frequency) + (chItem.modelData.band ? (" · " + chItem.modelData.band) : "")
-                      color: Qt.darker(root.bar.foreground, 1.6)
-                      font.family: root.bar.fontFamily
-                      font.pixelSize: Style.font.caption
-                    }
-                  }
-
+                  // Channel Number Badge
                   BorderSurface {
-                    width: Style.space(40)
-                    height: Style.space(22)
+                    width: Style.space(46)
+                    height: Style.space(26)
                     radius: Style.spacing.labelGap
-                    color: Style.normalFillFor(root.bar.foreground, Color.accent)
+                    color: chItem.isCurrent ? Color.accent : Style.normalFillFor(root.bar.foreground, Color.accent)
                     anchors.verticalCenter: parent.verticalCenter
 
                     Text {
                       anchors.centerIn: parent
                       textFormat: Text.PlainText
-                      text: chItem.modelData.service_id ? ("#" + chItem.modelData.service_id) : "OTA"
-                      color: Qt.darker(root.bar.foreground, 1.3)
+                      text: chItem.channelBadge
+                      color: chItem.isCurrent ? "#11111b" : root.bar.foreground
                       font.family: root.bar.fontFamily
                       font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+                  }
+
+                  // Channel Info (Title + Network + EPG Current Program)
+                  Column {
+                    width: parent.width - Style.space(90)
+                    spacing: Style.space(2)
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    Row {
+                      width: parent.width
+                      spacing: Style.space(6)
+
+                      Text {
+                        textFormat: Text.PlainText
+                        text: Model.getDisplayTitle(chItem.modelData)
+                        color: root.bar.foreground
+                        font.family: root.bar.fontFamily
+                        font.pixelSize: Style.font.bodySmall
+                        font.bold: chItem.isCurrent
+                        elide: Text.ElideRight
+                        width: Math.max(Style.space(80), parent.width - (netBadge.visible ? netBadge.width + Style.space(6) : 0))
+                      }
+
+                      BorderSurface {
+                        id: netBadge
+                        visible: chItem.modelData.network !== undefined && chItem.modelData.network !== "" && chItem.modelData.network !== "OTA"
+                        height: Style.space(16)
+                        width: netBadgeText.implicitWidth + Style.space(8)
+                        radius: 3
+                        color: "transparent"
+                        borderSpec: Border.controlSpec("normal", chItem.netColor, chItem.netColor)
+
+                        Text {
+                          id: netBadgeText
+                          anchors.centerIn: parent
+                          textFormat: Text.PlainText
+                          text: chItem.modelData.network || ""
+                          color: chItem.netColor
+                          font.family: root.bar.fontFamily
+                          font.pixelSize: Style.font.tiny
+                          font.bold: true
+                        }
+                      }
+                    }
+
+                    // Program Guide Show Title or Frequency
+                    Text {
+                      textFormat: Text.PlainText
+                      text: chItem.program ? ("󰥔 " + chItem.program.title) : (Model.formatFreq(chItem.modelData.frequency) + (chItem.modelData.band ? (" · " + chItem.modelData.band) : ""))
+                      color: chItem.program ? (chItem.isCurrent ? Color.accent : Qt.darker(root.bar.foreground, 1.4)) : Qt.darker(root.bar.foreground, 1.7)
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                      width: parent.width
                     }
                   }
 
@@ -827,8 +938,8 @@ BarWidget {
 
                     Text {
                       anchors.centerIn: parent
-                      text: root.isFavorite(chItem.modelData.name) ? "★" : "☆"
-                      color: root.isFavorite(chItem.modelData.name) ? "#f9e2af" : (starMouse.containsMouse ? Color.accent : Qt.darker(root.bar.foreground, 2.2))
+                      text: root.isFavorite(chItem.modelData.name) || (chItem.modelData.tune_name && root.isFavorite(chItem.modelData.tune_name)) ? "★" : "☆"
+                      color: (root.isFavorite(chItem.modelData.name) || (chItem.modelData.tune_name && root.isFavorite(chItem.modelData.tune_name))) ? "#f9e2af" : (starMouse.containsMouse ? Color.accent : Qt.darker(root.bar.foreground, 2.2))
                       font.pixelSize: Style.font.body
                     }
 
@@ -839,7 +950,7 @@ BarWidget {
                       cursorShape: Qt.PointingHandCursor
                       onClicked: function(mouse) {
                         mouse.accepted = true
-                        root.toggleFavorite(chItem.modelData.name)
+                        root.toggleFavorite(chItem.modelData.tune_name || chItem.modelData.name)
                       }
                       onWheel: function(wheel) { wheel.accepted = false }
                     }
@@ -851,7 +962,7 @@ BarWidget {
                   anchors.rightMargin: Style.space(34)
                   hoverEnabled: true
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: root.playChannel(chItem.modelData.name)
+                  onClicked: root.playChannel(chItem.modelData.tune_name || chItem.modelData.name)
                   onWheel: function(wheel) { wheel.accepted = false }
                 }
               }

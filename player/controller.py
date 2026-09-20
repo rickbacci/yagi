@@ -136,12 +136,22 @@ class MpvController:
         return os.path.exists(self.socket_path)
 
     def tune(self, channel_name: str) -> bool:
-        """Tunes to specified channel name."""
-        if not self.is_running():
-            return self.launch(channel_name)
+        """Tunes to specified channel name, number, or callsign."""
+        from engine.enrichment import match_channel
+        self.channels = self._load_channels()
+        matched = match_channel(channel_name, self.channels)
+        target_name = (matched.get("tune_name") or matched.get("name")) if matched else channel_name
 
-        res = self.send_command(["loadfile", f"dvb://{channel_name}", "replace"])
-        self.show_osd(f"📺 Tuning {channel_name}...")
+        if matched and matched.get("channel_number"):
+            osd_label = f"📺 {matched['channel_number']} {matched.get('display_name', target_name)}"
+        else:
+            osd_label = f"📺 Tuning {target_name}..."
+
+        if not self.is_running():
+            return self.launch(target_name)
+
+        res = self.send_command(["loadfile", f"dvb://{target_name}", "replace"])
+        self.show_osd(osd_label)
         return res is not None and res.get("error") == "success"
 
     def get_active_channel_name(self) -> Optional[str]:
@@ -155,6 +165,15 @@ class MpvController:
                 return data.replace("dvb://", "", 1)
         return None
 
+    def get_active_channel_info(self) -> Optional[Dict[str, Any]]:
+        """Returns full enriched metadata for the currently playing channel."""
+        active_name = self.get_active_channel_name()
+        if not active_name:
+            return None
+        from engine.enrichment import match_channel
+        self.channels = self._load_channels()
+        return match_channel(active_name, self.channels)
+
     def channel_up(self) -> None:
         """Surfs forward to the next channel based on current playing station."""
         self.channels = self._load_channels()
@@ -165,14 +184,14 @@ class MpvController:
         current_idx = 0
         if active_name:
             for idx, ch in enumerate(self.channels):
-                if ch.get("name") == active_name:
+                if ch.get("name") == active_name or ch.get("tune_name") == active_name:
                     current_idx = idx
                     break
 
         next_idx = (current_idx + 1) % len(self.channels)
         self.current_channel_index = next_idx
         ch = self.channels[next_idx]
-        self.tune(ch.get("name", ""))
+        self.tune(ch.get("tune_name") or ch.get("name", ""))
 
     def channel_down(self) -> None:
         """Surfs backward to the previous channel based on current playing station."""
@@ -184,14 +203,14 @@ class MpvController:
         current_idx = 0
         if active_name:
             for idx, ch in enumerate(self.channels):
-                if ch.get("name") == active_name:
+                if ch.get("name") == active_name or ch.get("tune_name") == active_name:
                     current_idx = idx
                     break
 
         prev_idx = (current_idx - 1) % len(self.channels)
         self.current_channel_index = prev_idx
         ch = self.channels[prev_idx]
-        self.tune(ch.get("name", ""))
+        self.tune(ch.get("tune_name") or ch.get("name", ""))
 
     def toggle_pause(self) -> None:
         self.send_command(["cycle", "pause"])

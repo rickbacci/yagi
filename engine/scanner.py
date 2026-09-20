@@ -329,44 +329,55 @@ class AtscScanner:
 
     @classmethod
     def save_channels(cls, channels: List[Dict[str, Any]], json_path: Optional[str] = None, mpv_path: Optional[str] = None) -> None:
-        """Saves channels to JSON and MPV format."""
+        """Saves channels to JSON and MPV format with virtual channel enrichment and sorting."""
+        from engine.enrichment import enrich_and_sort_channels
+        enriched_channels = enrich_and_sort_channels(channels)
+
         target_json = json_path or CHANNELS_JSON_PATH
         target_mpv = mpv_path or MPV_CHANNELS_CONF
         os.makedirs(os.path.dirname(target_json), exist_ok=True)
         with open(target_json, "w", encoding="utf-8") as f:
             json.dump({
                 "updated_at": time.time(),
-                "total": len(channels),
-                "channels": channels
+                "total": len(enriched_channels),
+                "channels": enriched_channels
             }, f, indent=2)
 
         # Write MPV channels.conf in ATSC format (NAME:FREQ:8VSB:VPID:APID:SID)
         os.makedirs(os.path.dirname(target_mpv), exist_ok=True)
         with open(target_mpv, "w", encoding="utf-8") as f:
-            for ch in channels:
-                name = ch.get("name", "Unknown")
+            for ch in enriched_channels:
+                tune_name = ch.get("tune_name") or ch.get("name", "Unknown")
                 freq = ch.get("frequency", 0)
                 sid = ch.get("service_id", 1)
                 vpid_raw = ch.get("video_pid", 0)
                 apid_raw = ch.get("audio_pid", 0)
                 vpid = int(str(vpid_raw).split()[0]) if vpid_raw else 0
                 apid = int(str(apid_raw).split()[0]) if apid_raw else 0
-                f.write(f"{name}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
+                f.write(f"{tune_name}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
+
+                ch_num = ch.get("channel_number")
+                if ch_num and ch_num != tune_name:
+                    f.write(f"{ch_num}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
 
         # Also write channels.conf.atsc if default MPV location
         if target_mpv == MPV_CHANNELS_CONF:
             try:
                 atsc_conf = target_mpv + ".atsc"
                 with open(atsc_conf, "w", encoding="utf-8") as f:
-                    for ch in channels:
-                        name = ch.get("name", "Unknown")
+                    for ch in enriched_channels:
+                        tune_name = ch.get("tune_name") or ch.get("name", "Unknown")
                         freq = ch.get("frequency", 0)
                         sid = ch.get("service_id", 1)
                         vpid_raw = ch.get("video_pid", 0)
                         apid_raw = ch.get("audio_pid", 0)
                         vpid = int(str(vpid_raw).split()[0]) if vpid_raw else 0
                         apid = int(str(apid_raw).split()[0]) if apid_raw else 0
-                        f.write(f"{name}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
+                        f.write(f"{tune_name}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
+
+                        ch_num = ch.get("channel_number")
+                        if ch_num and ch_num != tune_name:
+                            f.write(f"{ch_num}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
             except Exception:
                 pass
 
