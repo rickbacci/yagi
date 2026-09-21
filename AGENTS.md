@@ -1,6 +1,6 @@
 # AGENTS.md — Omarchy TV
 
-OTA TV for Omarchy (Hyprland + Quickshell + Python + MPV). Product how-to: `DESIGN.md` and `skills/omarchy-tv/SKILL.md`. This file is repo rules only.
+OTA TV for Omarchy (Hyprland + Quickshell + Python + MPV). Current idea: `DESIGN.md` and `skills/omarchy-tv/SKILL.md`. This file is repo rules only.
 
 ## Commands
 - Tests: `python3 -m unittest discover tests` (100% before commit)
@@ -22,10 +22,13 @@ OTA TV for Omarchy (Hyprland + Quickshell + Python + MPV). Product how-to: `DESI
 11. Skip seconds, overlay pixels, cache minutes are preferences until this hardware and this mpv prove them. Do not freeze them here.
 
 ## Working style
-Talk first. Questions with a recommendation second. Numbered plan third. Code after they answer or have chosen. Do not commit unless asked.
+One task. If they batch asks, name the current task, park the rest on the todo list, finish that task before switching.
 
-This file’s constraints are spec/security. Product *how* is a decision with a why — record it in DESIGN + skill + README + HUD, then code. If a written method cannot do what they asked, stop. Say what we need and why. Do not keep iterating that method. Do not let docs forbid a working path. If two docs disagree, align them before more code.
+Talk first. Recommendation with pluses and minuses second. Numbered plan third. Code after they choose. Do not commit unless asked.
+
+Obey **Hard constraints**. DESIGN / skill / README / HUD are the current idea, not a veto. If the goal needs a path they don’t describe, advise that path, discuss, then proceed after we understand each other. Update them after it works. Do not stop to rewrite docs in order to think.
 
 Read this machine’s mpv / Quickshell / Hyprland / DVB docs, not a remembered wiki.
 
-Do not call a player/HUD/plugin bug fixed until the running app has done it, or they have. If they still cannot see it, do not ship another variant of the same theory: measure the prediction, record the miss in the skill that owns the domain.
+## Done
+They saw it, or the running app did. Green tests and “it’s in the lua” are not done. Clock-only HUD is not skip. If they still cannot see it: measure the prediction, record the miss, stop that theory.

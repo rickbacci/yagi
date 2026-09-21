@@ -33,6 +33,7 @@ from engine.paths import (
 )
 
 FOLLOW_TS_PY = os.path.join(os.path.dirname(os.path.realpath(__file__)), "follow_ts.py")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 # Same floor as library dumps: PAT/PMT-only is not a picture.
 MIN_PLAYABLE_BYTES = 256 * 1024
@@ -40,6 +41,18 @@ MIN_PLAYABLE_BYTES = 256 * 1024
 # still writing just because this floor is not hit yet.
 DUMP_WAIT_SECS = 20.0
 DUMP_GROWING_BYTES = 32 * 1024
+
+
+TS_PACKET = 188
+ATSC_BPS = 19_390_000
+SEEK_STEP = 10.0
+SEEK_NEAR = 5.0
+LIVE_SLACK = 2.5
+
+
+def align_ts(n: int) -> int:
+    n = max(0, int(n or 0))
+    return n - (n % TS_PACKET)
 
 
 def is_timeshift_path(file_path: Optional[str]) -> bool:
@@ -105,6 +118,180 @@ class Timeshift:
     @classmethod
     def dump_path(cls) -> str:
         return TIMESHIFT_FILE
+
+    @classmethod
+    def patch_state(cls, **fields: Any) -> None:
+        state = cls.load_state()
+        state.update(fields)
+        state["updated_at"] = time.time()
+        cls._write_state(state)
+
+    @classmethod
+    def dump_bytes(cls) -> int:
+        try:
+            return int(os.path.getsize(TIMESHIFT_FILE))
+        except OSError:
+            return 0
+
+    @classmethod
+    def live_edge_byte(cls) -> int:
+        size = cls.dump_bytes()
+        if size <= TS_PACKET:
+            return 0
+        return align_ts(size - TS_PACKET)
+
+    @classmethod
+    def _http_port_up(cls, port: int) -> bool:
+        if port <= 0:
+            return False
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return True
+        except OSError:
+            return False
+
+    @classmethod
+    def start_http(cls) -> int:
+        """Loopback MPEG-TS server in its own process. The play CLI must not own it."""
+        state = cls.load_state()
+        pid = int(state.get("http_pid") or 0)
+        port = int(state.get("http_port") or 0)
+        if pid > 0 and port > 0 and cls._pid_alive(pid) and cls._http_port_up(port):
+            return port
+        cls.stop_http()
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "engine.timeshift_http", TIMESHIFT_FILE],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            cwd=PROJECT_ROOT,
+        )
+        if proc.stdout is None:
+            cls._kill_pid(proc.pid)
+            return 0
+        line = proc.stdout.readline()
+        try:
+            proc.stdout.close()
+        except OSError:
+            pass
+        if isinstance(proc.poll(), int):
+            return 0
+        try:
+            port = int(line.strip())
+        except (TypeError, ValueError):
+            cls._kill_pid(proc.pid)
+            return 0
+        cls.patch_state(http_port=port, http_pid=proc.pid)
+        return port
+
+    @classmethod
+    def stop_http(cls) -> None:
+        state = cls.load_state()
+        pid = int(state.get("http_pid") or 0)
+        cls._kill_pid(pid)
+        if state:
+            state.pop("http_port", None)
+            state.pop("http_pid", None)
+            state["updated_at"] = time.time()
+            cls._write_state(state)
+
+    @classmethod
+    def http_url(cls, start_byte: int = 0) -> str:
+        port = int(cls.load_state().get("http_port") or 0)
+        if port <= 0:
+            port = cls.start_http()
+        return f"http://127.0.0.1:{port}/live.ts?from={align_ts(start_byte)}"
+
+    @classmethod
+    def write_rate(cls) -> float:
+        """Bytes/sec of the dump. Pause growth first, else last measure, else ATSC."""
+        state = cls.load_state()
+        try:
+            t0 = float(state.get("playhead_t") or 0)
+        except (TypeError, ValueError):
+            t0 = 0.0
+        held = time.time() - t0 if t0 > 0 else 0.0
+        playhead = int(state.get("playhead_byte") or 0)
+        if bool(state.get("paused")) and held > 0.5:
+            return max(1000.0, (cls.dump_bytes() - playhead) / held)
+        try:
+            bps = float(state.get("mux_bps") or 0)
+        except (TypeError, ValueError):
+            bps = 0.0
+        if bps >= 1000:
+            return bps
+        return ATSC_BPS / 8.0
+
+    @classmethod
+    def delay_sec(cls) -> float:
+        state = cls.load_state()
+        if str(state.get("view") or "live") == "live" and not bool(state.get("paused")):
+            return 0.0
+        if bool(state.get("paused")):
+            try:
+                t0 = float(state.get("playhead_t") or 0)
+            except (TypeError, ValueError):
+                t0 = 0.0
+            if t0 > 0:
+                return max(0.0, time.time() - t0)
+        rate = cls.write_rate()
+        if rate <= 0:
+            return 0.0
+        return max(0.0, (cls.dump_bytes() - cls.playhead_now()) / rate)
+
+    @classmethod
+    def mux_rate(cls) -> float:
+        return cls.write_rate()
+
+    @classmethod
+    def follow_pos(cls) -> Optional[int]:
+        sock = str(cls.load_state().get("follow_socket") or FOLLOW_SOCKET_PATH)
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                s.connect(sock)
+                s.sendall(b"POS")
+                s.shutdown(socket.SHUT_WR)
+                data = (s.recv(64) or b"").decode("utf-8", "replace").strip()
+            return align_ts(int(data))
+        except (OSError, ValueError):
+            return None
+
+    @classmethod
+    def playhead_now(cls) -> int:
+        state = cls.load_state()
+        pos = int(state.get("playhead_byte") or 0)
+        view = str(state.get("view") or "live")
+        paused = bool(state.get("paused"))
+        if view == "delayed" and not paused:
+            try:
+                t0 = float(state.get("playhead_t") or 0)
+            except (TypeError, ValueError):
+                t0 = 0.0
+            if t0 > 0:
+                pos += int((time.time() - t0) * cls.mux_rate())
+        size = cls.dump_bytes()
+        if size > TS_PACKET:
+            pos = min(pos, size - TS_PACKET)
+        return align_ts(max(0, pos))
+
+    @classmethod
+    def remain_sec(cls) -> float:
+        rate = cls.mux_rate()
+        if rate <= 0:
+            return 0.0
+        return max(0.0, (cls.dump_bytes() - cls.playhead_now()) / rate)
+
+    @classmethod
+    def fwd_hop(cls, remain: float) -> float:
+        if remain <= LIVE_SLACK:
+            return 0.0
+        if remain <= (SEEK_NEAR + LIVE_SLACK):
+            return remain
+        if remain <= (SEEK_STEP * 2):
+            return SEEK_NEAR
+        return SEEK_STEP
 
     @classmethod
     def load_state(cls) -> Dict[str, Any]:
@@ -312,6 +499,7 @@ class Timeshift:
 
     @classmethod
     def wipe(cls) -> None:
+        cls.stop_http()
         cls.stop_follow()
         cls.stop_dump()
         cls._reap_orphan_dumps()
@@ -420,20 +608,30 @@ class Timeshift:
 
     @classmethod
     def _kill_pid(cls, pid: int) -> None:
-        if not cls._pid_alive(pid):
+        if pid <= 0:
             return
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
-        deadline = time.time() + 0.4
-        while time.time() < deadline and cls._pid_alive(pid):
-            time.sleep(0.02)
         if cls._pid_alive(pid):
             try:
-                os.kill(pid, signal.SIGKILL)
+                os.kill(pid, signal.SIGTERM)
             except OSError:
                 pass
+            deadline = time.time() + 0.4
+            while time.time() < deadline and cls._pid_alive(pid):
+                time.sleep(0.02)
+            if cls._pid_alive(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        deadline = time.time() + 0.4
+        while time.time() < deadline:
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                return
+            if not cls._pid_alive(pid):
+                return
+            time.sleep(0.02)
 
     @classmethod
     def start_dump(
@@ -499,6 +697,10 @@ class Timeshift:
             "path": TIMESHIFT_FILE,
             "pid": proc.pid,
             "socket": sock,
+            "view": "live",
+            "paused": False,
+            "playhead_byte": 0,
+            "playhead_t": 0,
             "updated_at": time.time(),
         }
         if keep_follow and follow_pid:
@@ -571,6 +773,10 @@ class Timeshift:
                         "socket": next_sock,
                         "follow_pid": follow_pid,
                         "follow_socket": follow_socket,
+                        "view": "live",
+                        "paused": False,
+                        "playhead_byte": 0,
+                        "playhead_t": 0,
                         "updated_at": time.time(),
                     })
                     return TIMESHIFT_FILE

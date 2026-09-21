@@ -274,40 +274,39 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertIsNone(active)
 
     @patch("player.controller.is_timeshift_path", return_value=True)
+    @patch("player.controller.Timeshift.start_http", return_value=18765)
+    @patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=0")
+    @patch("player.controller.Timeshift.live_edge_byte", return_value=0)
     @patch("player.controller.Timeshift.start_dump")
-    @patch("player.controller.Timeshift.start_follow")
     @patch.object(MpvController, "is_running", return_value=False)
     @patch("subprocess.Popen")
     @patch("os.path.exists", return_value=True)
-    def test_live_launch_plays_dump_file_not_dvbin(self, mock_exists, mock_popen, mock_running, mock_follow, mock_dump, _ts_path):
+    def test_live_launch_plays_dump_file_not_dvbin(self, mock_exists, mock_popen, mock_running, mock_dump, _edge, _url, _http, _ts_path):
         dump = os.path.join(self.tmp_dir.name, "live.ts")
         with open(dump, "wb") as f:
             f.write(b"x" * (256 * 1024))
         mock_dump.return_value = dump
-        follow = MagicMock()
-        follow.stdout = MagicMock()
-        mock_follow.return_value = follow
         mock_popen.return_value = MagicMock(pid=9)
 
-        self.controller.launch(channel_name="53.1 Daystar", adapter_id=None)
+        with patch("player.controller.Timeshift.patch_state"), \
+             patch("player.controller.update_player_state"):
+            self.controller.launch(channel_name="53.1 Daystar", adapter_id=None)
 
         mock_dump.assert_called_once()
-        mock_follow.assert_called_once()
         cmd = mock_popen.call_args[0][0]
         self.assertIn("--force-window=immediate", cmd)
         self.assertIn("--window-dragging=no", cmd)
+        self.assertIn("--keepaspect-window=no", cmd)
+        self.assertNotIn("--geometry=1280x720", cmd)
         self.assertNotIn("--idle=yes", cmd)
         self.assertFalse(any(str(arg).startswith("--dvbin-") for arg in cmd))
-        self.assertEqual(cmd[-1], "-")
+        self.assertTrue(str(cmd[-1]).startswith("http://127.0.0.1:"))
         self.assertIn("--demuxer-lavf-format=mpegts", cmd)
         self.assertIn("--cache-pause=no", cmd)
+        self.assertIn("--ytdl=no", cmd)
         self.assertTrue(any("tv_hud-timeshift-file=" in str(arg) for arg in cmd))
-        self.assertTrue(any("tv_hud-follow-sock=" in str(arg) for arg in cmd))
-        self.assertIn("--input-default-bindings=no", cmd)
-        self.assertIn("--osd-level=0", cmd)
-        self.assertIn("--osd-on-seek=no", cmd)
-        self.assertTrue(any(str(arg).startswith("--log-file=") for arg in cmd))
-        self.assertTrue(any(str(arg).startswith("--script-opts=tv_hud-cli=") for arg in cmd))
+        self.assertFalse(any("tv_hud-follow-sock=" in str(arg) for arg in cmd))
+        self.assertNotEqual(cmd[-1], "-")
 
     def test_update_player_state_atomic(self):
         update_player_state(True, channel="53.1 Daystar", station="Daystar", pid=99)
@@ -529,19 +528,27 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
             self.assertTrue(self.controller.return_to_live())
         mock_tune.assert_called_once_with("WKYC-HD")
 
-    def test_return_to_live_from_live_seeks_write_head(self):
-        self.server.path_value = "-"
-        self.assertTrue(self.controller.return_to_live())
-        sent = [m.get("command") for m in self.server.commands]
-        self.assertIn(["script-message", "tv-live-edge"], sent)
-        self.assertIn(["set_property", "pause", False], sent)
-
-    def test_return_to_live_from_timeshift_file_relaunches_pip(self):
-        self.server.path_value = self.dump_path
-        with patch.object(self.controller, "spawn_pip_relaunch") as mock_spawn:
+    def test_return_to_live_from_live_reopens_write_head(self):
+        self.server.path_value = "http://127.0.0.1:18765/live.ts?from=0"
+        with patch("player.controller.Timeshift.start_http", return_value=18765), \
+             patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=99"), \
+             patch("player.controller.Timeshift.live_edge_byte", return_value=99), \
+             patch("player.controller.Timeshift.write_rate", return_value=2_000_000), \
+             patch("player.controller.Timeshift.dump_bytes", return_value=100), \
+             patch("player.controller.Timeshift.patch_state"):
             self.assertTrue(self.controller.return_to_live())
-        mock_spawn.assert_called_once()
-        self.assertEqual(mock_spawn.call_args[0][0], "WKYC-HD")
+        sent = [m.get("command") for m in self.server.commands]
+        self.assertTrue(any(c and c[0] == "loadfile" for c in sent))
+        self.assertNotIn(["script-message", "tv-live-edge"], sent)
+
+    def test_return_to_live_from_timeshift_file_reopens_http(self):
+        self.server.path_value = self.dump_path
+        with patch.object(self.controller, "open_timeshift_dump", return_value=True) as mock_open, \
+             patch("player.controller.Timeshift.start_http"), \
+             patch("player.controller.Timeshift.live_edge_byte", return_value=1880):
+            self.assertTrue(self.controller.return_to_live())
+        mock_open.assert_called_once()
+        self.assertEqual(mock_open.call_args[0][0], 1880)
 
     def test_channel_up_from_recording_uses_last_live(self):
         rec = os.path.join(self.tmp_dir.name, "show.ts")
@@ -559,10 +566,46 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self.assertFalse(os.path.exists(self.controller.socket_path))
         self.assertFalse(self.controller.is_running())
 
-    def test_pause_cycles_mpv_pause(self):
+    def test_pause_on_library_cycles_mpv(self):
+        rec = os.path.join(self.tmp_dir.name, "show.ts")
+        self.server.path_value = rec
         self.controller.toggle_pause()
         sent = [m.get("command") for m in self.server.commands]
         self.assertIn(["cycle", "pause"], sent)
+
+    def test_pause_on_live_pipe_freezes_follow(self):
+        self.server.path_value = "http://127.0.0.1:18765/live.ts?from=0"
+        with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False}), \
+             patch("player.controller.Timeshift.live_edge_byte", return_value=1880), \
+             patch("player.controller.Timeshift.dump_bytes", return_value=5000), \
+             patch("player.controller.Timeshift.patch_state") as mock_patch:
+            self.controller.toggle_pause()
+        sent = [m.get("command") for m in self.server.commands]
+        self.assertIn(["set_property", "pause", True], sent)
+        self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
+        self.assertTrue(mock_patch.called)
+
+    def test_seek_back_from_live_opens_dump(self):
+        self.server.path_value = "http://127.0.0.1:18765/live.ts?from=0"
+        with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False, "skip_busy": False}), \
+             patch("player.controller.Timeshift.dump_bytes", return_value=10_000_000), \
+             patch("player.controller.Timeshift.write_rate", return_value=2_423_750), \
+             patch("player.controller.Timeshift.start_http", return_value=18765), \
+             patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=1"), \
+             patch("player.controller.Timeshift.patch_state"):
+            self.assertTrue(self.controller.seek(-10))
+        sent = [m.get("command") for m in self.server.commands]
+        load = next(c for c in sent if c and c[0] == "loadfile")
+        self.assertTrue(str(load[1]).startswith("http://127.0.0.1:"))
+
+    def test_seek_fwd_on_live_is_noop(self):
+        self.server.path_value = "http://127.0.0.1:18765/live.ts?from=0"
+        with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False, "skip_busy": False}), \
+             patch("player.controller.Timeshift.start_http") as mock_http:
+            self.assertTrue(self.controller.seek(10))
+        mock_http.assert_not_called()
+        sent = [m.get("command") for m in self.server.commands]
+        self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
 
     def test_seek_asks_hud(self):
         rec = os.path.join(self.tmp_dir.name, "show.ts")
@@ -599,7 +642,7 @@ class TestLuaChannelKeys(unittest.TestCase):
             src = f.read()
         self.assertIn('mp.add_forced_key_binding("j", "tv_surf_prev_j", surf_prev, {repeatable = false})', src)
         self.assertIn('mp.add_forced_key_binding("k", "tv_surf_next_k", surf_next, {repeatable = false})', src)
-        self.assertIn('mp.commandv("loadfile"', src)
+        self.assertIn('name = "loadfile"', src)
         self.assertIn("is_timeshift_playback", src)
         self.assertIn("is_library_playback", src)
         self.assertIn("timeshift_behind", src)
@@ -611,7 +654,6 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("request_pause", src)
         self.assertIn("end-file", src)
         self.assertIn("request_live", src)
-        self.assertIn("seek_live_edge", src)
         self.assertIn("behind_live", src)
         self.assertIn("tv-live-edge", src)
         self.assertIn("tv-retuned", src)
@@ -630,17 +672,23 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("virt_pos", src)
         self.assertIn("atsc_duration", src)
         self.assertIn("tv_cli", src)
+        self.assertIn("cli_async", src)
+        self.assertIn('cli_async({"pause"})', src)
+        self.assertIn('cli_async({"seek"', src)
+        self.assertIn('cli_async({"live"})', src)
         self.assertIn("local function surf_next()\n    surf(1)\nend", src)
         self.assertIn("if is_file_playback() then", src)
         self.assertIn("surf_busy", src)
         self.assertIn("timeshift_active.json", src)
         self.assertIn("SEEK_STEP = 10", src)
         self.assertIn("SEEK_NEAR = 5", src)
-        self.assertIn("timeshift_fwd_step", src)
+        self.assertNotIn("timeshift_fwd_step", src)
         self.assertIn("file_progress", src)
         self.assertIn("file_bytes", src)
         self.assertIn("apply_virt_seek", src)
-        self.assertIn("send_follow_seek", src)
+        self.assertNotIn("timeshift_skip", src)
+        self.assertNotIn("hold_dump_pause", src)
+        self.assertNotIn("send_follow_seek", src)
         self.assertIn("timeshift-file", src)
         self.assertIn("follow-sock", src)
         self.assertIn("pcall(show_hud)", src)
@@ -652,22 +700,17 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertNotIn("live_overlay", src)
         self.assertNotIn("show_live_badge", src)
         self.assertIn("timeshift_delay", src)
-        self.assertIn("pause_origin", src)
         self.assertIn("stat_bytes", src)
-        self.assertIn("send_follow_cmd", src)
-        self.assertIn('"PAUSE"', src)
-        self.assertIn('"PLAY"', src)
-        self.assertIn("Commit the held delay", src)
+        self.assertNotIn("send_follow_cmd", src)
+        self.assertNotIn('"PAUSE"', src)
         self.assertIn("playhead_byte", src)
         self.assertIn("behind_clock", src)
-        self.assertIn("open_dump_at", src)
+        self.assertNotIn("open_dump_at", src)
         self.assertIn("is_follow_pipe", src)
-        self.assertIn("Last skip toward live remaps", src)
-        self.assertIn("PACE", src)
-        self.assertIn("CATCHUP", src)
-        self.assertIn("POS", src)
+        self.assertNotIn("CATCHUP", src)
+        self.assertNotIn('"PACE"', src)
         self.assertIn("%s behind", src)
-        self.assertIn("stay LIVE", src)
+        self.assertIn("on_dump_eof", src)
         self.assertIn("if is_timeshift_playback() then", src)
         self.assertIn("seek_reload", src)
         self.assertIn('register_script_message("tv-seek"', src)

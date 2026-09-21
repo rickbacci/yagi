@@ -160,6 +160,9 @@ end
 local function is_timeshift_playback()
     if timeshift_file_opt() then return true end
     local path = mp.get_property("path") or ""
+    if path:match("^http://127%.0%.0%.1:") and path:find("/live.ts", 1, true) then
+        return true
+    end
     if follow_sock_opt() and (path == "-" or path:match("^fd://") or path:match("^fdclose://") or path:find("omarchy-tv-follow.fifo", 1, true)) then
         return true
     end
@@ -260,6 +263,21 @@ local function tv_cli()
     return "omarchy-tv"
 end
 
+local function cli_async(argv)
+    local cli = tv_cli()
+    local args = {cli}
+    for i = 1, #argv do
+        args[#args + 1] = tostring(argv[i])
+    end
+    mp.command_native_async({
+        name = "subprocess",
+        playback_only = false,
+        args = args,
+    }, function()
+        reload_data()
+    end)
+end
+
 local function dump_path()
     local p = timeshift_file_opt()
     if p and p ~= "" then return p end
@@ -348,33 +366,32 @@ local function timeshift_delay()
         playhead_byte = nil
         return 0
     end
-    -- Dump file: delay is bytes remaining / mux rate. Follow pipe: wall
-    -- clock while paused (stdin size does not grow).
-    if not is_follow_pipe() then
-        local size = file_bytes()
-        local pos = dump_playhead()
-        local rate = mux_rate()
-        behind_clock = math.max(0, (size - pos) / rate)
-        return behind_clock
+    local view = tostring(cached_timeshift.view or "live")
+    local paused = cached_timeshift.paused == true
+    if view == "live" and not paused then
+        behind_clock = 0
+        return 0
     end
-    if mp.get_property_bool("pause", false) then
-        local now = mp.get_time()
-        if not pause_origin then
-            pause_origin = now
-            pause_base_delay = behind_clock
-            if not playhead_byte or playhead_byte <= 0 then
-                playhead_byte = align_ts(file_bytes())
-            end
+    if paused then
+        local t0 = tonumber(cached_timeshift.playhead_t) or 0
+        if t0 > 0 then
+            behind_clock = math.max(0, os.time() - t0)
+            return behind_clock
         end
-        return pause_base_delay + math.max(0, now - pause_origin)
     end
-    if pause_origin then
-        behind_clock = pause_base_delay + math.max(0, mp.get_time() - pause_origin)
-        pause_origin = nil
-        pause_base_delay = 0
-        virt_last = mp.get_time()
-        return behind_clock
+    local size = file_bytes()
+    local pos = tonumber(cached_timeshift.playhead_byte) or 0
+    local rate = mux_rate()
+    if view == "delayed" and not paused then
+        local t0 = tonumber(cached_timeshift.playhead_t) or 0
+        if t0 > 0 then
+            pos = pos + math.max(0, os.time() - t0) * rate
+        end
     end
+    if size > 188 then
+        pos = math.max(0, math.min(pos, size - 188))
+    end
+    behind_clock = math.max(0, (size - pos) / rate)
     return behind_clock
 end
 
@@ -920,70 +937,20 @@ end
 local returning_live = false
 
 local apply_virt_seek
-local send_follow_cmd
-local send_follow_seek
-local send_follow_pace
-local apply_playhead_seek
-local follow_tell
-local open_dump_at
-
-local function timeshift_fwd_step(delay)
-    if delay <= LIVE_SLACK then
-        return 0
-    end
-    -- Last hop that would pass the write head goes live (WinTV / TiVo).
-    if delay <= (SEEK_NEAR + LIVE_SLACK) then
-        return delay
-    end
-    if delay <= (SEEK_STEP * 2) then
-        return SEEK_NEAR
-    end
-    return SEEK_STEP
-end
-
-local function seek_live_edge()
-    mp.commandv("set", "pause", "no")
-    if is_timeshift_playback() then
-        behind_clock = 0
-        playhead_byte = nil
-        pause_origin = nil
-        pause_base_delay = 0
-        send_follow_cmd("CATCHUP")
-        local size = file_bytes()
-        send_follow_seek(math.max(0, size - 188))
-        show_hud()
-        sync_player_state()
-        return
-    end
-    local path = mp.get_property("path") or ""
-    if path:match("^dvb://") then
-        mp.commandv("stop")
-        mp.add_timeout(0.05, function()
-            mp.commandv("loadfile", path, "replace")
-        end)
-        return
-    end
-    show_hud()
-    sync_player_state()
-end
 
 local function request_live()
-    if is_library_playback() or (is_timeshift_playback() and not is_follow_pipe()) then
-        local cli = tv_cli()
-        mp.command_native_async({
-            name = "subprocess",
-            playback_only = false,
-            args = {cli, "live"}
-        }, function(ok, result)
-            local status = result and result.status
-            if ok == false or (status and status ~= 0) then
-                returning_live = false
-                mp.osd_message("Could not return to live", 4)
-            end
-        end)
-        return
-    end
-    seek_live_edge()
+    local cli = tv_cli()
+    mp.command_native_async({
+        name = "subprocess",
+        playback_only = false,
+        args = {cli, "live"}
+    }, function(ok, result)
+        local status = result and result.status
+        if ok == false or (status and status ~= 0) then
+            returning_live = false
+            mp.osd_message("Could not return to live", 4)
+        end
+    end)
 end
 
 local function go_live()
@@ -1005,77 +972,8 @@ local function at_file_end()
     return virt_pos >= (dur - 1.0)
 end
 
-send_follow_cmd = function(cmd)
-    local sock = follow_sock_opt()
-    if not sock or not cmd or cmd == "" then return false end
-    local py = table.concat({
-        "import socket, sys",
-        "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
-        "s.settimeout(1)",
-        "s.connect(sys.argv[1])",
-        "s.sendall(sys.argv[2].encode())",
-    }, "\n")
-    local res = mp.command_native({
-        name = "subprocess",
-        playback_only = false,
-        args = {"/usr/bin/python3", "-c", py, sock, cmd},
-    })
-    return type(res) == "table" and (res.status == 0 or res.status == true)
-end
-
-send_follow_pace = function(bps)
-    bps = tonumber(bps) or 0
-    if bps >= 1000 then
-        return send_follow_cmd("PACE " .. tostring(math.floor(bps)))
-    end
-    return send_follow_cmd("PACE")
-end
-
-send_follow_seek = function(bytes)
-    return send_follow_cmd("SEEK " .. tostring(align_ts(bytes)))
-end
-
-follow_tell = function()
-    local sock = follow_sock_opt()
-    if not sock then return nil end
-    local py = table.concat({
-        "import socket, sys",
-        "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
-        "s.settimeout(1)",
-        "s.connect(sys.argv[1])",
-        "s.sendall(b'POS')",
-        "s.shutdown(socket.SHUT_WR)",
-        "print(s.recv(64).decode() or '')",
-    }, "\n")
-    local res = mp.command_native({
-        name = "subprocess",
-        playback_only = false,
-        capture_stdout = true,
-        args = {"/usr/bin/python3", "-c", py, sock},
-    })
-    if type(res) ~= "table" or not (res.status == 0 or res.status == true) then
-        return nil
-    end
-    return tonumber(res.stdout)
-end
-
-apply_playhead_seek = function()
-    -- Commit the held delay: SEEK the pause byte, keep behind_clock.
-    if playhead_byte and playhead_byte > 0 then
-        send_follow_seek(playhead_byte)
-        return
-    end
-    local size = file_bytes()
-    send_follow_seek(math.max(0, size - 188))
-end
-
 apply_virt_seek = function()
     local path = mp.get_property("path") or ""
-    if is_follow_pipe() then
-        path = dump_path()
-    elseif path == "" then
-        path = timeshift_file_opt() or ""
-    end
     if path == "" then return end
     local size = file_bytes()
     local bytes = math.floor((virt_pos * ATSC_BPS) / 8)
@@ -1084,50 +982,12 @@ apply_virt_seek = function()
     else
         bytes = math.max(0, bytes)
     end
-    if is_follow_pipe() then
-        send_follow_seek(bytes)
-        if mp.get_property_bool("pause", false) then
-            virt_last = nil
-        else
-            virt_last = mp.get_time()
-        end
-        return
-    end
     seek_reload = true
     saved_virt = virt_pos
     -- MPEG-TS ignores relative time seeks. start=# is a byte offset.
     mp.command_native({
         name = "loadfile",
         url = path,
-        flags = "replace",
-        options = { start = "#" .. tostring(bytes) }
-    })
-end
-
-open_dump_at = function(bytes)
-    bytes = align_ts(bytes)
-    playhead_byte = bytes
-    dump_start_byte = bytes
-    if mp.get_property_bool("pause", false) then
-        dump_start_t = nil
-    else
-        dump_start_t = mp.get_time()
-    end
-    send_follow_cmd("PAUSE")
-    reload_data()
-    local pid = tonumber(cached_timeshift.follow_pid)
-    if pid and pid > 1 then
-        mp.command_native({
-            name = "subprocess",
-            playback_only = false,
-            args = {"/bin/kill", "-TERM", tostring(pid)},
-        })
-    end
-    seek_reload = true
-    saved_virt = virt_pos
-    mp.command_native({
-        name = "loadfile",
-        url = dump_path(),
         flags = "replace",
         options = { start = "#" .. tostring(bytes) }
     })
@@ -1155,47 +1015,10 @@ local function seek_rel(delta)
         return
     end
     if is_timeshift_playback() then
-        local size = file_bytes()
-        local rate = mux_rate()
-        if is_follow_pipe() then
-            if signed > 0 then
-                -- Already on the write head: stay LIVE, do not slam the bar to 100%.
-                show_hud()
-                return
-            end
-            local bytes = math.max(0, size - step * rate)
-            playhead_byte = align_ts(bytes)
-            behind_clock = step
-            if mux_bps < 1000 then mux_bps = rate end
-            pcall(open_dump_at, playhead_byte)
-            show_hud()
-            return
-        end
-        local pos = dump_playhead()
-        local remain = (size - pos) / rate
-        if signed > 0 then
-            local hop = timeshift_fwd_step(remain)
-            -- Last skip toward live remaps the follow pipe.
-            if hop <= 0 or (remain - hop) <= LIVE_SLACK then
-                request_live()
-                return
-            end
-            pos = pos + hop * rate
-            behind_clock = remain - hop
-        else
-            pos = math.max(0, pos - step * rate)
-            behind_clock = remain + step
-        end
-        playhead_byte = align_ts(pos)
-        pcall(open_dump_at, playhead_byte)
-        show_hud()
+        cli_async({"seek", tostring(signed)})
         return
     end
     if signed > 0 then
-        if behind_live() then
-            seek_live_edge()
-            return
-        end
         show_hud()
         return
     end
@@ -1203,9 +1026,13 @@ local function seek_rel(delta)
 end
 
 local function request_pause()
-    mp.commandv("no-osd", "cycle", "pause")
-    show_hud()
-    sync_player_state()
+    if is_library_playback() then
+        mp.commandv("no-osd", "cycle", "pause")
+        show_hud()
+        sync_player_state()
+        return
+    end
+    cli_async({"pause"})
 end
 
 local function surf_next()
@@ -1232,7 +1059,7 @@ mp.register_script_message("tv-seek", function(delta)
     seek_rel(tonumber(delta) or SEEK_STEP)
 end)
 mp.register_script_message("tv-live-edge", function()
-    seek_live_edge()
+    cli_async({"live"})
 end)
 mp.register_script_message("tv-retuned", function()
     reload_data()
@@ -1251,7 +1078,9 @@ mp.register_script_message("tv-retuned", function()
     show_hud()
 end)
 mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)
-mp.add_forced_key_binding("l", "tv_return_live", request_live)
+mp.add_forced_key_binding("l", "tv_return_live", function()
+    cli_async({"live"})
+end)
 mp.add_forced_key_binding("UP", "tv_surf_next", surf_next, {repeatable = false})
 mp.add_forced_key_binding("k", "tv_surf_next_k", surf_next, {repeatable = false})
 mp.add_forced_key_binding("DOWN", "tv_surf_prev", surf_prev, {repeatable = false})
@@ -1265,7 +1094,7 @@ local prev_was_file = false
 mp.register_event("file-loaded", function()
     local ok, err = pcall(function()
     returning_live = false
-    if is_timeshift_playback() then
+    if is_library_playback() then
         prev_was_file = true
         if seek_reload then
             seek_reload = false
@@ -1278,19 +1107,8 @@ mp.register_event("file-loaded", function()
         else
             reset_virt()
         end
-    elseif is_file_playback() then
+    elseif is_timeshift_playback() then
         prev_was_file = true
-        if seek_reload then
-            seek_reload = false
-            virt_pos = saved_virt
-            if mp.get_property_bool("pause", false) then
-                virt_last = nil
-            else
-                virt_last = mp.get_time()
-            end
-        else
-            reset_virt()
-        end
     else
         prev_was_file = false
     end
@@ -1302,34 +1120,27 @@ mp.register_event("file-loaded", function()
     end
 end)
 
+local function on_dump_eof()
+    if is_library_playback() then
+        cli_async({"live"})
+        return
+    end
+    if is_timeshift_playback() and not is_follow_pipe() then
+        if mp.get_property_bool("pause", false) then
+            return
+        end
+        cli_async({"seek", "0"})
+    end
+end
+
 mp.register_event("end-file", function(event)
     if event.reason ~= "eof" then return end
-    if is_library_playback() then
-        go_live()
-    elseif is_timeshift_playback() and not is_follow_pipe() then
-        local size = file_bytes()
-        local pos = dump_playhead()
-        if size > pos + (256 * 1024) then
-            pcall(open_dump_at, align_ts(pos))
-        else
-            go_live()
-        end
-    end
+    on_dump_eof()
 end)
 
 mp.observe_property("eof-reached", "bool", function(_, eof)
     if not eof then return end
-    if is_library_playback() then
-        go_live()
-    elseif is_timeshift_playback() and not is_follow_pipe() then
-        local size = file_bytes()
-        local pos = dump_playhead()
-        if size > pos + (256 * 1024) then
-            pcall(open_dump_at, align_ts(pos))
-        else
-            go_live()
-        end
-    end
+    on_dump_eof()
 end)
 
 mp.add_periodic_timer(0.4, function()
@@ -1370,30 +1181,6 @@ mp.observe_property("mute", "bool", function(_, _)
 end)
 
 mp.observe_property("pause", "bool", function(_, paused)
-    if is_timeshift_playback() then
-        if paused then
-            timeshift_delay()
-            if is_follow_pipe() then
-                send_follow_cmd("PAUSE")
-            else
-                dump_start_t = nil
-            end
-        else
-            timeshift_delay()
-            if is_follow_pipe() and behind_clock > LIVE_SLACK and playhead_byte and playhead_byte > 0 then
-                local size = file_bytes()
-                local held = behind_clock
-                if held > 0.5 then
-                    mux_bps = math.max(1000, (size - playhead_byte) / held)
-                end
-                pcall(open_dump_at, playhead_byte)
-            elseif is_follow_pipe() then
-                send_follow_cmd("PLAY")
-            else
-                dump_start_t = mp.get_time()
-            end
-        end
-    end
     show_hud()
     sync_player_state()
 end)

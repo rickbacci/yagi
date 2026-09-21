@@ -7,7 +7,7 @@ import time
 import unittest
 from unittest.mock import patch, MagicMock
 
-from engine.timeshift import Timeshift, is_timeshift_path
+from engine.timeshift import LIVE_SLACK, SEEK_NEAR, SEEK_STEP, Timeshift, is_timeshift_path
 
 
 class TestTimeshift(unittest.TestCase):
@@ -43,6 +43,55 @@ class TestTimeshift(unittest.TestCase):
                 self.assertTrue(is_timeshift_path(live))
                 self.assertFalse(is_timeshift_path("dvb://FOX"))
                 self.assertFalse(is_timeshift_path("/tmp/other.ts"))
+
+    def test_fwd_hop_last_step_is_live(self):
+        self.assertEqual(Timeshift.fwd_hop(LIVE_SLACK), 0.0)
+        self.assertEqual(Timeshift.fwd_hop(SEEK_NEAR + LIVE_SLACK), SEEK_NEAR + LIVE_SLACK)
+        self.assertEqual(Timeshift.fwd_hop(SEEK_STEP * 2), SEEK_NEAR)
+        self.assertEqual(Timeshift.fwd_hop(90.0), SEEK_STEP)
+
+    def test_http_serves_playhead_and_stops(self):
+        from engine.timeshift_http import TimeshiftHttp
+        import urllib.request
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            with open(live, "wb") as f:
+                f.write(b"A" * 188)
+            with patch("engine.timeshift_http.TIMESHIFT_FILE", live):
+                http = TimeshiftHttp()
+                port = http.start()
+                try:
+                    req = urllib.request.Request(f"http://127.0.0.1:{port}/live.ts?from=0")
+                    with urllib.request.urlopen(req, timeout=1.5) as resp:
+                        got = resp.read(188)
+                    self.assertEqual(got, b"A" * 188)
+                    self.assertGreater(port, 0)
+                finally:
+                    http.stop()
+
+    def test_start_http_child_keeps_port(self):
+        import urllib.request
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            with open(live, "wb") as f:
+                f.write(b"A" * 188)
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
+                port = Timeshift.start_http()
+                data = Timeshift.load_state()
+                try:
+                    self.assertGreater(port, 0)
+                    self.assertTrue(Timeshift._pid_alive(int(data.get("http_pid") or 0)))
+                    req = urllib.request.Request(f"http://127.0.0.1:{port}/live.ts?from=0")
+                    with urllib.request.urlopen(req, timeout=1.5) as resp:
+                        self.assertEqual(resp.read(188), b"A" * 188)
+                finally:
+                    Timeshift.stop_http()
+                self.assertFalse(Timeshift._pid_alive(int(data.get("http_pid") or 0)))
 
     def test_start_dump_writes_state_and_waits_for_bytes(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
