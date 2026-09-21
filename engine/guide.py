@@ -97,13 +97,117 @@ BROADCAST_SCHEDULES: Dict[str, Dict[str, Any]] = {
 }
 
 
+def _evening(*blocks):
+    return [{"start": start, "end": end, "title": title} for start, end, title in blocks]
+
+
+for _ch, _blocks in {
+    "3.1": _evening(
+        ("6:00 PM", "6:30 PM", "WKYC Channel 3 News"),
+        ("6:30 PM", "7:00 PM", "NBC Nightly News with Lester Holt"),
+        ("7:00 PM", "7:30 PM", "Local News at 7:00 PM"),
+        ("7:30 PM", "8:00 PM", "Access Hollywood"),
+        ("8:00 PM", "9:00 PM", "The Voice"),
+        ("9:00 PM", "10:00 PM", "Dateline NBC"),
+        ("10:00 PM", "10:30 PM", "WKYC News at 10"),
+        ("10:30 PM", "11:00 PM", "The Tonight Show"),
+    ),
+    "5.1": _evening(
+        ("6:00 PM", "6:30 PM", "News 5 at 6"),
+        ("6:30 PM", "7:00 PM", "ABC World News Tonight with David Muir"),
+        ("7:00 PM", "7:30 PM", "Wheel of Fortune"),
+        ("7:30 PM", "8:00 PM", "Jeopardy!"),
+        ("8:00 PM", "9:00 PM", "Celebrity Wheel of Fortune"),
+        ("9:00 PM", "10:00 PM", "20/20"),
+        ("10:00 PM", "11:00 PM", "News 5 at 10"),
+    ),
+    "8.1": _evening(
+        ("6:00 PM", "7:00 PM", "FOX 8 News at 6:00 PM"),
+        ("7:00 PM", "7:30 PM", "The Big Bang Theory"),
+        ("7:30 PM", "8:00 PM", "The Big Bang Theory"),
+        ("8:00 PM", "9:00 PM", "FOX Primetime"),
+        ("9:00 PM", "10:00 PM", "FOX Primetime"),
+        ("10:00 PM", "11:00 PM", "FOX 8 News at 10"),
+    ),
+    "19.1": _evening(
+        ("6:00 PM", "6:30 PM", "19 News at 6"),
+        ("6:30 PM", "7:00 PM", "CBS Evening News with Norah O'Donnell"),
+        ("7:00 PM", "7:30 PM", "Jeopardy!"),
+        ("7:30 PM", "8:00 PM", "Wheel of Fortune"),
+        ("8:00 PM", "9:00 PM", "CBS Primetime"),
+        ("9:00 PM", "10:00 PM", "CBS Primetime"),
+        ("10:00 PM", "11:00 PM", "19 News at 10"),
+    ),
+    "23.1": _evening(
+        ("6:00 PM", "7:00 PM", "Law & Order: Special Victims Unit"),
+        ("7:00 PM", "8:00 PM", "Law & Order: SVU"),
+        ("8:00 PM", "9:00 PM", "Law & Order"),
+        ("9:00 PM", "10:00 PM", "Criminal Minds"),
+        ("10:00 PM", "11:00 PM", "Law & Order: SVU"),
+    ),
+    "25.1": _evening(
+        ("6:00 PM", "7:00 PM", "PBS NewsHour"),
+        ("7:00 PM", "8:00 PM", "BBC News America"),
+        ("8:00 PM", "9:00 PM", "Nature"),
+        ("9:00 PM", "10:00 PM", "NOVA"),
+        ("10:00 PM", "11:00 PM", "Amanpour and Company"),
+    ),
+    "43.1": _evening(
+        ("6:00 PM", "6:30 PM", "Family Feud"),
+        ("6:30 PM", "7:00 PM", "Modern Family"),
+        ("7:00 PM", "8:00 PM", "The CW Primetime"),
+        ("8:00 PM", "9:00 PM", "The CW Primetime"),
+        ("9:00 PM", "10:00 PM", "The CW Primetime"),
+        ("10:00 PM", "11:00 PM", "Seinfeld"),
+    ),
+    "55.1": _evening(
+        ("6:00 PM", "6:30 PM", "The King of Queens"),
+        ("6:30 PM", "7:00 PM", "The King of Queens"),
+        ("7:00 PM", "7:30 PM", "Seinfeld"),
+        ("7:30 PM", "8:00 PM", "Seinfeld"),
+        ("8:00 PM", "9:00 PM", "Friends"),
+        ("9:00 PM", "10:00 PM", "Friends"),
+        ("10:00 PM", "11:00 PM", "The King of Queens"),
+    ),
+    "61.1": _evening(
+        ("6:00 PM", "6:30 PM", "Noticias"),
+        ("6:30 PM", "7:00 PM", "Noticiero Univision"),
+        ("7:00 PM", "8:00 PM", "La Rosa de Guadalupe"),
+        ("8:00 PM", "9:00 PM", "Novela"),
+        ("9:00 PM", "10:00 PM", "Novela"),
+        ("10:00 PM", "11:00 PM", "Noticiero Univision: Edición Nocturna"),
+    ),
+}.items():
+    if _ch in BROADCAST_SCHEDULES:
+        BROADCAST_SCHEDULES[_ch]["programs"] = _blocks
+
+
+EVENING_SLOTS = [
+    "6:00 PM", "6:30 PM", "7:00 PM", "7:30 PM",
+    "8:00 PM", "8:30 PM", "9:00 PM", "9:30 PM",
+    "10:00 PM", "10:30 PM",
+]
+
+
+def _ensure_programs(channels: Dict[str, Any]) -> None:
+    for ch_num, info in channels.items():
+        if not isinstance(info, dict) or info.get("programs"):
+            continue
+        template = BROADCAST_SCHEDULES.get(ch_num)
+        if template and template.get("programs"):
+            info["programs"] = list(template["programs"])
+
+
 def load_guide(guide_path: Optional[str] = None) -> Dict[str, Any]:
     """Loads EPG data from guide.json. If missing, initializes default broadcast guide."""
     target = guide_path or GUIDE_JSON_PATH
     if os.path.exists(target):
         try:
             with open(target, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            if isinstance(data, dict):
+                _ensure_programs(data.get("channels", {}))
+                return data
         except Exception:
             pass
     return save_default_guide(target)
@@ -147,6 +251,28 @@ def get_channel_program(channel_identifier: str, guide_data: Optional[Dict[str, 
     return None
 
 
+def match_guide_program(channel: Dict[str, Any], guide_channels: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Matches a scanned/enriched channel dict to an EPG program entry."""
+    if not channel or not guide_channels:
+        return None
+
+    ch_num = channel.get("channel_number")
+    if ch_num and ch_num in guide_channels:
+        return guide_channels[ch_num]
+
+    names = []
+    for key in ("name", "raw_name", "tune_name", "callsign"):
+        ident = " ".join(str(channel.get(key) or "").split()).strip().lower()
+        if ident:
+            names.append(ident)
+
+    for prog in guide_channels.values():
+        station = " ".join(str(prog.get("station") or "").split()).strip().lower()
+        if station and station in names:
+            return prog
+    return None
+
+
 def get_timeline_grid(guide_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Returns structured timeline grid for UI rendering:
@@ -157,7 +283,8 @@ def get_timeline_grid(guide_data: Optional[Dict[str, Any]] = None) -> Dict[str, 
         guide_data = load_guide()
 
     channels_sched = guide_data.get("channels", {})
-    slots = ["NOW", "6:30 PM", "7:00 PM", "7:30 PM"]
+    _ensure_programs(channels_sched)
+    slots = list(EVENING_SLOTS)
 
     grid_rows = []
     for ch_num, info in channels_sched.items():
@@ -176,5 +303,30 @@ def get_timeline_grid(guide_data: Optional[Dict[str, Any]] = None) -> Dict[str, 
     return {
         "slots": slots,
         "rows": grid_rows
+    }
+
+
+def get_slot_program(channel_info: Dict[str, Any], slot: int) -> Dict[str, str]:
+    """Returns the single EPG cell shown for slot 0 (now) or slot 1 (next)."""
+    info = channel_info or {}
+    if slot <= 0:
+        start = info.get("start_time") or ""
+        end = info.get("end_time") or ""
+        if start and end:
+            time_label = f"{start} – {end}"
+        else:
+            time_label = "Now"
+        return {
+            "label": "Now Playing",
+            "caption": "This half-hour",
+            "title": info.get("title") or "Live Broadcast",
+            "time_label": time_label,
+        }
+    end = info.get("end_time") or ""
+    return {
+        "label": "Up Next",
+        "caption": "Following show",
+        "title": info.get("next_title") or "Upcoming",
+        "time_label": f"From {end}" if end else "Next",
     }
 

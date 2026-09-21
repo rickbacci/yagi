@@ -51,6 +51,41 @@ class TestGuide(unittest.TestCase):
             self.assertGreater(len(grid["rows"]), 0)
             self.assertEqual(grid["rows"][0]["channel_number"], "3.1")
 
+    def test_get_slot_program_now_and_next(self):
+        from engine.guide import get_slot_program, BROADCAST_SCHEDULES
+
+        nbc = BROADCAST_SCHEDULES["3.1"]
+        now = get_slot_program(nbc, 0)
+        self.assertEqual(now["label"], "Now Playing")
+        self.assertEqual(now["title"], nbc["title"])
+        self.assertIn("6:30 PM", now["time_label"])
+        self.assertIn("7:00 PM", now["time_label"])
+
+        nxt = get_slot_program(nbc, 1)
+        self.assertEqual(nxt["label"], "Up Next")
+        self.assertEqual(nxt["title"], nbc["next_title"])
+        self.assertEqual(nxt["time_label"], "From 7:00 PM")
+
+        empty_next = get_slot_program({"title": "Live"}, 1)
+        self.assertEqual(empty_next["title"], "Upcoming")
+        self.assertEqual(empty_next["time_label"], "Next")
+
+    def test_match_guide_program_from_raw_scan(self):
+        from engine.guide import match_guide_program, BROADCAST_SCHEDULES
+
+        fox = match_guide_program({"name": "FOX", "raw_name": "FOX"}, BROADCAST_SCHEDULES)
+        self.assertIsNotNone(fox)
+        self.assertEqual(fox["network"], "FOX")
+
+        nbc = match_guide_program({"name": "WKYC-HD", "raw_name": "WKYC-HD"}, BROADCAST_SCHEDULES)
+        self.assertEqual(nbc["title"], BROADCAST_SCHEDULES["3.1"]["title"])
+
+        uni = match_guide_program({"name": "WQHS-DT", "tune_name": "WQHS-DT"}, BROADCAST_SCHEDULES)
+        self.assertEqual(uni["network"], "Univision")
+
+        numbered = match_guide_program({"name": "FOX", "channel_number": "5.1"}, BROADCAST_SCHEDULES)
+        self.assertEqual(numbered["network"], "ABC")
+
 
 if __name__ == "__main__":
     unittest.main()

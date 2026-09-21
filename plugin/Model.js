@@ -44,3 +44,148 @@ function getDisplayTitle(channel) {
   if (channel.display_name) return channel.display_name;
   return cleanChannelName(channel.name);
 }
+
+function isTranslator(ch) {
+  if (!ch) return false;
+  if (ch.is_translator === true) return true;
+  var blob = ((ch.callsign || "") + " " + (ch.display_name || "") + " " + (ch.name || "")).toUpperCase();
+  return blob.indexOf("DRT") !== -1 || blob.indexOf("TRANSLATOR") !== -1;
+}
+
+function networkShort(network) {
+  if (!network) return "";
+  var n = String(network).replace(/\s+/g, " ").trim();
+  if (!n) return "";
+  var key = n.toUpperCase();
+  if (key === "UNIVISION") return "UNI";
+  if (key === "TELEMUNDO") return "TEL";
+  if (key === "ANTENNA TV") return "ANT";
+  if (n.length <= 4) return n;
+  return n.slice(0, 3).toUpperCase();
+}
+
+function _normIdent(s) {
+  return String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function matchGuideProgram(ch, guideData) {
+  if (!guideData || !ch) return null;
+  if (ch.channel_number && guideData[ch.channel_number]) {
+    return guideData[ch.channel_number];
+  }
+  var names = [];
+  var keys = ["name", "raw_name", "tune_name", "callsign"];
+  for (var i = 0; i < keys.length; i++) {
+    var ident = _normIdent(ch[keys[i]]);
+    if (ident) names.push(ident);
+  }
+  for (var k in guideData) {
+    var p = guideData[k];
+    var station = _normIdent(p && p.station);
+    if (station && names.indexOf(station) !== -1) return p;
+  }
+  return null;
+}
+
+function parseMinutes(label) {
+  var s = String(label || "").trim()
+  var m = s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i)
+  if (!m) return -1
+  var h = parseInt(m[1], 10)
+  var min = parseInt(m[2], 10)
+  var ap = m[3].toUpperCase()
+  if (h === 12) h = 0
+  if (ap === "PM") h += 12
+  return h * 60 + min
+}
+
+function formatSlot(minutes) {
+  var h24 = ((Math.floor(minutes / 60) % 24) + 24) % 24
+  var min = minutes % 60
+  var ap = h24 >= 12 ? "PM" : "AM"
+  var h = h24 % 12
+  if (h === 0) h = 12
+  return h + ":" + (min < 10 ? "0" : "") + min + " " + ap
+}
+
+function guideAllSlots() {
+  var start = parseMinutes("6:00 PM")
+  var slots = []
+  for (var i = 0; i < 10; i++) slots.push(formatSlot(start + i * 30))
+  return slots
+}
+
+function visibleSlotCount(panelWidth) {
+  var w = Number(panelWidth) || 0
+  if (w >= 1400) return 6
+  if (w >= 1100) return 5
+  if (w >= 900) return 4
+  return 3
+}
+
+function programsFor(item) {
+  if (item && item.programs && item.programs.length) return item.programs
+  var out = []
+  if (item && item.title && item.start_time)
+    out.push({ start: item.start_time, end: item.end_time || "", title: item.title })
+  if (item && item.next_title)
+    out.push({ start: item.end_time || "", end: "", title: item.next_title })
+  return out
+}
+
+function coveringProgram(programs, slotLabel) {
+  var t = parseMinutes(slotLabel)
+  if (t < 0) return null
+  for (var i = 0; i < programs.length; i++) {
+    var p = programs[i]
+    var a = parseMinutes(p.start || p.start_time)
+    var b = parseMinutes(p.end || p.end_time)
+    if (a < 0) continue
+    if (b <= a) b = a + 30
+    if (t >= a && t < b) return p
+  }
+  return null
+}
+
+function programBlocks(item, slots) {
+  var programs = programsFor(item)
+  var blocks = []
+  var i = 0
+  while (i < slots.length) {
+    var p = coveringProgram(programs, slots[i])
+    var span = 1
+    while (p && i + span < slots.length && coveringProgram(programs, slots[i + span]) === p)
+      span++
+    blocks.push({ title: p ? (p.title || "") : "", span: p ? span : 1, empty: !p })
+    i += p ? span : 1
+  }
+  return blocks
+}
+
+function guideSlotMax() {
+  return Math.max(0, guideAllSlots().length - 1)
+}
+
+function guideSlotLabel(slot) {
+  var slots = guideAllSlots()
+  return slots[Number(slot)] || slots[0] || "Tonight"
+}
+
+function guideSlotCaption(slot) {
+  return "Tonight"
+}
+
+function guideProgramTitle(item, slot) {
+  if (!item) return "Live Broadcast"
+  if (Number(slot) === 1) return item.next_title || "Upcoming"
+  return item.title || "Live Broadcast"
+}
+
+function guideProgramTime(item, slot) {
+  if (!item) return ""
+  if (Number(slot) === 1) {
+    return item.end_time ? ("From " + item.end_time) : "Next"
+  }
+  if (item.start_time && item.end_time) return item.start_time + " – " + item.end_time
+  return "Now"
+}
