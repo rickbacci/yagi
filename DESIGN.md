@@ -20,7 +20,7 @@ No `Panel.qml`. The flyout is `BarWidget.qml`’s `KeyboardPanel`.
 
 **Library vs pause-live.** `r` writes keepable files to `$XDG_VIDEOS_DIR/TV` (Recordings, Tuner 1). Space writes throwaway `live.ts` under `$XDG_CACHE_HOME/omarchy/tv/timeshift` (Tuner 0 dump). Pause files are never in Recordings. They can run together.
 
-**PiP is never `dvb://`.** Live is a follow pipe of `live.ts` (this mpv `keep-open` hits EOF on the growing file). Delayed pause/skip is that dump with `loadfile` `start=#` (same as a recording). A pipe is not seekable — do not SEEK the follow feeder. Return to live remaps the follow pipe (`pip-relaunch`). End of a library file retunes the last live station. One window; no idle/black PiP; `loadfile -` quits this mpv; HUD `play` must not quit it. Channel change: new dump, then `pip-relaunch`. Close TV wipes the dump.
+**PiP is never `dvb://`.** Tuner 0 dumps growing `live.ts`. A loopback HTTP sidecar serves it (`from=` playhead, wait at EOF). That process outlives `omarchy-tv play` — an in-process server dies when play returns and the PiP flashes then exits. Live and skip are `loadfile` of that URL in the same window. Channel change: new dump, then `pip-relaunch`. Close TV wipes the dump and the sidecar. End of a library file retunes the last live station. One window; no idle/black PiP; HUD `play` must not quit it. A pipe is not seekable — do not SEEK a follow feeder.
 
 **State.** JSON via `.tmp` + `os.replace`. `player_state.json` is now-playing. `sync` must not wipe a dump while a retune lock is held.
 

@@ -5,7 +5,7 @@
 
 OTA ATSC 1.0 for Omarchy: bar plugin, pinned PiP, dual-tuner record. Not MythTV, not Kaffeine.
 
-Click the antenna, scan, watch 16:9 PiP. Guide is a local evening grid (not live PSIP). Record on Tuner 1 into `~/Videos/TV` while Tuner 0 keeps the live dump. Pause-live is that dump (follow pipe at the write head; dump **file** when you skip behind). Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
+Click the antenna, scan, watch 16:9 PiP. Guide is a local evening grid (not live PSIP). Record on Tuner 1 into `~/Videos/TV` while Tuner 0 keeps the live dump. Pause-live is that dump over loopback HTTP (skip is `loadfile` in the same window). Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
 
 Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `omarchy-tv`.
 
@@ -64,7 +64,7 @@ omarchy-tv favorite toggle "8.1 FOX"
 omarchy-tv pref translators off | pref filter favorites | pref library-max auto|20|50|off
 ```
 
-`pause` is throwaway `live.ts`. `record` is a keepable file. `live` remaps the follow pipe, or retunes after a recording.
+`pause` is throwaway `live.ts`. `record` is a keepable file. `live` `loadfile`s the dump write head, or retunes after a recording.
 
 ## HUD (pointer in the PiP — not the plugin, not Super+K)
 
@@ -72,8 +72,8 @@ omarchy-tv pref translators off | pref filter favorites | pref library-max auto|
 | --- | --- | --- |
 | Space | Pause (dump fills); play stays behind until `l` | Pause / resume |
 | j / k or ↓ / ↑ | Banner; tunes after you stop | Commit returns to live |
-| ← / → | Skip in the dump file (last hop remaps live) | Skip; last hop retunes live |
-| l | Remap follow pipe (live) | Return to live (new dump) |
+| ← / → | Skip HTTP playhead (last hop is live, same window) | Skip; last hop retunes live |
+| l | Live write head (same window) | Return to live (new dump) |
 | r | Library record | ignored |
 | Super+F | Fullscreen (unpins first) | same |
 | c | Captions | same |

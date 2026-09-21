@@ -11,11 +11,10 @@ description: >
 
 Project `~/Projects/personal/omarchy-tv`. CLI `omarchy-tv` (`PATH` or `bin/`). Product: `DESIGN.md`. Repo rules: `AGENTS.md`.
 
-**Live:** Tuner 0 dumps `~/.cache/omarchy/tv/timeshift/live.ts`; a follow process copies it to PiP stdin (`path` is `-` / `fd://`). This mpv `keep-open` freezes on the growing file — that is why live is a pipe.
-**Delayed:** `loadfile` that dump at `start=#` (same byte seek as a recording). Do not SEEK the follow feeder; a pipe is not seekable.
-**Live again:** `omarchy-tv live` / `pip-relaunch` remaps the follow pipe. Library files live in `~/Videos/TV` and are not the pause dump. Never `dvb://` in the PiP. Never `drop-buffers`.
+**Live:** Tuner 0 dumps `~/.cache/omarchy/tv/timeshift/live.ts`. A sidecar HTTP server on `127.0.0.1` serves it (`path` is `http://127.0.0.1:…/live.ts?from=`). Playing the growing file directly hits `keep-open` EOF.
+**Delayed / skip / live:** `loadfile` that URL at a new `from=` byte in the same window. Do not SEEK a pipe. Channel change still fills a new dump, then `pip-relaunch`. Library files live in `~/Videos/TV` and are not the pause dump. Never `dvb://` in the PiP. Never `drop-buffers`.
 
-Tuner 0 live dump; Tuner 1 scan / record. A recording holds Tuner 1. `j`/`k` move the banner immediately; tune once after keys idle. Channel change fills a new dump, then `pip-relaunch` (HUD `play` must not quit this mpv). Close TV wipes the dump. One `omarchy-tv` window.
+Tuner 0 live dump; Tuner 1 scan / record. A recording holds Tuner 1. `j`/`k` move the banner immediately; tune once after keys idle. HUD `play` must not quit this mpv. Close TV wipes the dump and the HTTP sidecar. One `omarchy-tv` window.
 
 ## CLI
 
@@ -32,7 +31,7 @@ omarchy-shell shell broadcast richardb.omarchy-tv play "8.1 FOX"   # also: stop 
 
 ## HUD (PiP only — not the plugin, not Super+K)
 
-Space pause (dump fills) / play still behind · `l` live · j/k or ↓/↑ banner then tune · ←/→ skip in dump file or recording (10s, 5s near live; last hop is live / retune) · r record · Super+F fullscreen (unpins first) · Super+LMB move · c captions · m / middle-click mute this window · wheel volume.
+Space pause (dump fills) / play still behind · `l` live (same window) · j/k or ↓/↑ banner then tune · ←/→ skip HTTP playhead or recording (10s, 5s near live; last hop is live) · r record · Super+F fullscreen (unpins first) · Super+LMB move · c captions · m / middle-click mute this window · wheel volume.
 
 ## Paths
 
@@ -41,6 +40,6 @@ Space pause (dump fills) / play still behind · `l` live · j/k or ↓/↑ banne
 ## If pause / skip / HUD is wrong
 
 1. This machine’s `mpv --version` / manpage — not a wiki.
-2. Probe the socket **before** editing lua: live `path` is `-`/`fd://`; delayed is `live.ts`; never `dvb://`. Then `pause`, `time-pos`. Skip and read them again. If only the HUD clock moved, the decoder did not seek.
+2. Probe the socket **before** editing lua: live `path` is `http://127.0.0.1:…/live.ts`; never `dvb://`. Then `pause`, `time-pos`. Skip and read them again. If only the HUD clock moved, the decoder did not seek.
 3. lua loads at mpv start. Not fixed until they see it (or have).
 4. Failed predictions: [failures.md](failures.md). Do not ship another overlay for a demuxer/path bug.

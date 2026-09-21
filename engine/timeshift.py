@@ -1,13 +1,12 @@
 """
 Throwaway pause-live buffer: dump Tuner 0 to a growing MPEG-TS file.
 
-A follow process copies live.ts to stdout and waits at EOF. Windowed MPV
-reads that pipe while live. Delayed pause/skip `loadfile`s the dump
-(start=# byte). Last skip toward live, or `l`, remaps the follow pipe.
-Channel change fills the new dump, then `pip-relaunch` (new session) remaps
-the PiP. HUD `omarchy-tv play` must not quit mpv itself — that child dies
-with the window. Return-to-live is the write head. This is not a library
-recording and not dvb:// cache.
+A loopback HTTP sidecar serves live.ts (from= playhead, wait at EOF).
+Windowed MPV loadfiles that URL. Skip and live are a new GET in the same
+PiP — not a pipe, not pip-relaunch. The HTTP process outlives
+`omarchy-tv play`. Channel change fills a new dump, then pip-relaunch.
+HUD `omarchy-tv play` must not quit mpv itself. Close TV wipes the dump
+and the sidecar. This is not a library recording and not dvb:// cache.
 """
 
 import json
