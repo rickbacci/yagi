@@ -167,6 +167,79 @@ class TestTimeshift(unittest.TestCase):
                 proc.kill()
                 proc.wait(timeout=1)
 
+    def test_follow_pos_reports_cursor(self):
+        import select
+        import subprocess
+        import sys
+        follow_py = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+            "engine",
+            "follow_ts.py",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            sock = os.path.join(tmp_dir, "follow.sock")
+            packet_a = b"A" * 188
+            with open(live, "wb") as f:
+                f.write(packet_a)
+            proc = subprocess.Popen(
+                [sys.executable, follow_py, live, "0", sock],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            try:
+                r, _, _ = select.select([proc.stdout], [], [], 2.0)
+                self.assertTrue(r)
+                self.assertEqual(proc.stdout.read(188), packet_a)
+                deadline = time.time() + 2.0
+                while time.time() < deadline and not os.path.exists(sock):
+                    time.sleep(0.02)
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(1.0)
+                    s.connect(sock)
+                    s.sendall(b"POS")
+                    pos = int(s.recv(64))
+                self.assertEqual(pos, 188)
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(1.0)
+                    s.connect(sock)
+                    s.sendall(b"SEEK 0")
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(1.0)
+                    s.connect(sock)
+                    s.sendall(b"POS")
+                    pos = int(s.recv(64))
+                self.assertEqual(pos, 0)
+            finally:
+                if proc.stdout:
+                    try:
+                        proc.stdout.close()
+                    except OSError:
+                        pass
+                proc.kill()
+                proc.wait(timeout=1)
+
+    def test_follow_pace_and_catchup_commands(self):
+        from engine.follow_ts import TsFollower
+        follower = TsFollower("/tmp/x.ts", 0, "/tmp/x.sock")
+        follower._handle_ctl("PACE 500000")
+        self.assertTrue(follower._paced)
+        self.assertEqual(follower._pace_bps, 500000.0)
+        follower._handle_ctl("CATCHUP")
+        self.assertFalse(follower._paced)
+
+    def test_follow_pace_wait_sleeps_when_ahead(self):
+        from engine.follow_ts import TsFollower
+        follower = TsFollower("/tmp/x.ts", 0, "/tmp/x.sock")
+        follower._paced = True
+        follower._pace_bps = 10000
+        follower._pace_origin_t = time.monotonic()
+        follower._pace_origin_pos = 0
+        follower.pos = 20000
+        t0 = time.monotonic()
+        follower._pace_wait()
+        self.assertGreaterEqual(time.monotonic() - t0, 0.2)
+
     def test_start_dump_keep_follow_does_not_wipe_follow(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             live = os.path.join(tmp_dir, "live.ts")

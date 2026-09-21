@@ -26,9 +26,7 @@ local function make_overlay(z)
 end
 
 local overlay = make_overlay(10)
-local live_overlay = make_overlay(40)
 
-local KEY_LEGEND = "j/k ch  ·  Space pause  ·  ←/→ skip  ·  l live  ·  m mute  ·  Super+F full  ·  c CC  ·  r rec"
 local pointer_in = false
 local hud_visible = false
 local hide_timer = nil
@@ -38,12 +36,6 @@ local surf_idx = nil
 local surf_timer = nil
 local surf_busy = false
 local surf_preview = nil
-local live_timer = nil
-local live_flash_until = 0
-local live_blink = true
-local pending_live_flash = false
-local LIVE_HOLD = 3.0
-local LIVE_FLASH_STEP = 0.16
 local LIVE_SLACK = 2.5
 
 -- Paths
@@ -176,6 +168,12 @@ local function is_timeshift_playback()
         or path:find("/omarchy/tv/timeshift/", 1, true) ~= nil
 end
 
+local function is_follow_pipe()
+    local path = mp.get_property("path") or ""
+    return path == "-" or path:match("^fd://") or path:match("^fdclose://")
+        or path:find("omarchy-tv-follow.fifo", 1, true) ~= nil
+end
+
 local function is_library_playback()
     return is_file_playback() and not is_timeshift_playback()
 end
@@ -235,11 +233,19 @@ end
 
 -- ATSC 8VSB transport is ~19.39 Mbps. MPV duration/percent on raw .ts is often 0.
 local ATSC_BPS = 19390000
-local SEEK_STEP = 15
+local SEEK_STEP = 10
+local SEEK_NEAR = 5
 local virt_pos = 0
 local virt_last = nil
 local seek_reload = false
 local saved_virt = 0
+local pause_origin = nil
+local pause_base_delay = 0
+local behind_clock = 0
+local playhead_byte = nil
+local mux_bps = 0
+local dump_start_byte = 0
+local dump_start_t = nil
 
 local function tv_cli()
     local cli = mp.get_opt("cli")
@@ -254,14 +260,35 @@ local function tv_cli()
     return "omarchy-tv"
 end
 
+local function dump_path()
+    local p = timeshift_file_opt()
+    if p and p ~= "" then return p end
+    return TIMESHIFT_DIR .. "/live.ts"
+end
+
+local function stat_bytes(path)
+    if not path or path == "" then return 0 end
+    local f = io.open(path, "rb")
+    if not f then return 0 end
+    local size = f:seek("end")
+    f:close()
+    return tonumber(size) or 0
+end
+
 local function file_bytes()
+    if is_timeshift_playback() then
+        local n = stat_bytes(dump_path())
+        if n > 0 then return n end
+    end
     local path = timeshift_file_opt() or mp.get_property("path") or ""
     if path == "-" or path:match("^fd://") or path:match("^fdclose://") then
-        path = timeshift_file_opt() or ""
+        path = dump_path()
     end
+    local n = stat_bytes(path)
+    if n > 0 then return n end
     local st = path ~= "" and utils.file_info(path)
-    if st and st.size and st.size > 0 then
-        return st.size
+    if st and tonumber(st.size) and tonumber(st.size) > 0 then
+        return tonumber(st.size)
     end
     return mp.get_property_number("file-size") or 0
 end
@@ -289,17 +316,82 @@ local function virt_update()
     return virt_pos
 end
 
+local function align_ts(n)
+    n = math.max(0, math.floor(tonumber(n) or 0))
+    return n - (n % 188)
+end
+
+local function mux_rate()
+    if mux_bps >= 1000 then return mux_bps end
+    return ATSC_BPS / 8
+end
+
+local function dump_playhead()
+    local pos = dump_start_byte or 0
+    if pos <= 0 then pos = playhead_byte or 0 end
+    if dump_start_t and not mp.get_property_bool("pause", false) then
+        pos = pos + (mp.get_time() - dump_start_t) * mux_rate()
+    end
+    local size = file_bytes()
+    if size > 188 then
+        pos = math.max(0, math.min(pos, size - 188))
+    else
+        pos = math.max(0, pos)
+    end
+    return pos
+end
+
+local function timeshift_delay()
+    if not is_timeshift_playback() then
+        pause_origin = nil
+        behind_clock = 0
+        playhead_byte = nil
+        return 0
+    end
+    -- Dump file: delay is bytes remaining / mux rate. Follow pipe: wall
+    -- clock while paused (stdin size does not grow).
+    if not is_follow_pipe() then
+        local size = file_bytes()
+        local pos = dump_playhead()
+        local rate = mux_rate()
+        behind_clock = math.max(0, (size - pos) / rate)
+        return behind_clock
+    end
+    if mp.get_property_bool("pause", false) then
+        local now = mp.get_time()
+        if not pause_origin then
+            pause_origin = now
+            pause_base_delay = behind_clock
+            if not playhead_byte or playhead_byte <= 0 then
+                playhead_byte = align_ts(file_bytes())
+            end
+        end
+        return pause_base_delay + math.max(0, now - pause_origin)
+    end
+    if pause_origin then
+        behind_clock = pause_base_delay + math.max(0, mp.get_time() - pause_origin)
+        pause_origin = nil
+        pause_base_delay = 0
+        virt_last = mp.get_time()
+        return behind_clock
+    end
+    return behind_clock
+end
+
 local function timeshift_behind(slack)
     slack = slack or LIVE_SLACK
-    if not is_timeshift_playback() then return false end
-    virt_update()
-    local dur = atsc_duration()
-    if dur <= 0 then return false end
-    return (dur - virt_pos) > slack
+    return timeshift_delay() > slack
 end
 
 local function reset_virt()
     virt_pos = 0
+    pause_origin = nil
+    pause_base_delay = 0
+    behind_clock = 0
+    playhead_byte = nil
+    mux_bps = 0
+    dump_start_byte = 0
+    dump_start_t = nil
     if mp.get_property_bool("pause", false) then
         virt_last = nil
     else
@@ -527,14 +619,15 @@ local function render_hud()
     local is_ts = is_timeshift_playback()
     local is_library = is_library_playback()
     local paused = mp.get_property_bool("pause", false)
-    local delayed = is_ts and (paused or timeshift_behind()) or ((not is_file) and (paused or behind_live()))
+    local ts_delay = is_ts and timeshift_delay() or 0
+    local delayed = is_ts and (paused or ts_delay > LIVE_SLACK) or ((not is_file) and (paused or behind_live()))
     local mode_badge
     if is_library then
-        mode_badge = "{\\1c&H89b4fa&}󰐊 PLAYBACK"
-    elseif delayed then
-        mode_badge = "{\\1c&H89b4fa&}󰐊 TIMESHIFT"
+        mode_badge = "{\\1c&H89b4fa&}PLAYBACK"
+    elseif is_ts and (paused or ts_delay > LIVE_SLACK) then
+        mode_badge = string.format("{\\1c&H89b4fa&}%s behind", fmt_clock(ts_delay))
     else
-        mode_badge = "{\\1c&Ha6e3a1&}󰐊 LIVE"
+        mode_badge = "{\\1c&Ha6e3a1&}LIVE"
     end
 
     -- 4. Right Status Badges
@@ -547,30 +640,37 @@ local function render_hud()
     local rec_prompt
     if is_library or is_ts then
         rec_prompt = paused and "{\\b1}󰐊 Play{\\b0} (Space)" or "{\\b1}󰏤 Pause{\\b0} (Space)"
-        local pos, t1
-        pos = virt_update()
-        t1 = atsc_duration()
         if is_ts then
-            local delay = math.max(0, t1 - pos)
+            local delay = ts_delay
+            local t1 = atsc_duration()
+            local pos = math.max(0, t1 - delay)
             prog_time = delayed and (fmt_clock(delay) .. " behind") or "Live"
             prog_title = paused and "Paused" or (delayed and "Timeshift" or "Live")
             prog_synopsis = delayed and "Pause buffer" or "Live dump"
+            local pct = 0
+            if t1 > 0 then
+                pct = 100 * math.max(0, math.min(1, pos / t1))
+            end
+            local bar_w = 1200
+            local fill = math.max(0, math.min(bar_w, math.floor(bar_w * pct / 100.0)))
+            ass = ass .. "{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H11111b&\\1a&H20&}{\\p1}m 0 0 l 1200 0 l 1200 8 l 0 8{\\p0}\n"
+            if fill > 0 then
+                ass = ass .. string.format("{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H5858F8&\\1a&H00&}{\\p1}m 0 0 l %d 0 l %d 8 l 0 8{\\p0}\n", fill, fill)
+            end
         else
+            local pos, t1
+            pos = virt_update()
+            t1 = atsc_duration()
             prog_time = fmt_clock(pos) .. " / " .. fmt_clock(t1)
             prog_title = paused and "Paused" or "Playing"
             prog_synopsis = "Recorded broadcast"
-        end
-        local pct
-        if is_ts and t1 > 0 then
-            pct = 100 * math.max(0, math.min(1, pos / t1))
-        else
-            pct = file_progress()
-        end
-        local bar_w = 1200
-        local fill = math.max(0, math.min(bar_w, math.floor(bar_w * pct / 100.0)))
-        ass = ass .. "{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H11111b&\\1a&H20&}{\\p1}m 0 0 l 1200 0 l 1200 8 l 0 8{\\p0}\n"
-        if fill > 0 then
-            ass = ass .. string.format("{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H5858F8&\\1a&H00&}{\\p1}m 0 0 l %d 0 l %d 8 l 0 8{\\p0}\n", fill, fill)
+            local pct = file_progress()
+            local bar_w = 1200
+            local fill = math.max(0, math.min(bar_w, math.floor(bar_w * pct / 100.0)))
+            ass = ass .. "{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H11111b&\\1a&H20&}{\\p1}m 0 0 l 1200 0 l 1200 8 l 0 8{\\p0}\n"
+            if fill > 0 then
+                ass = ass .. string.format("{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H5858F8&\\1a&H00&}{\\p1}m 0 0 l %d 0 l %d 8 l 0 8{\\p0}\n", fill, fill)
+            end
         end
     elseif delayed then
         rec_prompt = paused and "{\\b1}󰐊 Play{\\b0} (Space)" or "{\\b1}󰏤 Pause{\\b0} (Space)"
@@ -592,41 +692,24 @@ local function render_hud()
     end
     local pause_prompt = paused and "{\\b1}󰐊 Play{\\b0} (Space)" or "{\\b1}󰏤 Pause{\\b0} (Space)"
     local rec_tail = any_rec and "  ·  {\\1c&H7B7BFA&}{\\b1}Stop REC{\\b0} (r){\\1c&Hcdd6f4&}" or ""
+    local mute_full = "{\\b1}Mute{\\b0} (m)  ·  {\\b1}󰕾 Vol{\\b0} (Wheel)  ·  {\\b1}Full{\\b0} (Super+F)"
     if is_library or is_ts then
-        ass = ass .. string.format("{\\an5\\pos(640,676)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&Hcdd6f4&}{\\b1}󰒮 Prev{\\b0} (j)  ·  {\\b1}󰒭 Next{\\b0} (k)  ·  {\\b1}−15s{\\b0} (←)  ·  %s  ·  {\\b1}+15s{\\b0} (→)  ·  {\\b1}Live{\\b0} (l)  ·  {\\b1}󰕾 Vol{\\b0} (Wheel)%s\n", rec_prompt, rec_tail)
+        ass = ass .. string.format("{\\an5\\pos(640,676)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&Hcdd6f4&}{\\b1}󰒮 Prev{\\b0} (j)  ·  {\\b1}󰒭 Next{\\b0} (k)  ·  {\\b1}−10s{\\b0} (←)  ·  %s  ·  {\\b1}+10s{\\b0} (→)  ·  {\\b1}Live{\\b0} (l)  ·  %s%s\n", rec_prompt, mute_full, rec_tail)
     elseif delayed then
-        ass = ass .. string.format("{\\an5\\pos(640,676)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&Hcdd6f4&}{\\b1}󰒮 Prev{\\b0} (j)  ·  {\\b1}󰒭 Next{\\b0} (k)  ·  %s  ·  {\\b1}Live{\\b0} (l / →)  ·  {\\b1}󰕾 Vol{\\b0} (Wheel)%s\n", rec_prompt, rec_tail)
+        ass = ass .. string.format("{\\an5\\pos(640,676)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&Hcdd6f4&}{\\b1}󰒮 Prev{\\b0} (j)  ·  {\\b1}󰒭 Next{\\b0} (k)  ·  %s  ·  {\\b1}Live{\\b0} (l / →)  ·  %s%s\n", rec_prompt, mute_full, rec_tail)
     else
-        ass = ass .. string.format("{\\an5\\pos(640,676)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&Hcdd6f4&}{\\b1}󰒮 Prev{\\b0} (j)  ·  {\\b1}󰒭 Next{\\b0} (k)  ·  %s  ·  %s  ·  {\\b1}󰕾 Vol{\\b0} (Wheel)  ·  {\\b1}󰊓 Full{\\b0} (F)%s\n", pause_prompt, rec_prompt, rec_tail)
+        ass = ass .. string.format("{\\an5\\pos(640,676)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&Hcdd6f4&}{\\b1}󰒮 Prev{\\b0} (j)  ·  {\\b1}󰒭 Next{\\b0} (k)  ·  %s  ·  %s  ·  {\\b1}Live{\\b0} (l)  ·  %s%s\n", pause_prompt, rec_prompt, mute_full, rec_tail)
     end
 
     overlay.data = ass
     overlay:update()
 end
 
-local function hide_live_badge()
-    live_flash_until = 0
-    live_blink = true
-    if live_timer then
-        live_timer:kill()
-        live_timer = nil
-    end
-    live_overlay.data = ""
-    live_overlay:update()
-    pcall(function()
-        mp.set_property("osd-align-x", "left")
-        mp.set_property("osd-align-y", "top")
-        mp.set_property("osd-font-size", "55")
-        mp.set_property("osd-color", "#FFFFFF")
-        mp.set_property("osd-bold", "no")
-    end)
-end
-
 local function hide_hud()
     if surf_preview then
         return
     end
-    if live_flash_until > mp.get_time() then
+    if is_timeshift_playback() and timeshift_behind() then
         return
     end
     overlay.data = ""
@@ -651,56 +734,18 @@ local function show_hud()
         if mp.get_property_bool("pause", false) then
             return
         end
+        if is_timeshift_playback() and timeshift_behind() then
+            return
+        end
         local delay = HIDE_DELAY
         if surf_preview then
             delay = math.max(delay, SURF_COMMIT_DELAY + 2)
-        end
-        if live_flash_until > mp.get_time() then
-            delay = math.max(delay, live_flash_until - mp.get_time() + 0.1)
         end
         hide_timer = mp.add_timeout(delay, hide_hud)
     end)
     if not ok then
         mp.msg.error("show_hud: " .. tostring(err))
     end
-end
-
-local function render_live_badge()
-    if live_flash_until <= mp.get_time() then
-        live_overlay.data = ""
-        live_overlay:update()
-        return
-    end
-    -- Same vector path the transport pill uses. ASS 1c is BGR; 0000FF is red.
-    local ass = "{\\an7\\pos(524,328)\\bord0\\shad0\\1c&H0000FF&}{\\p1}m 0 10 s 0 0 10 0 l 222 0 s 232 0 232 10 l 232 54 s 232 64 222 64 l 10 64 s 0 64 0 54{\\p0}\n"
-    ass = ass .. "{\\an5\\pos(640,360)\\bord0\\shad0\\fnSans-Serif\\b1\\fs48\\1c&HFFFFFF&}LIVE\n"
-    live_overlay.data = ass
-    live_overlay:update()
-end
-
-local function show_live_badge()
-    hide_live_badge()
-    live_blink = true
-    live_flash_until = mp.get_time() + LIVE_HOLD
-    render_live_badge()
-    -- This mpv paints show-text; osd-overlay on gpu-next did not show in probes.
-    pcall(function()
-        mp.set_property("osd-align-x", "center")
-        mp.set_property("osd-align-y", "center")
-        mp.set_property("osd-font-size", "72")
-        mp.set_property("osd-color", "#FF0000")
-        mp.set_property("osd-border-color", "#000000")
-        mp.set_property("osd-bold", "yes")
-    end)
-    mp.osd_message("LIVE", LIVE_HOLD)
-    live_timer = mp.add_periodic_timer(LIVE_FLASH_STEP, function()
-        if mp.get_time() >= live_flash_until then
-            hide_live_badge()
-            return
-        end
-        render_live_badge()
-    end)
-    show_hud()
 end
 
 local function toggle_hud()
@@ -875,34 +920,55 @@ end
 local returning_live = false
 
 local apply_virt_seek
+local send_follow_cmd
+local send_follow_seek
+local send_follow_pace
+local apply_playhead_seek
+local follow_tell
+local open_dump_at
+
+local function timeshift_fwd_step(delay)
+    if delay <= LIVE_SLACK then
+        return 0
+    end
+    -- Last hop that would pass the write head goes live (WinTV / TiVo).
+    if delay <= (SEEK_NEAR + LIVE_SLACK) then
+        return delay
+    end
+    if delay <= (SEEK_STEP * 2) then
+        return SEEK_NEAR
+    end
+    return SEEK_STEP
+end
 
 local function seek_live_edge()
     mp.commandv("set", "pause", "no")
     if is_timeshift_playback() then
-        virt_update()
-        local dur = atsc_duration()
-        virt_pos = math.max(0, dur - LIVE_SLACK)
-        pcall(apply_virt_seek)
-        pending_live_flash = true
-        show_live_badge()
+        behind_clock = 0
+        playhead_byte = nil
+        pause_origin = nil
+        pause_base_delay = 0
+        send_follow_cmd("CATCHUP")
+        local size = file_bytes()
+        send_follow_seek(math.max(0, size - 188))
+        show_hud()
         sync_player_state()
         return
     end
     local path = mp.get_property("path") or ""
     if path:match("^dvb://") then
-        pending_live_flash = true
         mp.commandv("stop")
         mp.add_timeout(0.05, function()
             mp.commandv("loadfile", path, "replace")
         end)
         return
     end
-    show_live_badge()
+    show_hud()
     sync_player_state()
 end
 
 local function request_live()
-    if is_library_playback() then
+    if is_library_playback() or (is_timeshift_playback() and not is_follow_pipe()) then
         local cli = tv_cli()
         mp.command_native_async({
             name = "subprocess",
@@ -939,9 +1005,9 @@ local function at_file_end()
     return virt_pos >= (dur - 1.0)
 end
 
-local function send_follow_seek(bytes)
+send_follow_cmd = function(cmd)
     local sock = follow_sock_opt()
-    if not sock then return false end
+    if not sock or not cmd or cmd == "" then return false end
     local py = table.concat({
         "import socket, sys",
         "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
@@ -952,13 +1018,64 @@ local function send_follow_seek(bytes)
     local res = mp.command_native({
         name = "subprocess",
         playback_only = false,
-        args = {"/usr/bin/python3", "-c", py, sock, "SEEK " .. tostring(bytes)},
+        args = {"/usr/bin/python3", "-c", py, sock, cmd},
     })
     return type(res) == "table" and (res.status == 0 or res.status == true)
 end
 
+send_follow_pace = function(bps)
+    bps = tonumber(bps) or 0
+    if bps >= 1000 then
+        return send_follow_cmd("PACE " .. tostring(math.floor(bps)))
+    end
+    return send_follow_cmd("PACE")
+end
+
+send_follow_seek = function(bytes)
+    return send_follow_cmd("SEEK " .. tostring(align_ts(bytes)))
+end
+
+follow_tell = function()
+    local sock = follow_sock_opt()
+    if not sock then return nil end
+    local py = table.concat({
+        "import socket, sys",
+        "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
+        "s.settimeout(1)",
+        "s.connect(sys.argv[1])",
+        "s.sendall(b'POS')",
+        "s.shutdown(socket.SHUT_WR)",
+        "print(s.recv(64).decode() or '')",
+    }, "\n")
+    local res = mp.command_native({
+        name = "subprocess",
+        playback_only = false,
+        capture_stdout = true,
+        args = {"/usr/bin/python3", "-c", py, sock},
+    })
+    if type(res) ~= "table" or not (res.status == 0 or res.status == true) then
+        return nil
+    end
+    return tonumber(res.stdout)
+end
+
+apply_playhead_seek = function()
+    -- Commit the held delay: SEEK the pause byte, keep behind_clock.
+    if playhead_byte and playhead_byte > 0 then
+        send_follow_seek(playhead_byte)
+        return
+    end
+    local size = file_bytes()
+    send_follow_seek(math.max(0, size - 188))
+end
+
 apply_virt_seek = function()
-    local path = timeshift_file_opt() or mp.get_property("path") or ""
+    local path = mp.get_property("path") or ""
+    if is_follow_pipe() then
+        path = dump_path()
+    elseif path == "" then
+        path = timeshift_file_opt() or ""
+    end
     if path == "" then return end
     local size = file_bytes()
     local bytes = math.floor((virt_pos * ATSC_BPS) / 8)
@@ -967,7 +1084,7 @@ apply_virt_seek = function()
     else
         bytes = math.max(0, bytes)
     end
-    if timeshift_file_opt() then
+    if is_follow_pipe() then
         send_follow_seek(bytes)
         if mp.get_property_bool("pause", false) then
             virt_last = nil
@@ -982,6 +1099,35 @@ apply_virt_seek = function()
     mp.command_native({
         name = "loadfile",
         url = path,
+        flags = "replace",
+        options = { start = "#" .. tostring(bytes) }
+    })
+end
+
+open_dump_at = function(bytes)
+    bytes = align_ts(bytes)
+    playhead_byte = bytes
+    dump_start_byte = bytes
+    if mp.get_property_bool("pause", false) then
+        dump_start_t = nil
+    else
+        dump_start_t = mp.get_time()
+    end
+    send_follow_cmd("PAUSE")
+    reload_data()
+    local pid = tonumber(cached_timeshift.follow_pid)
+    if pid and pid > 1 then
+        mp.command_native({
+            name = "subprocess",
+            playback_only = false,
+            args = {"/bin/kill", "-TERM", tostring(pid)},
+        })
+    end
+    seek_reload = true
+    saved_virt = virt_pos
+    mp.command_native({
+        name = "loadfile",
+        url = dump_path(),
         flags = "replace",
         options = { start = "#" .. tostring(bytes) }
     })
@@ -1009,25 +1155,39 @@ local function seek_rel(delta)
         return
     end
     if is_timeshift_playback() then
-        virt_update()
-        local dur = atsc_duration()
-        if signed < 0 then
-            virt_pos = math.max(0, virt_pos - step)
-            pcall(apply_virt_seek)
+        local size = file_bytes()
+        local rate = mux_rate()
+        if is_follow_pipe() then
+            if signed > 0 then
+                -- Already on the write head: stay LIVE, do not slam the bar to 100%.
+                show_hud()
+                return
+            end
+            local bytes = math.max(0, size - step * rate)
+            playhead_byte = align_ts(bytes)
+            behind_clock = step
+            if mux_bps < 1000 then mux_bps = rate end
+            pcall(open_dump_at, playhead_byte)
             show_hud()
             return
         end
-        -- Already on the write head: flash LIVE, do not slam the bar to 100%.
-        if dur <= 0 or (dur - virt_pos) <= LIVE_SLACK then
-            show_live_badge()
-            return
+        local pos = dump_playhead()
+        local remain = (size - pos) / rate
+        if signed > 0 then
+            local hop = timeshift_fwd_step(remain)
+            -- Last skip toward live remaps the follow pipe.
+            if hop <= 0 or (remain - hop) <= LIVE_SLACK then
+                request_live()
+                return
+            end
+            pos = pos + hop * rate
+            behind_clock = remain - hop
+        else
+            pos = math.max(0, pos - step * rate)
+            behind_clock = remain + step
         end
-        virt_pos = virt_pos + step
-        if (dur - virt_pos) <= LIVE_SLACK then
-            seek_live_edge()
-            return
-        end
-        pcall(apply_virt_seek)
+        playhead_byte = align_ts(pos)
+        pcall(open_dump_at, playhead_byte)
         show_hud()
         return
     end
@@ -1036,14 +1196,14 @@ local function seek_rel(delta)
             seek_live_edge()
             return
         end
-        show_live_badge()
+        show_hud()
         return
     end
     show_hud()
 end
 
 local function request_pause()
-    mp.commandv("cycle", "pause")
+    mp.commandv("no-osd", "cycle", "pause")
     show_hud()
     sync_player_state()
 end
@@ -1057,12 +1217,12 @@ local function surf_prev()
 end
 
 local function vol_up()
-    mp.commandv("add", "volume", 5)
+    mp.commandv("no-osd", "add", "volume", 5)
     show_hud()
 end
 
 local function vol_down()
-    mp.commandv("add", "volume", -5)
+    mp.commandv("no-osd", "add", "volume", -5)
     show_hud()
 end
 
@@ -1115,12 +1275,8 @@ mp.register_event("file-loaded", function()
             else
                 virt_last = mp.get_time()
             end
-        elseif not pending_live_flash then
+        else
             reset_virt()
-        end
-        if pending_live_flash then
-            pending_live_flash = false
-            show_live_badge()
         end
     elseif is_file_playback() then
         prev_was_file = true
@@ -1135,12 +1291,7 @@ mp.register_event("file-loaded", function()
         else
             reset_virt()
         end
-        hide_live_badge()
     else
-        if pending_live_flash or prev_was_file then
-            show_live_badge()
-        end
-        pending_live_flash = false
         prev_was_file = false
     end
     show_hud()
@@ -1155,12 +1306,29 @@ mp.register_event("end-file", function(event)
     if event.reason ~= "eof" then return end
     if is_library_playback() then
         go_live()
+    elseif is_timeshift_playback() and not is_follow_pipe() then
+        local size = file_bytes()
+        local pos = dump_playhead()
+        if size > pos + (256 * 1024) then
+            pcall(open_dump_at, align_ts(pos))
+        else
+            go_live()
+        end
     end
 end)
 
 mp.observe_property("eof-reached", "bool", function(_, eof)
-    if eof and is_library_playback() then
+    if not eof then return end
+    if is_library_playback() then
         go_live()
+    elseif is_timeshift_playback() and not is_follow_pipe() then
+        local size = file_bytes()
+        local pos = dump_playhead()
+        if size > pos + (256 * 1024) then
+            pcall(open_dump_at, align_ts(pos))
+        else
+            go_live()
+        end
     end
 end)
 
@@ -1174,21 +1342,14 @@ mp.add_periodic_timer(0.4, function()
     elseif is_timeshift_playback() then
         virt_update()
     end
-    if hud_visible or live_flash_until > mp.get_time() then pcall(render_hud) end
+    if hud_visible then pcall(render_hud) end
 end)
 
 mp.observe_property("path", "string", function(_, path)
     show_hud()
-    if is_timeshift_playback() then
-        return
-    end
-    if type(path) == "string" and path ~= "" and not path:match("^dvb://") then
-        hide_live_badge()
-    end
 end)
 
 mp.register_event("shutdown", function()
-    pcall(hide_live_badge)
     pcall(write_player_state, false, "", "")
     local cli = tv_cli()
     if cli and cli ~= "" then
@@ -1209,26 +1370,50 @@ mp.observe_property("mute", "bool", function(_, _)
 end)
 
 mp.observe_property("pause", "bool", function(_, paused)
+    if is_timeshift_playback() then
+        if paused then
+            timeshift_delay()
+            if is_follow_pipe() then
+                send_follow_cmd("PAUSE")
+            else
+                dump_start_t = nil
+            end
+        else
+            timeshift_delay()
+            if is_follow_pipe() and behind_clock > LIVE_SLACK and playhead_byte and playhead_byte > 0 then
+                local size = file_bytes()
+                local held = behind_clock
+                if held > 0.5 then
+                    mux_bps = math.max(1000, (size - playhead_byte) / held)
+                end
+                pcall(open_dump_at, playhead_byte)
+            elseif is_follow_pipe() then
+                send_follow_cmd("PLAY")
+            else
+                dump_start_t = mp.get_time()
+            end
+        end
+    end
     show_hud()
     sync_player_state()
 end)
 
--- Mouse Activity: flash chords with show-text (osd-overlay does not paint here).
+-- Pointer-enter shows the bottom HUD pill. Do not osd_message the
+-- chord list — that is stock mpv text on top of the overlay.
 mp.observe_property("mouse-pos", "native", function(_, pos)
     local hover = pos and pos.hover
     if hover and not pointer_in then
-        mp.osd_message(KEY_LEGEND, HIDE_DELAY)
         show_hud()
     end
     pointer_in = not not hover
 end)
 
 mp.add_forced_key_binding("m", "tv_mute_toggle", function()
-    mp.command("cycle mute")
+    mp.commandv("no-osd", "cycle", "mute")
     show_hud()
 end)
 mp.add_forced_key_binding("MBTN_MID", "tv_mute_mid", function()
-    mp.command("cycle mute")
+    mp.commandv("no-osd", "cycle", "mute")
     show_hud()
 end)
 
@@ -1274,12 +1459,3 @@ end)
 
 reload_data()
 pcall(show_hud)
-
-local joined_live_flash = false
-mp.observe_property("video-codec", "string", function(_, codec)
-    if joined_live_flash then return end
-    if not codec or codec == "" then return end
-    if not is_timeshift_playback() then return end
-    joined_live_flash = true
-    show_live_badge()
-end)

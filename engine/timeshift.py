@@ -2,7 +2,8 @@
 Throwaway pause-live buffer: dump Tuner 0 to a growing MPEG-TS file.
 
 A follow process copies live.ts to stdout and waits at EOF. Windowed MPV
-reads that pipe. Pause stops the reader; skip is SEEK on the follow socket.
+reads that pipe while live. Delayed pause/skip `loadfile`s the dump
+(start=# byte). Last skip toward live, or `l`, remaps the follow pipe.
 Channel change fills the new dump, then `pip-relaunch` (new session) remaps
 the PiP. HUD `omarchy-tv play` must not quit mpv itself — that child dies
 with the window. Return-to-live is the write head. This is not a library
@@ -290,6 +291,20 @@ class Timeshift:
     @classmethod
     def send_follow_pause(cls) -> bool:
         return cls.send_follow_cmd("PAUSE")
+
+    @classmethod
+    def send_follow_play(cls) -> bool:
+        return cls.send_follow_cmd("PLAY")
+
+    @classmethod
+    def send_follow_pace(cls, bytes_per_sec: float = 0) -> bool:
+        if bytes_per_sec and bytes_per_sec >= 1000:
+            return cls.send_follow_cmd(f"PACE {int(bytes_per_sec)}")
+        return cls.send_follow_cmd("PACE")
+
+    @classmethod
+    def send_follow_catchup(cls) -> bool:
+        return cls.send_follow_cmd("CATCHUP")
 
     @classmethod
     def send_follow_reopen(cls) -> bool:

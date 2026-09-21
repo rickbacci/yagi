@@ -3,7 +3,11 @@ Copy a growing MPEG-TS file to stdout and wait at EOF instead of closing.
 
 Windowed MPV reads this pipe. lavf on a file hits EOF at the size it opened;
 a pipe blocks until more bytes arrive, so the picture keeps moving. SEEK <byte>
-on the control socket jumps the read cursor (skip / return-to-live).
+on the control socket jumps the read cursor (skip / return-to-live). POS
+replies with the current cursor so skip can move from the real playhead.
+Unpaced copy dumps the rest of the file as fast as the pipe allows, so a
+delayed skip never moves the picture. PACE <bytes/sec> reads the buffer at
+1x. CATCHUP turns that off and races to the write head.
 """
 
 from __future__ import annotations
@@ -40,6 +44,13 @@ class TsFollower:
         self._reopen_gate = threading.Lock()
         self._running = True
         self._paused = False
+        self._paced = False
+        self._pace_bps = 0.0
+        self._pace_origin_t = 0.0
+        self._pace_origin_pos = 0
+        self._write_bps = 0.0
+        self._eof_t: Optional[float] = None
+        self._eof_size = 0
 
     def _open_dest(self) -> None:
         if not self.dest_fifo:
@@ -113,11 +124,26 @@ class TsFollower:
         if st.st_ino != fd_st.st_ino or st.st_size < pos:
             self._reopen_from_start()
 
+    def _reset_pace_clock(self) -> None:
+        self._pace_origin_t = time.monotonic()
+        self._pace_origin_pos = self.pos
+
+    def _pace_wait(self) -> None:
+        if not self._paced or self._pace_bps <= 0:
+            return
+        elapsed = time.monotonic() - self._pace_origin_t
+        allowed = self._pace_origin_pos + elapsed * self._pace_bps
+        if self.pos <= allowed:
+            return
+        extra = (self.pos - allowed) / self._pace_bps
+        time.sleep(min(max(0.0, extra), 0.25))
+
     def _apply_seek(self, byte: int) -> None:
         target = align_ts_offset(byte)
         with self._lock:
             self.pos = target
             if self._fd is None:
+                self._reset_pace_clock()
                 return
             try:
                 size = os.fstat(self._fd).st_size
@@ -126,6 +152,50 @@ class TsFollower:
                 os.lseek(self._fd, self.pos, os.SEEK_SET)
             except OSError:
                 pass
+            self._reset_pace_clock()
+
+    def _handle_ctl(self, data: str) -> Optional[str]:
+        upper = data.upper()
+        if upper.startswith("POS"):
+            with self._lock:
+                return str(self.pos)
+        if upper.startswith("PAUSE"):
+            self._paused = True
+            return None
+        if upper.startswith("PLAY"):
+            self._paused = False
+            self._reset_pace_clock()
+            return None
+        if upper.startswith("PACE"):
+            parts = data.split()
+            self._paced = True
+            if len(parts) > 1:
+                try:
+                    bps = float(parts[1])
+                    if bps > 0:
+                        self._pace_bps = bps
+                except ValueError:
+                    pass
+            if self._pace_bps <= 0 and self._write_bps > 0:
+                self._pace_bps = self._write_bps
+            self._reset_pace_clock()
+            return None
+        if upper.startswith("CATCHUP"):
+            self._paced = False
+            return None
+        if upper.startswith("REOPEN"):
+            self._paused = False
+            self._paced = False
+            self._reopen_from_start()
+            return None
+        if upper.startswith("SEEK"):
+            parts = data.split()
+            try:
+                self._apply_seek(int(parts[1]))
+            except (IndexError, ValueError):
+                pass
+            return None
+        return None
 
     def _ctl_loop(self) -> None:
         while self._running and self._srv is not None:
@@ -141,19 +211,14 @@ class TsFollower:
                     data = conn.recv(256).decode("utf-8", "replace").strip()
                 except OSError:
                     continue
-            if data.upper().startswith("PAUSE"):
-                self._paused = True
-                continue
-            if data.upper().startswith("REOPEN"):
-                self._paused = False
-                self._reopen_from_start()
-                continue
-            if data.upper().startswith("SEEK"):
-                parts = data.split()
-                try:
-                    self._apply_seek(int(parts[1]))
-                except (IndexError, ValueError):
-                    pass
+                if not data:
+                    continue
+                reply = self._handle_ctl(data)
+                if reply is not None:
+                    try:
+                        conn.sendall(reply.encode())
+                    except OSError:
+                        pass
 
     def run(self) -> None:
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
@@ -196,6 +261,7 @@ class TsFollower:
                                 pass
                             self._out_fd = None
                         self._open_dest()
+                    self._pace_wait()
                 else:
                     self._maybe_reopen()
                     time.sleep(0.04)

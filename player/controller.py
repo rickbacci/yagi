@@ -636,9 +636,10 @@ class MpvController:
             "--window-dragging=no",
             "--no-osc",
             "--osd-bar=no",
+            "--osd-on-seek=no",
             "--input-default-bindings=no",
             f"--script={hud_script}",
-            "--osd-level=1",
+            "--osd-level=0",
             "--demuxer-lavf-o=scan_all_pmts=1,fflags=+genpts+discardcorrupt",
             "--cache=yes",
         ]
@@ -728,7 +729,19 @@ class MpvController:
         return "live"
 
     def return_to_live(self, channel_name: Optional[str] = None) -> bool:
-        """Seeks the dump write head, or retunes after a library recording."""
+        """Remaps the follow pipe from delayed dump playback, or retunes after a library file."""
+        res = self.send_command(["get_property", "path"])
+        path = res.get("data") if res and res.get("error") == "success" else None
+        if is_timeshift_path(path) and not is_follow_path(path):
+            target = (channel_name or "").strip() or Timeshift.current_channel() or load_last_live_channel()
+            if not target:
+                return False
+            self.spawn_pip_relaunch(target)
+            return True
+        if is_follow_path(path) and not (channel_name or "").strip():
+            self.send_command(["set_property", "pause", False])
+            res = self.send_command(["script-message", "tv-live-edge"])
+            return res is not None and res.get("error") == "success"
         if self.playback_mode() == "live" and not (channel_name or "").strip():
             self.send_command(["set_property", "pause", False])
             res = self.send_command(["script-message", "tv-live-edge"])
