@@ -25,6 +25,7 @@ class TestCliE2E(unittest.TestCase):
         self.env = dict(os.environ)
         self.env["XDG_CONFIG_HOME"] = self.sandbox_config
         self.env["XDG_RUNTIME_DIR"] = self.sandbox_runtime
+        self.env["XDG_VIDEOS_DIR"] = os.path.join(self.temp_dir.name, "Videos")
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -161,6 +162,45 @@ class TestCliE2E(unittest.TestCase):
         )
         self.assertEqual(res_status.returncode, 0)
         self.assertIn("No active background recordings", res_status.stdout)
+
+    def test_cli_pref_translators(self):
+        res = subprocess.run(
+            [sys.executable, CLI_BIN, "pref", "translators", "on"],
+            capture_output=True,
+            text=True,
+            env=self.env
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("shown", res.stdout)
+        prefs_path = os.path.join(self.sandbox_config, "omarchy", "tv", "ui_prefs.json")
+        with open(prefs_path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertTrue(data["show_translators"])
+
+        res_off = subprocess.run(
+            [sys.executable, CLI_BIN, "pref", "translators", "off"],
+            capture_output=True,
+            text=True,
+            env=self.env
+        )
+        self.assertEqual(res_off.returncode, 0, res_off.stderr)
+        with open(prefs_path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertFalse(data["show_translators"])
+
+    def test_cli_pref_library_max(self):
+        res = subprocess.run(
+            [sys.executable, CLI_BIN, "pref", "library-max", "20"],
+            capture_output=True,
+            text=True,
+            env=self.env
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("20.00 GB", res.stdout)
+        prefs_path = os.path.join(self.sandbox_config, "omarchy", "tv", "ui_prefs.json")
+        with open(prefs_path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["library_max_gb"], 20)
 
 
 if __name__ == "__main__":
