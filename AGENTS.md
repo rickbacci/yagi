@@ -15,7 +15,7 @@ OTA TV for Omarchy (Hyprland + Quickshell + Python + MPV). Current idea: `DESIGN
 4. Tuner 0 for live dump; Tuner 1 for scan / EPG / library record. A recording holds Tuner 1 — do not steal it. Idle Tuner 1 may lock the next station.
 5. State JSON: write `.tmp`, `os.replace`.
 6. QML: `Color.*` / `Style.*` / `root.bar.*` tokens. No hardcoded key chords on the plugin (HUD owns those).
-7. Hyprland class `omarchy-tv` matches Omarchy `pip.lua` (float, pin, aspect, corner). Pin is static; Super+F is `omarchy-tv fullscreen` (unpin first). No HUD `f`. No mpv `--window-dragging`; move is Super+LMB.
+7. Hyprland class `omarchy-tv`: float, pin, 16:9, bottom-right, height `monitor/3`. Same chrome as `pip.lua`, not the `pip` tag or 600×338. Move uses the size expressions, not `window_w`. Pin is static; Super+F is `omarchy-tv fullscreen` (unpin first). No HUD `f`. No mpv `--window-dragging`; move is Super+LMB.
 8. Release DVB frontends before a new dump (`EBUSY`).
 9. Scan dwell ≥ 1.2 s.
 10. Library recordings: `$XDG_VIDEOS_DIR/TV`. Pause-live dump: `$XDG_CACHE_HOME/omarchy/tv/timeshift/`. Not the same tree. PiP is never `dvb://`. Close TV wipes the dump.

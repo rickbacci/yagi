@@ -37,9 +37,9 @@ o.window({ class = "^omarchy-tv$", fullscreen = false }, {
   pin = true,
   keep_aspect_ratio = true,
   border_size = 0,
-  size = { "(monitor_h*32/27)", "(monitor_h*2/3)" },
+  size = { "(monitor_h*16/27)", "(monitor_h/3)" },
   opacity = "1 1",
-  move = { "(monitor_w-window_w-40)", "(monitor_h-window_h-40)" },
+  move = { "(monitor_w-(monitor_h*16/27)-40)", "(monitor_h-(monitor_h/3)-40)" },
 })
 o.window("omarchy-tv", {
   no_shortcuts_inhibit = true,
