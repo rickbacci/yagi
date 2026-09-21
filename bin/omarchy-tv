@@ -464,14 +464,14 @@ def main():
     p_play.add_argument("channel", help="Channel name or callsign to tune")
     p_play.set_defaults(func=cmd_play)
 
-    p_live = subparsers.add_parser("live", help="Leave timeshift/recording and retune live TV")
+    p_live = subparsers.add_parser("live", help="Seek live dump write head, or retune after a recording")
     p_live.add_argument("channel", nargs="?", help="Optional channel; defaults to last live station")
     p_live.set_defaults(func=cmd_live)
 
-    p_pause = subparsers.add_parser("pause", help="Pause live TV (timeshift) or pause/resume playback")
+    p_pause = subparsers.add_parser("pause", help="Pause or resume (live dump keeps filling)")
     p_pause.set_defaults(func=cmd_pause)
 
-    p_seek = subparsers.add_parser("seek", help="Seek recording playback by seconds")
+    p_seek = subparsers.add_parser("seek", help="Seek the live dump or a recording by seconds")
     p_seek.add_argument("seconds", type=float, help="Relative seconds, e.g. 10 or -10")
     p_seek.set_defaults(func=cmd_seek)
 

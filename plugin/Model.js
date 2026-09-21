@@ -115,12 +115,25 @@ function guideAllSlots() {
   return slots
 }
 
-function visibleSlotCount(panelWidth) {
+function visibleSlotCount(panelWidth, minSlotPx) {
   var w = Number(panelWidth) || 0
-  if (w >= 1400) return 6
-  if (w >= 1100) return 5
-  if (w >= 900) return 4
-  return 3
+  var minSlot = Math.max(80, Number(minSlotPx) || 120)
+  var usable = Math.max(minSlot * 3, w - 160)
+  var n = Math.floor(usable / minSlot)
+  if (n < 3) n = 3
+  if (n > 10) n = 10
+  return n
+}
+
+function slotWindow(offset, count) {
+  var all = guideAllSlots()
+  var start = Math.max(0, Number(offset) || 0)
+  var n = Math.max(1, Number(count) || 3)
+  return all.slice(start, start + n)
+}
+
+function maxSlotOffset(visibleCount) {
+  return Math.max(0, guideAllSlots().length - Math.max(1, Number(visibleCount) || 1))
 }
 
 function programsFor(item) {

@@ -17,9 +17,11 @@ from player.controller import (
     update_player_state,
     parse_dvb_path,
     is_dvb_path,
+    is_follow_path,
     channel_index,
 )
 from engine.enrichment import enrich_and_sort_channels
+from engine.timeshift import Timeshift
 
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -109,6 +111,12 @@ class FakeMpvIpc:
                         reply["data"] = self.time_pos
                     elif cmd[:2] == ["get_property", "duration"]:
                         reply["data"] = self.duration
+                    elif cmd[:2] == ["get_property", "percent-pos"]:
+                        reply["data"] = getattr(self, "percent_pos", 0)
+                    elif cmd[:2] == ["get_property", "stream-pos"]:
+                        reply["data"] = getattr(self, "stream_pos", 0)
+                    elif cmd[:2] == ["get_property", "file-size"]:
+                        reply["data"] = getattr(self, "file_size", 0)
                     elif cmd and cmd[0] == "loadfile":
                         self.loaded.append(cmd[1])
                         self.path_value = cmd[1]
@@ -133,6 +141,9 @@ class TestPathAndIndexHelpers(unittest.TestCase):
         self.assertIsNone(parse_dvb_path(None))
         self.assertTrue(is_dvb_path("dvb://WKYC-HD"))
         self.assertFalse(is_dvb_path("/home/richardb/Videos/TV/show.ts"))
+        self.assertTrue(is_follow_path("-"))
+        self.assertTrue(is_follow_path("fd://0"))
+        self.assertFalse(is_follow_path("dvb://WKYC-HD"))
 
     def test_channel_index_uses_enriched_fields(self):
         numbers = [c["channel_number"] for c in ENRICHED_CHANNELS]
@@ -169,8 +180,15 @@ class TestMpvPlayerController(unittest.TestCase):
         self.controller = MpvController(socket_path=os.path.join(self.tmp_dir.name, "mpv.sock"))
         self.controller._load_channels = MagicMock(return_value=self.mock_channels)
         self.controller.channels = self.mock_channels
+        self.lock_path = os.path.join(self.tmp_dir.name, "tune.lock")
+        self._lock_patcher = patch("engine.timeshift.TUNE_LOCK_PATH", self.lock_path)
+        self._lock_patcher.start()
+        self._reap_patcher = patch.object(MpvController, "_reap_stale_window")
+        self._reap_patcher.start()
 
     def tearDown(self):
+        self._reap_patcher.stop()
+        self._lock_patcher.stop()
         self._state_patcher.stop()
         self._prefs_patcher.stop()
         self._favs_patcher.stop()
@@ -241,25 +259,45 @@ class TestMpvPlayerController(unittest.TestCase):
         mock_send.return_value = {"error": "success", "data": "dvb://COZI%20TV"}
         self.assertEqual(self.controller.get_active_channel_name(), "COZI TV")
 
+    @patch.object(MpvController, "send_command")
+    @patch("player.controller.Timeshift.current_channel", return_value="WKYC-HD")
+    def test_get_active_channel_name_follow_pipe(self, _ch, mock_send):
+        mock_send.return_value = {"error": "success", "data": "-"}
+        self.assertEqual(self.controller.get_active_channel_name(), "WKYC-HD")
+
     def test_get_active_channel_name_when_offline(self):
         active = self.controller.get_active_channel_name()
         self.assertIsNone(active)
 
+    @patch("player.controller.is_timeshift_path", return_value=True)
+    @patch("player.controller.Timeshift.start_dump")
+    @patch("player.controller.Timeshift.start_follow")
     @patch.object(MpvController, "is_running", return_value=False)
-    @patch("engine.tuner.TunerManager.get_available_tuner")
     @patch("subprocess.Popen")
     @patch("os.path.exists", return_value=True)
-    def test_dynamic_adapter_allocation(self, mock_exists, mock_popen, mock_get_tuner, mock_running):
-        mock_adapter = MagicMock()
-        mock_adapter.adapter_id = 1
-        mock_get_tuner.return_value = mock_adapter
+    def test_live_launch_plays_dump_file_not_dvbin(self, mock_exists, mock_popen, mock_running, mock_follow, mock_dump, _ts_path):
+        dump = os.path.join(self.tmp_dir.name, "live.ts")
+        with open(dump, "wb") as f:
+            f.write(b"x" * (256 * 1024))
+        mock_dump.return_value = dump
+        follow = MagicMock()
+        follow.stdout = MagicMock()
+        mock_follow.return_value = follow
+        mock_popen.return_value = MagicMock(pid=9)
 
         self.controller.launch(channel_name="53.1 Daystar", adapter_id=None)
 
-        cmd_called = mock_popen.call_args[0][0]
-        self.assertIn("--dvbin-card=1", cmd_called)
-        self.assertIn("dvb://53.1 Daystar", cmd_called)
-        self.assertTrue(any(arg.startswith("--script-opts=tv_hud-cli=") for arg in cmd_called))
+        mock_dump.assert_called_once()
+        mock_follow.assert_called_once()
+        cmd = mock_popen.call_args[0][0]
+        self.assertIn("--force-window=immediate", cmd)
+        self.assertNotIn("--idle=yes", cmd)
+        self.assertFalse(any(str(arg).startswith("--dvbin-") for arg in cmd))
+        self.assertEqual(cmd[-1], "-")
+        self.assertIn("--demuxer-lavf-format=mpegts", cmd)
+        self.assertTrue(any("tv_hud-timeshift-file=" in str(arg) for arg in cmd))
+        self.assertTrue(any("tv_hud-follow-sock=" in str(arg) for arg in cmd))
+        self.assertTrue(any(str(arg).startswith("--script-opts=tv_hud-cli=") for arg in cmd))
 
     def test_update_player_state_atomic(self):
         update_player_state(True, channel="53.1 Daystar", station="Daystar", pid=99)
@@ -307,13 +345,27 @@ class TestMpvPlayerController(unittest.TestCase):
 
     def test_reconcile_clears_now_playing_when_player_gone(self):
         update_player_state(True, channel="WKYC-HD", pid=1)
-        with patch("engine.timeshift.Timeshift.stop") as mock_ts:
+        with patch("engine.timeshift.Timeshift.wipe") as mock_ts:
             self.assertFalse(self.controller.reconcile())
         mock_ts.assert_called_once()
         with open(self.state_path, encoding="utf-8") as f:
             data = json.load(f)
         self.assertFalse(data["running"])
         self.assertEqual(data.get("channel") or "", "")
+
+    def test_reconcile_skips_wipe_while_retune_lock_held(self):
+        update_player_state(True, channel="WKYC-HD", pid=1)
+        Timeshift.acquire_tune_lock()
+        try:
+            with patch("engine.timeshift.Timeshift.wipe") as mock_ts:
+                self.assertTrue(self.controller.reconcile())
+            mock_ts.assert_not_called()
+        finally:
+            Timeshift.release_tune_lock()
+        with open(self.state_path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertTrue(data["running"])
+        self.assertEqual(data["channel"], "WKYC-HD")
 
     @patch("player.controller.update_player_state")
     @patch.object(MpvController, "send_command", return_value=None)
@@ -340,11 +392,36 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self.controller = MpvController(socket_path=os.path.join(self.tmp_dir.name, "mpv.sock"))
         self.controller._load_channels = MagicMock(return_value=ENRICHED_CHANNELS)
         self.controller.channels = ENRICHED_CHANNELS
-        self.server = FakeMpvIpc(self.controller.socket_path, path_value="dvb://WKYC-HD")
+        self.dump_path = os.path.join(self.tmp_dir.name, "live.ts")
+        with open(self.dump_path, "wb") as f:
+            f.write(b"x" * 1024)
+        self._dump_patcher = patch("player.controller.Timeshift.start_dump", return_value=self.dump_path)
+        self._dump_patcher.start()
+        self._ch_patcher = patch("player.controller.Timeshift.current_channel", return_value="WKYC-HD")
+        self._ch_patcher.start()
+        self._ts_path_patcher = patch(
+            "player.controller.is_timeshift_path",
+            side_effect=lambda p: bool(p) and os.path.realpath(p) == os.path.realpath(self.dump_path),
+        )
+        self._ts_path_patcher.start()
+        self._wipe_patcher = patch("player.controller.Timeshift.wipe")
+        self._wipe_patcher.start()
+        self.lock_path = os.path.join(self.tmp_dir.name, "tune.lock")
+        self._lock_patcher = patch("engine.timeshift.TUNE_LOCK_PATH", self.lock_path)
+        self._lock_patcher.start()
+        self._reap_patcher = patch.object(MpvController, "_reap_stale_window")
+        self._reap_patcher.start()
+        self.server = FakeMpvIpc(self.controller.socket_path, path_value=self.dump_path)
         self.server.start()
 
     def tearDown(self):
         self.server.stop()
+        self._reap_patcher.stop()
+        self._lock_patcher.stop()
+        self._wipe_patcher.stop()
+        self._ts_path_patcher.stop()
+        self._dump_patcher.stop()
+        self._ch_patcher.stop()
         self._state_patcher.stop()
         self._prefs_patcher.stop()
         self._favs_patcher.stop()
@@ -356,9 +433,12 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
     def test_get_active_channel_name_skips_mpv_events(self):
         self.assertEqual(self.controller.get_active_channel_name(), "WKYC-HD")
 
-    def test_channel_up_loadfiles_next_enriched_station(self):
-        self.controller.channel_up()
-        self.assertIn("dvb://COZI TV", self.server.loaded)
+    def test_channel_up_loadfiles_timeshift_dump(self):
+        with patch.object(self.controller, "launch_file", return_value=True) as mock_launch:
+            self.controller.channel_up()
+        mock_launch.assert_called()
+        self.assertEqual(mock_launch.call_args[0][0], self.dump_path)
+        self.assertFalse(any(str(item).startswith("dvb://") for item in mock_launch.call_args[0]))
         self.assertEqual(self.controller.current_channel_index, 1)
 
     def test_play_file_rejects_path_outside_library(self):
@@ -395,97 +475,74 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
                 self.assertTrue(self.controller.launch_file(rec))
         cmd = mock_popen.call_args[0][0]
         self.assertFalse(any(str(arg).startswith("--dvbin-") for arg in cmd))
-        self.assertNotIn("--hwdec=auto-safe", cmd)
-        self.assertIn("--hwdec=no", cmd)
+        self.assertIn("--hwdec=auto-safe", cmd)
+        self.assertNotIn("--hwdec=no", cmd)
         self.assertIn("--force-seekable=yes", cmd)
         self.assertEqual(cmd[-1], rec)
 
-    @patch("subprocess.Popen")
-    def test_launch_file_timeshift_skips_force_seekable(self, mock_popen):
-        mock_popen.return_value = MagicMock(pid=1)
-        rec = os.path.join(self.tmp_dir.name, "buffer.ts")
-        with open(rec, "wb") as f:
-            f.write(b"x" * (256 * 1024))
-        with patch("os.path.exists", return_value=True):
-            with patch("player.controller.update_player_state"):
-                self.assertTrue(self.controller.launch_file(rec, mode="timeshift", keep_open=True))
-        cmd = mock_popen.call_args[0][0]
-        self.assertIn("--keep-open=yes", cmd)
-        self.assertNotIn("--force-seekable=yes", cmd)
-
     def test_tune_from_recording_relaunches_live_tuner(self):
         self.server.path_value = os.path.join(self.tmp_dir.name, "show.ts")
-        with patch.object(self.controller, "launch", return_value=True) as mock_launch:
+        with patch.object(self.controller, "launch_file", return_value=True) as mock_launch:
             self.assertTrue(self.controller.tune("WKYC-HD"))
         mock_launch.assert_called_once()
-        self.assertEqual(mock_launch.call_args[0][0], "WKYC-HD")
-        self.assertFalse(any(str(item).startswith("dvb://") for item in self.server.loaded))
+        self.assertEqual(mock_launch.call_args[0][0], self.dump_path)
+        self.assertFalse(any(str(item).startswith("dvb://") for item in mock_launch.call_args[0]))
 
-    def test_return_to_live_uses_last_live_channel(self):
+    def test_return_to_live_from_recording_retunes(self):
+        rec = os.path.join(self.tmp_dir.name, "show.ts")
+        self.server.path_value = rec
         update_player_state(True, channel="show.ts", station="Recording", mode="recording", last_live="WKYC-HD")
         with patch.object(self.controller, "tune", return_value=True) as mock_tune:
             self.assertTrue(self.controller.return_to_live())
         mock_tune.assert_called_once_with("WKYC-HD")
 
+    def test_return_to_live_from_live_seeks_write_head(self):
+        self.assertTrue(self.controller.return_to_live())
+        sent = [m.get("command") for m in self.server.commands]
+        self.assertIn(["script-message", "tv-live-edge"], sent)
+        self.assertIn(["set_property", "pause", False], sent)
+
+    def test_channel_up_from_recording_uses_last_live(self):
+        rec = os.path.join(self.tmp_dir.name, "show.ts")
+        self.server.path_value = rec
+        update_player_state(True, channel="show.ts", station="Recording", mode="recording", last_live="WKYC-HD")
+        with patch.object(self.controller, "tune", return_value=True) as mock_tune:
+            self.controller.channel_up()
+        mock_tune.assert_called_once()
+        self.assertEqual(mock_tune.call_args[0][0], ENRICHED_CHANNELS[1].get("tune_name") or ENRICHED_CHANNELS[1]["name"])
+
     def test_stop_releases_socket_after_quit(self):
         self.assertTrue(os.path.exists(self.controller.socket_path))
-        with patch("engine.timeshift.Timeshift.stop"):
+        with patch("engine.timeshift.Timeshift.wipe"):
             self.controller.stop()
         self.assertFalse(os.path.exists(self.controller.socket_path))
         self.assertFalse(self.controller.is_running())
 
-    def test_pause_live_starts_timeshift_dump(self):
-        with patch("engine.timeshift.Timeshift.start") as mock_start:
-            with patch("engine.timeshift.Timeshift.is_active", return_value=False):
-                self.controller.toggle_pause()
-        mock_start.assert_called_once_with("WKYC-HD")
-        paused = [m["command"] for m in self.server.commands if m.get("command", [None])[0] == "set_property"]
-        self.assertIn(["set_property", "pause", True], paused)
+    def test_pause_cycles_mpv_pause(self):
+        self.controller.toggle_pause()
+        sent = [m.get("command") for m in self.server.commands]
+        self.assertIn(["cycle", "pause"], sent)
 
-    def test_second_pause_on_live_resumes_timeshift_file(self):
-        session = MagicMock()
-        session.file_path = os.path.join(self.tmp_dir.name, "buffer.ts")
-        with open(session.file_path, "wb") as f:
-            f.write(b"x" * (256 * 1024))
-        with patch("engine.timeshift.Timeshift.is_active", return_value=True):
-            with patch("engine.timeshift.Timeshift.active_session", return_value=session):
-                with patch.object(self.controller, "launch_file", return_value=True) as mock_launch:
-                    with patch("engine.timeshift.Timeshift.stop"):
-                        self.controller.toggle_pause()
-        mock_launch.assert_called_once()
-        self.assertEqual(mock_launch.call_args.kwargs.get("mode"), "timeshift")
-
-    def test_paused_live_resumes_existing_buffer(self):
-        buf = os.path.join(self.tmp_dir.name, "buffer.ts")
-        with open(buf, "wb") as f:
-            f.write(b"x" * (256 * 1024))
-        with patch("engine.timeshift.Timeshift.is_active", return_value=False):
-            with patch("engine.timeshift.Timeshift.buffer_path", return_value=buf):
-                with patch.object(self.controller, "_live_is_paused", return_value=True):
-                    with patch.object(self.controller, "launch_file", return_value=True) as mock_launch:
-                        with patch("engine.timeshift.Timeshift.stop"):
-                            self.controller.toggle_pause()
-        mock_launch.assert_called_once()
-        self.assertEqual(mock_launch.call_args.kwargs.get("mode"), "timeshift")
-
-    def test_seek_past_end_returns_to_live(self):
+    def test_seek_asks_hud(self):
         rec = os.path.join(self.tmp_dir.name, "show.ts")
         self.server.path_value = rec
-        self.server.time_pos = 10.0
-        self.server.duration = 12.0
-        with patch.object(self.controller, "return_to_live", return_value=True) as mock_live:
-            self.assertTrue(self.controller.seek(10))
-        mock_live.assert_called_once()
+        self.assertTrue(self.controller.seek(15))
+        sent = [m.get("command") for m in self.server.commands]
+        self.assertIn(["script-message", "tv-seek", "15"], sent)
 
     def test_channel_down_wraps_to_last_station(self):
-        self.controller.channel_down()
-        self.assertIn("dvb://FOX", self.server.loaded)
+        with patch.object(self.controller, "launch_file", return_value=True) as mock_launch:
+            self.controller.channel_down()
+        self.assertEqual(mock_launch.call_args[0][0], self.dump_path)
         self.assertEqual(self.controller.current_channel_index, len(ENRICHED_CHANNELS) - 1)
 
     def test_channel_up_from_url_encoded_cozi(self):
-        self.server.path_value = "dvb://COZI%20TV"
-        self.controller.channel_up()
-        self.assertIn("dvb://WEWSHD", self.server.loaded)
+        self._ch_patcher.stop()
+        self._ch_patcher = patch("player.controller.Timeshift.current_channel", return_value="COZI TV")
+        self._ch_patcher.start()
+        with patch.object(self.controller, "launch_file", return_value=True) as mock_launch:
+            self.controller.channel_up()
+        self.assertEqual(mock_launch.call_args[0][0], self.dump_path)
 
 
 class TestLuaChannelKeys(unittest.TestCase):
@@ -495,31 +552,68 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn('mp.add_forced_key_binding("j", "tv_surf_prev_j", surf_prev)', src)
         self.assertIn('mp.add_forced_key_binding("k", "tv_surf_next_k", surf_next)', src)
         self.assertIn('mp.commandv("loadfile"', src)
-        self.assertIn('if not path:match("^dvb://") then', src)
-        self.assertIn('tv_return_live', src)
+        self.assertIn("is_timeshift_playback", src)
+        self.assertIn("is_library_playback", src)
+        self.assertIn("timeshift_behind", src)
+        self.assertIn("tv_return_live", src)
         self.assertIn('"live"', src)
         self.assertIn("tv_pause", src)
         self.assertIn("request_pause", src)
         self.assertIn("end-file", src)
         self.assertIn("request_live", src)
-        self.assertIn("timeshift_dump_active", src)
+        self.assertIn("seek_live_edge", src)
+        self.assertIn("behind_live", src)
+        self.assertIn("tv-live-edge", src)
         self.assertIn('delta > 0 and "next" or "prev"', src)
         self.assertIn('mp.commandv("set", "pause", "no")', src)
         self.assertIn("seek", src)
         self.assertIn("go_live", src)
         self.assertIn("eof-reached", src)
-        self.assertNotIn("dur - edge", src)
-        self.assertNotIn('utils.subprocess({ args = { "omarchy-tv", "next"', src)
-        self.assertNotIn('utils.subprocess({ args = { "omarchy-tv", "prev"', src)
-        self.assertIn("get_property_bool(\"pause\", false)", src)
-        self.assertIn("HIDE_DELAY", src)
-        self.assertIn('pcall(write_player_state, false, "", "")', src)
-        self.assertIn("shutdown", src)
+        self.assertIn("ATSC_BPS", src)
+        self.assertIn("virt_pos", src)
+        self.assertIn("atsc_duration", src)
+        self.assertIn("tv_cli", src)
+        self.assertIn("local function surf_next()\n    surf(1)\nend", src)
+        self.assertIn("if is_file_playback() then", src)
+        self.assertIn("timeshift_active.json", src)
+        self.assertIn("SEEK_STEP = 15", src)
+        self.assertIn("file_progress", src)
+        self.assertIn("file_bytes", src)
+        self.assertIn("apply_virt_seek", src)
+        self.assertIn("send_follow_seek", src)
+        self.assertIn("timeshift-file", src)
+        self.assertIn("follow-sock", src)
+        self.assertIn("pcall(show_hud)", src)
+        self.assertIn("show_hud:", src)
+        self.assertIn("prog.end_time or", src)
+        self.assertIn("live_overlay", src)
+        self.assertIn("render_live_badge", src)
+        self.assertIn("do not slam the bar", src)
+        self.assertIn("if is_timeshift_playback() then", src)
+        self.assertIn("seek_reload", src)
+        self.assertIn('register_script_message("tv-seek"', src)
+        self.assertIn('start = "#" .. tostring(bytes)', src)
+        self.assertIn("&H0000FF&", src)
+        self.assertIn("prev_was_file", src)
+        self.assertIn("pos(640,360)", src)
+        self.assertIn("fs48", src)
+        self.assertIn("live_flash_until", src)
+        self.assertIn("pending_live_flash", src)
+        self.assertIn("Pause buffer", src)
+        self.assertNotIn("Unseekable live buffer", src)
+        self.assertNotIn("drop-buffers", src)
+        self.assertNotIn('mp.command("cycle fullscreen")', src)
+        self.assertIn("video-codec", src)
+        self.assertIn("show_live_badge", src)
+        self.assertIn("joined_live_flash", src)
+        self.assertIn("osd_message", src)
+        self.assertIn('"LIVE"', src)
+        self.assertIn('"record", "stop"', src)
         self.assertIn("MBTN_LEFT_DBL", src)
         self.assertIn("toggle_window_fullscreen", src)
-        self.assertIn('action = "toggle"', src)
         self.assertIn("hyprctl", src)
-        self.assertNotIn('mp.command("cycle fullscreen")', src)
+        self.assertIn("LIVE_SLACK", src)
+        self.assertIn("is_library_playback()", src)
 
 
 class TestCliNextPrev(unittest.TestCase):
@@ -537,6 +631,20 @@ class TestCliNextPrev(unittest.TestCase):
         self.assertIn("prev", res.stdout)
         self.assertIn("live", res.stdout)
         self.assertIn("sync", res.stdout)
+
+
+class TestPluginSessionCards(unittest.TestCase):
+    def test_watch_and_record_are_separate_cards(self):
+        qml = os.path.join(PROJECT_ROOT, "plugin", "BarWidget.qml")
+        with open(qml, encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn("model: root.activeRecordings", src)
+        self.assertIn("anchors.right: parent.right", src)
+        self.assertIn("text: root.watchModeLabel", src)
+        self.assertIn("text: \"REC\"", src)
+        self.assertIn("Stop this recording", src)
+        self.assertIn("isLiveSession", src)
+        self.assertIn("isLibraryPlayback", src)
 
 
 if __name__ == "__main__":

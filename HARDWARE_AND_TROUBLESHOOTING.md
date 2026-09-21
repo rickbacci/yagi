@@ -18,10 +18,10 @@ Omarchy TV is optimized for North American **ATSC 1.0** and **Clear QAM** digita
 
 Omarchy TV treats them as a pair, not two copies of the same app:
 
-* **Adapter 0** — live MPV (`dvbin`). Prefer this for watching.
-* **Adapter 1** — background scan, library recording, and the pause-live dump.
+* **Adapter 0** — headless live dump (`--stream-dump` of `dvb://` into `live.ts`).
+* **Adapter 1** — background scan and library recording.
 
-If a Python scan or record still holds `frontend0` when MPV starts, Linux returns `EBUSY`. Background jobs must close those file descriptors before hand-off.
+The PiP plays `live.ts` (or a library file). It does not open `/dev/dvb`. If a Python scan or record still holds `frontend0` when the dump starts, Linux returns `EBUSY`. Background jobs must close those file descriptors before hand-off.
 
 ---
 
@@ -102,7 +102,7 @@ Omarchy TV automatically pre-calibrates every scan table with these exact pilot 
 | Channels, guide, now-playing, DVR index | `~/.config/omarchy/tv/` |
 | MPV channel table | `~/.config/mpv/channels.conf` |
 | Keep-forever recordings | `~/Videos/TV` (`$XDG_VIDEOS_DIR/TV`) |
-| Pause-live buffer (deleted after use) | `~/.cache/omarchy/tv/timeshift` |
+| Pause-live dump (`live.ts`) | `~/.cache/omarchy/tv/timeshift` |
 | MPV / daemon sockets | `$XDG_RUNTIME_DIR/omarchy-tv-*.sock` |
 
 If Recordings is empty after you hit Pause, that is expected: pause-live is not a library recording. Use **Record** (`r` on live TV) to write into `Videos/TV`.
@@ -125,12 +125,14 @@ femon -H -a 0                   # live SNR / dBm on tuner 0
 omarchy-shell shell broadcast richardb.omarchy-tv next
 ```
 
-`omarchy-tv sync` (or reopen the flyout) clears a stale channel name after Super+W / compositor close.
+`omarchy-tv sync` (or reopen the flyout) clears a stale channel name after Super+W / compositor close and wipes the leftover dump. A channel click that is already retuning holds a lock so that sync cannot kill the new dump before the window maps.
 
 ---
 
 ## 8. Playback gotchas
 
-* **Black screen on a recording** — dump was empty (under 256 KB) or MPV was still in dvbin mode. Library/timeshift playback must be a file-only MPV instance.
-* **Seek never reaches live** — MPEG-TS often reports duration 0. The HUD should fire `omarchy-tv live` on EOF / `eof-reached`. Close TV and retune once if an old MPV process is still running.
-* **Pause does not resume** — Tuner 1 must be free so the 15-minute dump can start. Check `omarchy-tv status` for a stuck adapter 1.
+* **No window / flyout thinks you are watching** — `--force-window=yes` waits for a video frame. Live uses `--force-window=immediate` on the follow pipe so the PiP maps as soon as MPV starts. An idle PiP (`--idle=yes`, no file) is still wrong — that is a second black window. A second click on the same channel while tuning used to kill the CLI and leave the dump holding the tuner. Close extras, then `omarchy-tv play`. Live is the follow pipe, not a snapshot of `live.ts` (`keep-open` hits EOF in about a second).
+* **→ fills the bar / no red LIVE** — lua HUD loads at MPV start. Close TV and retune after HUD edits. → at the write head should flash LIVE, not skip. ← then → walks the dump in 15 s steps.
+* **Black screen on a recording** — dump was empty (under 256 KB) or MPV was still in dvbin mode. Library playback must be a file-only MPV instance.
+* **Seek never reaches live** — live path is the follow pipe (`-`), not `dvb://`. `l` seeks the write head. Close TV and retune once if an old MPV process is still running.
+* **Pause does not resume** — Space only cycles the PiP pause. Adapter 0 must still be dumping. Check `omarchy-tv status` if adapter 0 is stuck.

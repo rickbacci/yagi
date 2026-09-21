@@ -189,13 +189,24 @@ EVENING_SLOTS = [
 ]
 
 
-def _ensure_programs(channels: Dict[str, Any]) -> None:
+def _ensure_programs(channels: Dict[str, Any]) -> bool:
+    changed = False
     for ch_num, info in channels.items():
         if not isinstance(info, dict) or info.get("programs"):
             continue
         template = BROADCAST_SCHEDULES.get(ch_num)
         if template and template.get("programs"):
             info["programs"] = list(template["programs"])
+            changed = True
+    return changed
+
+
+def _write_guide(payload: Dict[str, Any], target: str) -> None:
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    tmp = f"{target}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, target)
 
 
 def load_guide(guide_path: Optional[str] = None) -> Dict[str, Any]:
@@ -206,7 +217,9 @@ def load_guide(guide_path: Optional[str] = None) -> Dict[str, Any]:
             with open(target, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                _ensure_programs(data.get("channels", {}))
+                if _ensure_programs(data.get("channels", {})):
+                    data["updated_at"] = time.time()
+                    _write_guide(data, target)
                 return data
         except Exception:
             pass
@@ -220,9 +233,7 @@ def save_default_guide(guide_path: Optional[str] = None) -> Dict[str, Any]:
         "updated_at": time.time(),
         "channels": BROADCAST_SCHEDULES
     }
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    with open(target, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
+    _write_guide(payload, target)
     return payload
 
 

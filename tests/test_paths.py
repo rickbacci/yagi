@@ -40,13 +40,17 @@ class TestPathsSecurity(unittest.TestCase):
     def test_socket_constants(self):
         self.assertTrue(MPV_SOCKET_PATH.endswith("omarchy-tv-mpv.sock"))
         self.assertTrue(DAEMON_SOCKET_PATH.endswith("omarchy-tv-daemon.sock"))
-        from engine.paths import RECORDINGS_ACTIVE_PATH, PLAYER_STATE_PATH, UI_PREFS_PATH, RECORDINGS_INDEX_PATH, TIMESHIFT_DIR, TIMESHIFT_ACTIVE_PATH
+        from engine.paths import RECORDINGS_ACTIVE_PATH, PLAYER_STATE_PATH, UI_PREFS_PATH, RECORDINGS_INDEX_PATH, TIMESHIFT_DIR, TIMESHIFT_FILE, TIMESHIFT_ACTIVE_PATH, TIMESHIFT_SOCKET_PATH, FOLLOW_SOCKET_PATH, TUNE_LOCK_PATH
         self.assertTrue(RECORDINGS_ACTIVE_PATH.endswith("recordings_active.json"))
         self.assertTrue(PLAYER_STATE_PATH.endswith("player_state.json"))
         self.assertTrue(UI_PREFS_PATH.endswith("ui_prefs.json"))
         self.assertTrue(RECORDINGS_INDEX_PATH.endswith("recordings.json"))
         self.assertTrue(TIMESHIFT_DIR.endswith("timeshift"))
+        self.assertTrue(TIMESHIFT_FILE.endswith("live.ts"))
         self.assertTrue(TIMESHIFT_ACTIVE_PATH.endswith("timeshift_active.json"))
+        self.assertTrue(TIMESHIFT_SOCKET_PATH.endswith("omarchy-tv-timeshift.sock"))
+        self.assertTrue(FOLLOW_SOCKET_PATH.endswith("omarchy-tv-follow.sock"))
+        self.assertTrue(TUNE_LOCK_PATH.endswith("omarchy-tv-tune.lock"))
 
 
 if __name__ == "__main__":

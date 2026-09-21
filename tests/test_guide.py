@@ -3,6 +3,7 @@ Unit tests for Omarchy TV - Electronic Program Guide (EPG)
 """
 
 import os
+import json
 import unittest
 import tempfile
 from engine.guide import load_guide, save_default_guide, get_channel_program
@@ -19,7 +20,37 @@ class TestGuide(unittest.TestCase):
             self.assertEqual(data["channels"]["3.1"]["network"], "NBC")
             self.assertIn("title", data["channels"]["3.1"])
 
-    def test_get_channel_program(self):
+    def test_default_guide_has_evening_programs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            guide_file = os.path.join(tmp_dir, "guide.json")
+            data = save_default_guide(guide_path=guide_file)
+            nbc = data["channels"]["3.1"]["programs"]
+            self.assertGreaterEqual(len(nbc), 6)
+            self.assertEqual(nbc[0]["start"], "6:00 PM")
+            fox = data["channels"]["8.1"]["programs"]
+            self.assertTrue(any(p.get("title") for p in fox))
+
+    def test_load_guide_writes_programs_onto_now_next_file(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            guide_file = os.path.join(tmp_dir, "guide.json")
+            with open(guide_file, "w", encoding="utf-8") as f:
+                json.dump({
+                    "updated_at": 1,
+                    "channels": {
+                        "8.1": {
+                            "network": "FOX",
+                            "station": "FOX",
+                            "title": "FOX 8 News at 6:00 PM",
+                            "start_time": "6:00 PM",
+                            "end_time": "7:00 PM",
+                        }
+                    },
+                }, f)
+            data = load_guide(guide_path=guide_file)
+            self.assertGreaterEqual(len(data["channels"]["8.1"]["programs"]), 6)
+            with open(guide_file, encoding="utf-8") as f:
+                on_disk = json.load(f)
+            self.assertGreaterEqual(len(on_disk["channels"]["8.1"]["programs"]), 6)
         with tempfile.TemporaryDirectory() as tmp_dir:
             guide_file = os.path.join(tmp_dir, "guide.json")
             data = load_guide(guide_path=guide_file)

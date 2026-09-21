@@ -7,6 +7,7 @@ import os
 import sys
 import json
 import time
+import signal
 import socket
 import subprocess
 from typing import Optional, Dict, Any, List
@@ -16,14 +17,17 @@ from engine.paths import (
     MPV_SOCKET_PATH,
     CHANNELS_JSON_PATH,
     RECORDINGS_DIR,
-    TIMESHIFT_DIR,
-    MPV_CHANNELS_CONF,
     PLAYER_STATE_PATH,
     FAVORITES_JSON_PATH,
     UI_PREFS_PATH,
+    FOLLOW_SOCKET_PATH,
 )
 from engine.dvr import MIN_PLAYABLE_BYTES
-from engine.tuner import TunerManager
+from engine.timeshift import Timeshift, is_timeshift_path
+
+# Dump lock plus lua/lavf can outrun a 3s IPC poll. The flyout treats a
+# non-zero CLI as "TV didn't open" even if mpv is still coming up.
+LAUNCH_SOCKET_WAIT_SECS = 12.0
 
 
 def update_player_state(
@@ -121,17 +125,21 @@ def parse_dvb_path(path: Optional[str]) -> Optional[str]:
 
 def is_allowed_playback_path(file_path: str) -> bool:
     real_path = os.path.realpath(file_path)
-    for folder in (RECORDINGS_DIR, TIMESHIFT_DIR):
-        try:
-            if os.path.commonpath([os.path.realpath(folder), real_path]) == os.path.realpath(folder):
-                return True
-        except ValueError:
-            continue
-    return False
+    try:
+        return os.path.commonpath([os.path.realpath(RECORDINGS_DIR), real_path]) == os.path.realpath(RECORDINGS_DIR)
+    except ValueError:
+        return False
 
 
 def is_dvb_path(path: Optional[str]) -> bool:
     return isinstance(path, str) and path.strip().lower().startswith("dvb://")
+
+
+def is_follow_path(path: Optional[str]) -> bool:
+    if not isinstance(path, str) or not path.strip():
+        return False
+    p = path.strip().lower()
+    return p in ("-", "fd://0", "fdclose://0", "/dev/stdin")
 
 
 def load_last_live_channel(state_path: Optional[str] = None) -> str:
@@ -287,10 +295,11 @@ class MpvController:
 
     def reconcile(self) -> bool:
         """Clears now-playing when the TV window was closed outside the plugin."""
+        if Timeshift.tune_lock_held():
+            return True
         if self.is_running():
             return True
-        from engine.timeshift import Timeshift
-        Timeshift.stop()
+        Timeshift.wipe()
         update_player_state(False)
         return False
 
@@ -342,121 +351,48 @@ class MpvController:
             return None
 
     def launch(self, channel_name: Optional[str] = None, adapter_id: Optional[int] = None) -> bool:
-        """Launches MPV instance with Wayland configuration."""
+        """Starts live dump + file playback, or retunes if the window is already up."""
         if self.is_running():
             if self.playback_mode() == "file":
                 self.stop()
+            elif channel_name:
+                return self.tune(channel_name, adapter_id=adapter_id)
             else:
-                if channel_name:
-                    return self.tune(channel_name)
                 return True
+        if not channel_name:
+            return False
+        return self.tune(channel_name, adapter_id=adapter_id)
 
-        # Dynamic tuner allocation: select first available ATSC tuner if not specified
-        if adapter_id is None:
-            available = TunerManager.get_available_tuner(require_atsc=True)
-            adapter_id = available.adapter_id if available else 0
-
-        # Remove old dead socket if exists
-        if os.path.exists(self.socket_path):
-            try:
-                os.unlink(self.socket_path)
-            except OSError:
-                pass
-
-        hud_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "tv_hud.lua")
-        cli_bin = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "bin", "omarchy-tv")
-        cmd = [
-            "mpv",
-            "--idle=yes",
-            f"--input-ipc-server={self.socket_path}",
-            "--wayland-app-id=omarchy-tv",
-            "--x11-name=omarchy-tv",
-            "--title=Omarchy TV",
-            "--force-window=immediate",
-            "--hwdec=auto-safe",
-            "--geometry=1280x720",
-            "--keepaspect-window=yes",
-            f"--dvbin-card={adapter_id}",
-            f"--dvbin-file={MPV_CHANNELS_CONF}",
-            "--no-osc",
-            f"--script={hud_script}",
-            f"--script-opts=tv_hud-cli={cli_bin}",
-            "--osd-level=1",
-            "--osd-font=sans-serif",
-            "--osd-font-size=24",
-            "--osd-color=#cdd6f4",
-            "--osd-border-color=#11111b",
-            "--osd-back-color=#11111b80",
-            "--osd-shadow-offset=0",
-        ]
-
-        if channel_name:
-            cmd.append(f"dvb://{channel_name}")
-
-        self.proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True
-        )
-
-        # Wait up to 3 seconds for socket to become ready
-        start_time = time.time()
-        while time.time() - start_time < 3.0:
-            if os.path.exists(self.socket_path):
-                time.sleep(0.1)
-                update_player_state(
-                    True,
-                    channel=channel_name or "",
-                    pid=self.proc.pid if self.proc else 0,
-                    mode="live",
-                )
-                return True
-            time.sleep(0.05)
-
-        ready = os.path.exists(self.socket_path)
-        if ready:
-            update_player_state(
-                True,
-                channel=channel_name or "",
-                pid=self.proc.pid if self.proc else 0,
-                mode="live",
-            )
-        return ready
-
-    def tune(self, channel_name: str) -> bool:
-        """Tunes to specified channel name, number, or callsign."""
+    def tune(self, channel_name: str, adapter_id: Optional[int] = None) -> bool:
+        """Dumps the station to live.ts and plays the follow pipe in one PiP."""
         from engine.enrichment import match_channel
-        from engine.timeshift import Timeshift
-        Timeshift.stop()
-        self.channels = self._load_channels()
-        matched = match_channel(channel_name, self.channels)
-        target_name = (matched.get("tune_name") or matched.get("name")) if matched else channel_name
+        Timeshift.acquire_tune_lock()
+        try:
+            self.channels = self._load_channels()
+            matched = match_channel(channel_name, self.channels)
+            target_name = (matched.get("tune_name") or matched.get("name")) if matched else channel_name
+            station = matched.get("display_name", "") if matched else ""
 
-        if matched and matched.get("channel_number"):
-            osd_label = f"📺 {matched['channel_number']} {matched.get('display_name', target_name)}"
-        else:
-            osd_label = f"📺 Tuning {target_name}..."
+            if self.is_running():
+                self.send_command(["quit"])
+                self._wait_until_stopped()
 
-        if self.is_running() and self.playback_mode() == "file":
-            self.stop()
+            dump_path = Timeshift.start_dump(target_name, adapter_id=adapter_id)
+            if not dump_path:
+                return False
 
-        if not self.is_running():
-            return self.launch(target_name)
-
-        res = self.send_command(["loadfile", f"dvb://{target_name}", "replace"])
-        self.send_command(["set_property", "pause", False])
-        self.show_osd(osd_label)
-        success = res is not None and res.get("error") == "success"
-        if success:
-            update_player_state(
-                True,
-                channel=target_name,
-                station=matched.get("display_name", "") if matched else "",
-                pid=self.proc.pid if self.proc else 0,
+            self._reap_stale_window()
+            ok = self.launch_file(
+                dump_path,
                 mode="live",
+                channel=target_name,
+                station=station,
             )
-        return success
+            if not ok:
+                Timeshift.wipe()
+            return ok
+        finally:
+            Timeshift.release_tune_lock()
 
     def play_file(self, file_path: str) -> bool:
         """Plays a local recording in the TV player window, not the live DVB tuner."""
@@ -477,16 +413,83 @@ class MpvController:
 
         return self.launch_file(real_path)
 
-    def launch_file(self, file_path: str, mode: str = "recording", keep_open: bool = False) -> bool:
-        """Starts MPV on a recording without the DVB input module."""
+    def _reap_stale_window(self) -> None:
+        """Kills a leftover PiP that is not answering our IPC socket."""
+        if self.is_running():
+            return
+        pids = set()
+        stated = _stated_player_pid()
+        if stated > 0:
+            pids.add(stated)
+        try:
+            out = subprocess.check_output(
+                ["pgrep", "-a", "mpv"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            for line in out.splitlines():
+                if "--wayland-app-id=omarchy-tv" not in line:
+                    continue
+                try:
+                    pids.add(int(line.split(None, 1)[0]))
+                except ValueError:
+                    pass
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            pass
+        dump_pid = int(Timeshift.load_state().get("pid") or 0)
+        follow_pid = int(Timeshift.load_state().get("follow_pid") or 0)
+        my_pid = os.getpid()
+        for pid in pids:
+            if pid <= 1 or pid in (my_pid, dump_pid, follow_pid):
+                continue
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        deadline = time.time() + 1.2
+        while time.time() < deadline:
+            alive = False
+            for pid in list(pids):
+                if pid in (dump_pid, follow_pid, my_pid):
+                    continue
+                try:
+                    os.kill(pid, 0)
+                    alive = True
+                except OSError:
+                    pids.discard(pid)
+            if not alive:
+                break
+            time.sleep(0.05)
+        for pid in list(pids):
+            if pid in (dump_pid, follow_pid, my_pid):
+                continue
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
         if os.path.exists(self.socket_path):
             try:
                 os.unlink(self.socket_path)
             except OSError:
                 pass
 
+    def launch_file(
+        self,
+        file_path: str,
+        mode: str = "recording",
+        channel: str = "",
+        station: str = "",
+    ) -> bool:
+        """Starts MPV on a file or the live follow pipe, never dvbin."""
+        if self.is_running():
+            self.send_command(["quit"])
+            self._wait_until_stopped()
+        else:
+            self._reap_stale_window()
+
         hud_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "tv_hud.lua")
         cli_bin = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "bin", "omarchy-tv")
+        live_dump = is_timeshift_path(file_path)
         cmd = [
             "mpv",
             f"--input-ipc-server={self.socket_path}",
@@ -494,41 +497,94 @@ class MpvController:
             "--x11-name=omarchy-tv",
             "--title=Omarchy TV",
             "--force-window=immediate",
-            "--hwdec=no",
+            "--hwdec=auto-safe",
             "--geometry=1280x720",
-            "--keepaspect-window=yes",
+            "--keepaspect-window=no",
             "--no-osc",
+            "--osd-bar=no",
             f"--script={hud_script}",
-            f"--script-opts=tv_hud-cli={cli_bin}",
             "--osd-level=1",
-            "--demuxer-lavf-o=scan_all_pmts=1",
+            "--demuxer-lavf-o=scan_all_pmts=1,fflags=+genpts+discardcorrupt",
+            "--cache=yes",
         ]
-        if keep_open:
-            cmd.extend(["--keep-open=yes", "--cache=yes"])
+        stdin = subprocess.DEVNULL
+        follow = None
+        script_opts = [f"tv_hud-cli={cli_bin}"]
+        if live_dump:
+            follow = Timeshift.start_follow(0)
+            if follow is None or follow.stdout is None:
+                return False
+            script_opts.append(f"tv_hud-timeshift-file={file_path}")
+            script_opts.append(f"tv_hud-follow-sock={FOLLOW_SOCKET_PATH}")
+            cmd.extend([
+                "--demuxer-lavf-format=mpegts",
+                "--keep-open=yes",
+                "--keep-open-pause=no",
+            ])
+            stdin = follow.stdout
         else:
             cmd.append("--force-seekable=yes")
-        cmd.append(file_path)
+        cmd.append("--script-opts=" + ",".join(script_opts))
+        cmd.append("-" if live_dump else file_path)
+        err_log = subprocess.DEVNULL
+        if live_dump:
+            err_path = os.path.join(os.path.dirname(file_path), "hud.log")
+            try:
+                err_log = open(err_path, "ab")
+            except OSError:
+                err_log = subprocess.DEVNULL
         self.proc = subprocess.Popen(
             cmd,
+            stdin=stdin,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=err_log,
             start_new_session=True,
         )
-        start_time = time.time()
-        while time.time() - start_time < 3.0:
+        if err_log is not subprocess.DEVNULL:
+            try:
+                err_log.close()
+            except OSError:
+                pass
+        if follow is not None and follow.stdout is not None:
+            try:
+                follow.stdout.close()
+            except OSError:
+                pass
+        def commit_playing() -> bool:
+            if live_dump:
+                label = channel or Timeshift.current_channel() or os.path.basename(file_path)
+                st = station or ""
+                play_mode = mode or "live"
+            else:
+                label = channel or os.path.splitext(os.path.basename(file_path))[0].replace("_", " ")
+                st = station or "Recording"
+                play_mode = mode or "recording"
+            update_player_state(
+                True,
+                channel=label,
+                station=st,
+                pid=self.proc.pid if self.proc else 0,
+                mode=play_mode,
+            )
+            if live_dump:
+                self.send_command(["set_property", "pause", False])
+            return True
+
+        deadline = time.time() + LAUNCH_SOCKET_WAIT_SECS
+        while time.time() < deadline:
+            if self.proc is not None and isinstance(self.proc.poll(), int):
+                if live_dump:
+                    Timeshift.stop_follow()
+                return False
             if os.path.exists(self.socket_path):
                 time.sleep(0.1)
-                label = os.path.splitext(os.path.basename(file_path))[0].replace("_", " ")
-                update_player_state(
-                    True,
-                    channel=label,
-                    station="Recording" if mode != "timeshift" else "Timeshift",
-                    pid=self.proc.pid if self.proc else 0,
-                    mode=mode,
-                )
-                return True
+                return commit_playing()
             time.sleep(0.05)
-        return os.path.exists(self.socket_path)
+        if self.proc is not None and self.proc.poll() is None:
+            return commit_playing()
+        if live_dump:
+            Timeshift.stop_follow()
+        return False
 
     def playback_mode(self) -> Optional[str]:
         """Returns 'live', 'file', or None when MPV is not running."""
@@ -536,16 +592,21 @@ class MpvController:
             return None
         res = self.send_command(["get_property", "path"])
         path = res.get("data") if res and res.get("error") == "success" else None
-        if is_dvb_path(path):
+        if is_timeshift_path(path) or is_follow_path(path) or is_dvb_path(path):
             return "live"
         if isinstance(path, str) and path.strip():
             return "file"
+        if Timeshift.current_channel():
+            return "live"
         return "live"
 
     def return_to_live(self, channel_name: Optional[str] = None) -> bool:
-        """Leaves recording/timeshift playback and retunes the live ATSC player."""
-        from engine.timeshift import Timeshift
-        Timeshift.stop()
+        """Seeks the dump write head, or retunes after a library recording."""
+        if self.playback_mode() == "live" and not (channel_name or "").strip():
+            self.send_command(["set_property", "pause", False])
+            res = self.send_command(["script-message", "tv-live-edge"])
+            return res is not None and res.get("error") == "success"
+        Timeshift.wipe()
         target = (channel_name or "").strip() or load_last_live_channel()
         if not target:
             self.channels = self._load_channels()
@@ -556,10 +617,12 @@ class MpvController:
         return self.tune(target)
 
     def get_active_channel_name(self) -> Optional[str]:
-        """Queries running MPV instance for the currently playing DVB channel."""
+        """Queries running MPV for the live station (dump file or leftover dvb://)."""
         res = self.send_command(["get_property", "path"])
         if res and res.get("error") == "success":
             path = res.get("data")
+            if is_timeshift_path(path) or is_follow_path(path):
+                return Timeshift.current_channel() or load_last_live_channel() or None
             if not is_dvb_path(path):
                 return None
             return parse_dvb_path(path)
@@ -597,6 +660,8 @@ class MpvController:
             return
         found = find_channel_index(pool, self.get_active_channel_name())
         if found is None:
+            found = find_channel_index(pool, load_last_live_channel())
+        if found is None:
             next_idx = 0 if delta > 0 else len(pool) - 1
         else:
             next_idx = (found + delta) % len(pool)
@@ -604,78 +669,13 @@ class MpvController:
         ch = pool[next_idx]
         self.tune(ch.get("tune_name") or ch.get("name", ""))
 
-    def pause_live(self) -> bool:
-        """Freeze live video and start a 15-minute throwaway dump of this channel."""
-        from engine.timeshift import Timeshift
-        channel = self.get_active_channel_name()
-        if not channel:
-            return False
-        self.send_command(["set_property", "pause", True])
-        try:
-            Timeshift.start(channel)
-        except Exception:
-            pass
-        self.show_osd("Paused")
-        matched = self.get_active_channel_info() or {}
-        update_player_state(
-            True,
-            channel=channel,
-            station=matched.get("display_name") or channel,
-            pid=self.proc.pid if self.proc else 0,
-            mode="live",
-        )
-        return True
-
-    def resume_timeshift(self) -> bool:
-        """Play from the pause point while the dump keeps filling."""
-        from engine.timeshift import Timeshift
-        path = Timeshift.buffer_path()
-        if not path:
-            return False
-        deadline = time.time() + 5.0
-        while time.time() < deadline:
-            try:
-                if os.path.isfile(path) and os.path.getsize(path) >= MIN_PLAYABLE_BYTES:
-                    break
-            except OSError:
-                pass
-            time.sleep(0.1)
-        try:
-            if not os.path.isfile(path) or os.path.getsize(path) < MIN_PLAYABLE_BYTES:
-                self.show_osd("Still paused")
-                return False
-        except OSError:
-            return False
-        self.stop(clear_timeshift=False)
-        return self.launch_file(path, mode="timeshift", keep_open=True)
-
-    def _live_is_paused(self) -> bool:
-        res = self.send_command(["get_property", "pause"])
-        return bool(res and res.get("error") == "success" and res.get("data"))
-
     def toggle_pause(self) -> None:
-        mode = self.playback_mode()
-        if mode == "live":
-            from engine.timeshift import Timeshift
-            if Timeshift.is_active() or self._live_is_paused():
-                self.resume_timeshift()
-            else:
-                self.pause_live()
-            return
         self.send_command(["cycle", "pause"])
 
     def seek(self, seconds: float) -> bool:
-        if self.playback_mode() != "file":
+        if not self.is_running():
             return False
-        if seconds > 0:
-            pos_res = self.send_command(["get_property", "time-pos"])
-            dur_res = self.send_command(["get_property", "duration"])
-            pos = pos_res.get("data") if pos_res and pos_res.get("error") == "success" else None
-            dur = dur_res.get("data") if dur_res and dur_res.get("error") == "success" else None
-            if isinstance(pos, (int, float)) and isinstance(dur, (int, float)) and dur > 0:
-                if float(pos) + seconds >= float(dur) - 0.25:
-                    return self.return_to_live()
-        res = self.send_command(["seek", seconds, "relative"])
+        res = self.send_command(["script-message", "tv-seek", str(seconds)])
         return res is not None and res.get("error") == "success"
 
     def toggle_fullscreen(self) -> None:
@@ -711,13 +711,11 @@ class MpvController:
                 pass
             self.proc = None
 
-    def stop(self, clear_timeshift: bool = True) -> None:
+    def stop(self) -> None:
         if self.is_running():
             self.send_command(["quit"])
         self._wait_until_stopped()
-        if clear_timeshift:
-            from engine.timeshift import Timeshift
-            Timeshift.stop()
+        Timeshift.wipe()
         update_player_state(False)
 
 
