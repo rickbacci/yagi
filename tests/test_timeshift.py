@@ -8,7 +8,7 @@ import time
 import unittest
 from unittest.mock import patch, MagicMock
 
-from engine.timeshift import LIVE_SLACK, SEEK_NEAR, SEEK_STEP, Timeshift, is_timeshift_path
+from engine.timeshift import ATSC_BPS, LIVE_SLACK, SEEK_NEAR, SEEK_STEP, Timeshift, align_ts, is_timeshift_path
 
 
 class TestTimeshift(unittest.TestCase):
@@ -134,6 +134,114 @@ class TestTimeshift(unittest.TestCase):
                 finally:
                     Timeshift.stop_http()
                 self.assertFalse(Timeshift._pid_alive(int(data.get("http_pid") or 0)))
+
+    def test_delay_sec_paused_is_wall_clock_not_atsc(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            with open(live, "wb") as f:
+                f.write(b"x" * 188)
+            t0 = time.time() - 47.0
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
+                Timeshift.patch_state(
+                    view="live",
+                    paused=True,
+                    playhead_byte=0,
+                    playhead_t=t0,
+                    mux_bps=824_000,
+                )
+                delay = Timeshift.delay_sec()
+            self.assertGreater(delay, 45.0)
+            self.assertLess(delay, 50.0)
+
+    def test_delay_sec_live_unpaused_is_zero(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            with patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state):
+                Timeshift.patch_state(view="live", paused=False, playhead_t=time.time() - 30)
+                self.assertEqual(Timeshift.delay_sec(), 0.0)
+
+    def test_write_rate_paused_uses_dump_growth_not_sticky_mux(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            playhead = 1880
+            grown = 5_000_000
+            with open(live, "wb") as f:
+                f.write(b"x" * (playhead + grown))
+            t0 = time.time() - 10.0
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
+                Timeshift.patch_state(
+                    paused=True,
+                    playhead_byte=playhead,
+                    playhead_t=t0,
+                    mux_bps=824_000,
+                )
+                rate = Timeshift.write_rate()
+            self.assertAlmostEqual(rate, grown / 10.0, delta=50_000)
+            self.assertNotAlmostEqual(rate, ATSC_BPS / 8.0, delta=100_000)
+            self.assertNotAlmostEqual(rate, 824_000, delta=100_000)
+
+    def test_write_rate_falls_back_to_atsc_when_unpaused(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            with patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state):
+                Timeshift.patch_state(paused=False, mux_bps=0, playhead_t=0)
+                self.assertEqual(Timeshift.write_rate(), ATSC_BPS / 8.0)
+                Timeshift.patch_state(paused=False, mux_bps=1_500_000)
+                self.assertEqual(Timeshift.write_rate(), 1_500_000)
+
+    def test_http_url_aligns_from_byte(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            with patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch.object(Timeshift, "start_http") as mock_start:
+                Timeshift.patch_state(http_port=18765)
+                url = Timeshift.http_url(200)
+            mock_start.assert_not_called()
+            self.assertEqual(url, f"http://127.0.0.1:18765/live.ts?from={align_ts(200)}")
+            self.assertTrue(url.endswith("from=188"))
+
+    def test_wipe_kills_http_child(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            with open(live, "wb") as f:
+                f.write(b"A" * 188)
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
+                 patch.object(Timeshift, "stop_dump"), \
+                 patch.object(Timeshift, "stop_follow"), \
+                 patch.object(Timeshift, "_reap_orphan_dumps"), \
+                 patch.object(Timeshift, "_remove_files"):
+                Timeshift.start_http()
+                pid = int(Timeshift.load_state().get("http_pid") or 0)
+                self.assertTrue(Timeshift._pid_alive(pid))
+                Timeshift.wipe()
+                self.assertFalse(Timeshift._pid_alive(pid))
+                self.assertNotIn("http_port", Timeshift.load_state())
+
+    def test_start_http_ignores_stale_port(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            with open(live, "wb") as f:
+                f.write(b"A" * 188)
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
+                Timeshift.patch_state(http_port=1, http_pid=999_999)
+                try:
+                    port = Timeshift.start_http()
+                    self.assertGreater(port, 1)
+                    self.assertNotEqual(port, 1)
+                finally:
+                    Timeshift.stop_http()
 
     def test_start_dump_writes_state_and_waits_for_bytes(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

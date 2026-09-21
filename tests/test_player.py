@@ -308,6 +308,20 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertFalse(any("tv_hud-follow-sock=" in str(arg) for arg in cmd))
         self.assertNotEqual(cmd[-1], "-")
 
+    @patch("player.controller.is_timeshift_path", return_value=True)
+    @patch("player.controller.Timeshift.start_http", return_value=0)
+    @patch("player.controller.Timeshift.start_dump")
+    @patch.object(MpvController, "is_running", return_value=False)
+    @patch("subprocess.Popen")
+    def test_live_launch_aborts_when_http_fails(self, mock_popen, mock_running, mock_dump, _http, _ts_path):
+        dump = os.path.join(self.tmp_dir.name, "live.ts")
+        with open(dump, "wb") as f:
+            f.write(b"x" * (256 * 1024))
+        mock_dump.return_value = dump
+        with patch("player.controller.Timeshift.wipe"):
+            self.assertFalse(self.controller.launch(channel_name="53.1 Daystar", adapter_id=None))
+        mock_popen.assert_not_called()
+
     def test_update_player_state_atomic(self):
         update_player_state(True, channel="53.1 Daystar", station="Daystar", pid=99)
         self.assertTrue(os.path.exists(self.state_path))
