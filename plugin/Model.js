@@ -19,17 +19,24 @@ function bandColor(band, accent, foreground) {
 }
 
 function networkColor(network, fallback) {
-  if (!network) return fallback;
-  var net = network.toUpperCase();
-  if (net === "NBC") return "#a6e3a1";       // Mint green
-  if (net === "ABC") return "#f9e2af";       // Soft amber
-  if (net === "FOX") return "#89b4fa";       // Sapphire blue
-  if (net === "CBS") return "#cba6f7";       // Mauve purple
-  if (net === "PBS") return "#94e2d5";       // Teal
-  if (net === "CW") return "#a6e3a1";        // Vibrant green
-  if (net === "UNIVISION") return "#f38ba8"; // Coral
-  if (net === "ION") return "#89dceb";       // Sky blue
-  return fallback;
+  return fallback
+}
+
+function minutesNow() {
+  var d = new Date()
+  return d.getHours() * 60 + d.getMinutes()
+}
+
+function slotIsNow(slotLabel, nowMin) {
+  var t = parseMinutes(slotLabel)
+  if (t < 0) return false
+  if (nowMin === undefined || nowMin === null) nowMin = minutesNow()
+  return nowMin >= t && nowMin < t + 30
+}
+
+function guidePlayIdent(item) {
+  if (!item) return ""
+  return item.tune_name || item.station || item.channel_number || ""
 }
 
 function getChannelBadge(channel) {
@@ -108,8 +115,9 @@ function formatSlot(minutes) {
   return h + ":" + (min < 10 ? "0" : "") + min + " " + ap
 }
 
-function guideAllSlots() {
-  var start = parseMinutes("6:00 PM")
+function guideAllSlots(nowMin) {
+  if (nowMin === undefined || nowMin === null || nowMin < 0) nowMin = minutesNow()
+  var start = nowMin - (nowMin % 30)
   var slots = []
   for (var i = 0; i < 10; i++) slots.push(formatSlot(start + i * 30))
   return slots
@@ -125,15 +133,15 @@ function visibleSlotCount(panelWidth, minSlotPx) {
   return n
 }
 
-function slotWindow(offset, count) {
-  var all = guideAllSlots()
+function slotWindow(offset, count, nowMin) {
+  var all = guideAllSlots(nowMin)
   var start = Math.max(0, Number(offset) || 0)
   var n = Math.max(1, Number(count) || 3)
   return all.slice(start, start + n)
 }
 
-function maxSlotOffset(visibleCount) {
-  return Math.max(0, guideAllSlots().length - Math.max(1, Number(visibleCount) || 1))
+function maxSlotOffset(visibleCount, nowMin) {
+  return Math.max(0, guideAllSlots(nowMin).length - Math.max(1, Number(visibleCount) || 1))
 }
 
 function programsFor(item) {
@@ -154,14 +162,20 @@ function coveringProgram(programs, slotLabel) {
     var a = parseMinutes(p.start || p.start_time)
     var b = parseMinutes(p.end || p.end_time)
     if (a < 0) continue
-    if (b <= a) b = a + 30
-    if (t >= a && t < b) return p
+    if (b < 0) b = a + 30
+    var clock = t
+    if (b <= a) {
+      b += 24 * 60
+      if (clock < a) clock += 24 * 60
+    }
+    if (clock >= a && clock < b) return p
   }
   return null
 }
 
 function programBlocks(item, slots) {
   var programs = programsFor(item)
+  var nowMin = minutesNow()
   var blocks = []
   var i = 0
   while (i < slots.length) {
@@ -169,7 +183,19 @@ function programBlocks(item, slots) {
     var span = 1
     while (p && i + span < slots.length && coveringProgram(programs, slots[i + span]) === p)
       span++
-    blocks.push({ title: p ? (p.title || "") : "", span: p ? span : 1, empty: !p })
+    var now = false
+    var s = 0
+    for (s = 0; s < span; s++) {
+      if (slotIsNow(slots[i + s], nowMin)) now = true
+    }
+    blocks.push({
+      title: p ? (p.title || "") : "",
+      start: p ? (p.start || p.start_time || "") : "",
+      end: p ? (p.end || p.end_time || "") : "",
+      span: p ? span : 1,
+      empty: !p,
+      now: now && !!p
+    })
     i += p ? span : 1
   }
   return blocks

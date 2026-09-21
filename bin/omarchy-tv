@@ -95,8 +95,18 @@ def cmd_list(args):
 
 
 def cmd_guide(args):
-    from engine.guide import load_guide
-    guide = load_guide()
+    from engine.guide import load_guide, refresh_guide
+    from engine.psip import collect_guide_events
+    if getattr(args, "action", None) == "refresh":
+        result = refresh_guide(grabber=collect_guide_events)
+        if result.get("skipped"):
+            print("Guide left alone — Tuner 1 is recording.")
+        else:
+            print("Guide refreshed from Tuner 1 PSIP.")
+        guide = {"channels": result.get("channels") or {}}
+    else:
+        refresh_guide(grabber=None)
+        guide = load_guide()
     channels = guide.get("channels", {})
     print("📺 Electronic Program Guide (EPG) — Current Broadcast Schedules:")
     print("=" * 82)
@@ -457,6 +467,7 @@ def main():
 
     # guide / epg
     p_guide = subparsers.add_parser("guide", aliases=["epg"], help="Show electronic program guide schedules")
+    p_guide.add_argument("action", nargs="?", choices=["refresh"], help="Rebuild from the scanned lineup")
     p_guide.set_defaults(func=cmd_guide)
 
     # favorite

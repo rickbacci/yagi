@@ -304,6 +304,10 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertIn("--demuxer-lavf-format=mpegts", cmd)
         self.assertIn("--cache-pause=no", cmd)
         self.assertIn("--ytdl=no", cmd)
+        self.assertIn("--mute=yes", cmd)
+        self.assertIn("--sub-create-cc-track=yes", cmd)
+        self.assertIn("--slang=eng", cmd)
+        self.assertIn("--subs-fallback=yes", cmd)
         self.assertTrue(any("tv_hud-timeshift-file=" in str(arg) for arg in cmd))
         self.assertFalse(any("tv_hud-follow-sock=" in str(arg) for arg in cmd))
         self.assertNotEqual(cmd[-1], "-")
@@ -792,6 +796,24 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("Stop this recording", src)
         self.assertIn("isLiveSession", src)
         self.assertIn("isLibraryPlayback", src)
+
+    def test_guide_grid_uses_lineup_and_omarchy_tokens(self):
+        qml = os.path.join(PROJECT_ROOT, "plugin", "BarWidget.qml")
+        model = os.path.join(PROJECT_ROOT, "plugin", "Model.js")
+        with open(qml, encoding="utf-8") as f:
+            src = f.read()
+        with open(model, encoding="utf-8") as f:
+            js = f.read()
+        self.assertIn("root.displayChannels", src)
+        self.assertIn("text: \"Now\"", src)
+        self.assertIn("Style.selectedFillFor", src)
+        self.assertIn("Model.guidePlayIdent", src)
+        self.assertIn("onClicked: root.selectChannel(gridRow.playIdent)", src)
+        self.assertNotIn("onClicked: root.toggleRecord(gridRow.modelData.station", src)
+        self.assertNotIn("gridRow.netCol", src)
+        self.assertIn("nowMin - (nowMin % 30)", js)
+        self.assertIn("function guidePlayIdent", js)
+        self.assertNotIn("#a6e3a1", js)
 
 
 if __name__ == "__main__":

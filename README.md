@@ -5,7 +5,7 @@
 
 OTA ATSC 1.0 for Omarchy: bar plugin, pinned PiP, dual-tuner record. Not MythTV, not Kaffeine.
 
-Click the antenna, scan, watch 16:9 PiP. Guide is a local evening grid (not live PSIP). Record on Tuner 1 into `~/Videos/TV` while Tuner 0 keeps the live dump. Pause-live is that dump over loopback HTTP (skip is `loadfile` in the same window). Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
+Click the antenna, scan, watch 16:9 PiP. Guide is your scanned lineup from now; `omarchy-tv guide refresh` writes live ATSC EIT into the grid. Record on Tuner 1 into `~/Videos/TV` while Tuner 0 keeps the live dump. Pause-live is that dump over loopback HTTP (skip is `loadfile` in the same window). Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
 
 Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `omarchy-tv`.
 

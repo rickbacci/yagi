@@ -117,6 +117,125 @@ class TestGuide(unittest.TestCase):
         numbered = match_guide_program({"name": "FOX", "channel_number": "5.1"}, BROADCAST_SCHEDULES)
         self.assertEqual(numbered["network"], "ABC")
 
+    def test_merge_lineup_uses_scanned_channels_not_just_templates(self):
+        from engine.guide import merge_lineup
+
+        channels = [
+            {
+                "channel_number": "8.1",
+                "network": "FOX",
+                "callsign": "WJW",
+                "tune_name": "8.1 WJW",
+                "display_name": "FOX 8 (WJW)",
+            },
+            {
+                "channel_number": "53.2",
+                "network": "Daystar",
+                "callsign": "WCDN-2",
+                "tune_name": "53.2 WCDN",
+                "name": "Daystar Español",
+            },
+        ]
+        merged = merge_lineup(channels, {})
+        self.assertIn("8.1", merged)
+        self.assertIn("53.2", merged)
+        self.assertEqual(merged["8.1"]["tune_name"], "8.1 WJW")
+        self.assertEqual(merged["8.1"]["station"], "WJW")
+        self.assertGreaterEqual(len(merged["8.1"]["programs"]), 6)
+        self.assertEqual(merged["53.2"]["callsign"], "WCDN-2")
+        self.assertEqual(merged["53.2"]["programs"], [])
+
+    def test_merge_lineup_keeps_live_programs(self):
+        from engine.guide import merge_lineup
+
+        existing = {
+            "8.1": {
+                "programs": [{"start": "7:00 PM", "end": "8:00 PM", "title": "Live game"}],
+                "title": "Live game",
+                "source": "psip",
+            }
+        }
+        merged = merge_lineup(
+            [{"channel_number": "8.1", "network": "FOX", "callsign": "WJW", "tune_name": "FOX"}],
+            existing,
+        )
+        self.assertEqual(merged["8.1"]["programs"][0]["title"], "Live game")
+
+    def test_now_and_next_covers_wall_clock(self):
+        from engine.guide import now_and_next
+
+        programs = [
+            {"start": "6:00 PM", "end": "7:00 PM", "title": "News"},
+            {"start": "7:00 PM", "end": "8:00 PM", "title": "Game"},
+        ]
+        now, nxt = now_and_next(programs, now_minutes=18 * 60 + 30)
+        self.assertEqual(now["title"], "News")
+        self.assertEqual(nxt["title"], "Game")
+        evening = now_and_next(programs, now_minutes=10 * 60)
+        self.assertIsNone(evening[0])
+
+    def test_refresh_skips_grabber_when_recording_holds_tuner1(self):
+        from engine.guide import refresh_guide
+
+        grabbed = {"called": False}
+
+        def grabber():
+            grabbed["called"] = True
+            return {"8.1": [{"start": "6:00 PM", "end": "7:00 PM", "title": "PSIP"}]}
+
+        class Held:
+            def is_active(self):
+                return True
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            guide_file = os.path.join(tmp_dir, "guide.json")
+            result = refresh_guide(
+                channels=[{"channel_number": "8.1", "network": "FOX", "callsign": "WJW", "tune_name": "FOX"}],
+                guide_path=guide_file,
+                grabber=grabber,
+                sessions=[Held()],
+            )
+            self.assertTrue(result["skipped"])
+            self.assertFalse(grabbed["called"])
+            with open(guide_file, encoding="utf-8") as f:
+                data = json.load(f)
+            self.assertNotEqual(data["channels"]["8.1"]["programs"][0]["title"], "PSIP")
+
+    def test_refresh_applies_grabber_when_tuner1_free(self):
+        from engine.guide import refresh_guide
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            guide_file = os.path.join(tmp_dir, "guide.json")
+            result = refresh_guide(
+                channels=[{"channel_number": "8.1", "network": "FOX", "callsign": "WJW", "tune_name": "FOX"}],
+                guide_path=guide_file,
+                grabber=lambda: {"8.1": [{"start": "9:00 PM", "end": "10:00 PM", "title": "PSIP Night"}]},
+                sessions=[],
+            )
+            self.assertFalse(result["skipped"])
+            with open(guide_file, encoding="utf-8") as f:
+                data = json.load(f)
+            self.assertEqual(data["channels"]["8.1"]["programs"][0]["title"], "PSIP Night")
+            self.assertEqual(data["channels"]["8.1"]["source"], "psip")
+
+    def test_now_and_next_wraps_midnight(self):
+        from engine.guide import now_and_next
+
+        programs = [{"start": "11:00 PM", "end": "12:30 AM", "title": "Late"}]
+        now, _nxt = now_and_next(programs, now_minutes=15)
+        self.assertEqual(now["title"], "Late")
+
+    def test_merge_does_not_restore_template_after_psip(self):
+        from engine.guide import merge_lineup
+
+        existing = {"8.1": {"source": "psip", "programs": [], "title": "Live"}}
+        merged = merge_lineup(
+            [{"channel_number": "8.1", "network": "FOX", "callsign": "WJW", "tune_name": "FOX"}],
+            existing,
+        )
+        self.assertEqual(merged["8.1"]["programs"], [])
+        self.assertEqual(merged["8.1"]["source"], "psip")
+
 
 if __name__ == "__main__":
     unittest.main()

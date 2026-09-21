@@ -651,6 +651,10 @@ class MpvController:
             "--input-default-bindings=no",
             f"--script={hud_script}",
             "--osd-level=0",
+            "--mute=yes",
+            "--sub-create-cc-track=yes",
+            "--slang=eng",
+            "--subs-fallback=yes",
             "--demuxer-lavf-o=scan_all_pmts=1,fflags=+genpts+discardcorrupt",
             "--cache=yes",
         ]

@@ -17,6 +17,8 @@ BarWidget {
       root.libraryModalOpen = false
       root.cursorActive = false
       root.reloadChannelData()
+      if (root.guideModalOpen)
+        root.guideClockMin = Model.minutesNow()
       if (!tuneProc.running)
         root.syncPlayerState()
     }
@@ -48,16 +50,17 @@ BarWidget {
   property int recCursorIndex: 0
   readonly property bool showChannelBrowser: root.activeChannelName === ""
   property int guideSlotOffset: 0
-  readonly property var guideAllSlots: Model.guideAllSlots()
+  property int guideClockMin: -1
+  readonly property var guideAllSlots: Model.guideAllSlots(root.guideClockMin)
   readonly property int guideVisibleSlots: {
     var w = popup.contentWidth || popup.availableCardWidth || Style.space(900)
     return Model.visibleSlotCount(w, Style.space(128))
   }
-  readonly property int guideSlotMax: Model.maxSlotOffset(root.guideVisibleSlots)
-  readonly property var guideVisibleSlotLabels: Model.slotWindow(root.guideSlotOffset, root.guideVisibleSlots)
-  readonly property int guideStationWidth: Style.space(88)
+  readonly property int guideSlotMax: Model.maxSlotOffset(root.guideVisibleSlots, root.guideClockMin)
+  readonly property var guideVisibleSlotLabels: Model.slotWindow(root.guideSlotOffset, root.guideVisibleSlots, root.guideClockMin)
+  readonly property int guideStationWidth: Style.space(112)
   readonly property int guideRecWidth: Style.space(40)
-  readonly property int guideSlotGap: Style.space(4)
+  readonly property int guideSlotGap: Style.space(6)
   readonly property int guideSlotPixelWidth: {
     var n = Math.max(1, root.guideVisibleSlots)
     var usable = Math.max(n, (popup.contentWidth || Style.space(900)) - root.guideStationWidth - root.guideRecWidth - Style.space(24))
@@ -99,6 +102,7 @@ BarWidget {
     root.libraryModalOpen = false
     root.guideCursorIndex = 0
     root.cursorActive = false
+    root.guideClockMin = Model.minutesNow()
     root.guideModalOpen = true
     root.snapGuideToNow()
   }
@@ -162,7 +166,7 @@ BarWidget {
     if (!root.cursorActive) return
     if (root.guideModalOpen) {
       var g = root.guideList[root.guideCursorIndex]
-      if (g) root.selectChannel(g.station || g.channel_number)
+      if (g) root.selectChannel(Model.guidePlayIdent(g))
       return
     }
     if (root.libraryModalOpen) {
@@ -177,7 +181,7 @@ BarWidget {
   function cursorChannelIdent() {
     if (root.guideModalOpen) {
       var g = root.guideList[root.guideCursorIndex]
-      return g ? (g.station || g.channel_number || "") : ""
+      return g ? Model.guidePlayIdent(g) : ""
     }
     if (root.cursorActive && root.displayChannels && root.displayChannels.length > 0) {
       var ch = root.displayChannels[root.cursorIndex]
@@ -219,11 +223,29 @@ BarWidget {
 
   readonly property var guideList: {
     var list = []
+    var chs = root.displayChannels || []
+    if (chs.length > 0) {
+      for (var i = 0; i < chs.length; i++) {
+        var ch = chs[i]
+        var g = Model.matchGuideProgram(ch, root.guideData) || {}
+        var item = Object.assign({}, g)
+        item.channel_number = ch.channel_number || item.channel_number || ""
+        item.network = ch.network || item.network || ""
+        item.station = ch.callsign || item.station || ""
+        item.tune_name = ch.tune_name || ch.name || item.tune_name || ""
+        item.callsign = ch.callsign || item.callsign || ""
+        item.display_name = ch.display_name || ch.name || item.display_name || ""
+        if (!item.programs || !item.programs.length)
+          item.programs = Model.programsFor(item)
+        list.push(item)
+      }
+      return list
+    }
     if (!root.guideData) return list
     for (var k in root.guideData) {
-      var item = Object.assign({}, root.guideData[k])
-      item.channel_number = k
-      list.push(item)
+      var fallback = Object.assign({}, root.guideData[k])
+      fallback.channel_number = k
+      list.push(fallback)
     }
     list.sort(function(a, b) {
       return (parseFloat(a.channel_number) || 999) - (parseFloat(b.channel_number) || 999)
@@ -625,6 +647,7 @@ BarWidget {
 
     function guide(): void {
       root.openIntoGuide = true
+      root.guideClockMin = Model.minutesNow()
       root.popupOpen = true
       root.guideModalOpen = true
       root.snapGuideToNow()
@@ -970,6 +993,7 @@ BarWidget {
               iconText: "󰥔"
               text: "Guide"
               tooltipText: "Program guide"
+              selected: root.guideModalOpen
               foreground: root.bar.foreground
               onClicked: root.toggleGuide()
             }
@@ -1735,23 +1759,50 @@ BarWidget {
           width: parent.width
           height: Math.max(Style.space(36), guideBackBtn.implicitHeight)
 
-          BorderSurface {
-            id: guideIcon
-            width: Style.space(36)
-            height: Style.space(36)
+          Column {
             anchors.left: parent.left
+            anchors.right: guideNowBtn.left
+            anchors.rightMargin: Style.space(8)
             anchors.verticalCenter: parent.verticalCenter
-            radius: Style.spacing.labelGap
-            color: Style.normalFillFor(root.bar.foreground, Color.accent)
-            borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
+            spacing: Style.space(2)
 
             Text {
-              anchors.centerIn: parent
-              text: "󰥔"
-              color: Color.accent
+              textFormat: Text.PlainText
+              text: "Guide"
+              color: root.bar.foreground
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.subtitle
+              font.bold: true
+              elide: Text.ElideRight
+              width: parent.width
             }
+
+            Text {
+              textFormat: Text.PlainText
+              text: {
+                var n = root.guideList ? root.guideList.length : 0
+                var slots = root.guideVisibleSlotLabels || []
+                var window = slots.length ? (slots[0] + " – " + slots[slots.length - 1]) : ""
+                if (!n) return window || "No stations"
+                return n + (n === 1 ? " station" : " stations") + (window ? (" · " + window) : "")
+              }
+              color: Qt.darker(root.bar.foreground, 1.5)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              width: parent.width
+            }
+          }
+
+          Button {
+            id: guideNowBtn
+            anchors.right: guideBackBtn.left
+            anchors.rightMargin: Style.space(6)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Now"
+            tooltipText: "Jump to now"
+            foreground: root.bar.foreground
+            onClicked: root.snapGuideToNow()
           }
 
           Button {
@@ -1764,45 +1815,11 @@ BarWidget {
             foreground: root.bar.foreground
             onClicked: root.toggleGuide()
           }
-
-          Column {
-            anchors.left: guideIcon.right
-            anchors.right: guideBackBtn.left
-            anchors.leftMargin: Style.space(8)
-            anchors.rightMargin: Style.space(8)
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(2)
-
-            Text {
-              textFormat: Text.PlainText
-              text: "Program Guide"
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: true
-              elide: Text.ElideRight
-              width: parent.width
-            }
-
-            Text {
-              textFormat: Text.PlainText
-              text: {
-                var slots = root.guideAllSlots || []
-                if (!slots.length) return "Evening"
-                return slots[0] + " – " + slots[slots.length - 1]
-              }
-              color: Qt.darker(root.bar.foreground, 1.5)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-              elide: Text.ElideRight
-              width: parent.width
-            }
-          }
         }
 
         Item {
           width: parent.width
-          height: Math.max(Style.space(40), guidePrevBtn.implicitHeight)
+          height: Math.max(Style.space(32), guidePrevBtn.implicitHeight)
 
           Button {
             id: guidePrevBtn
@@ -1863,16 +1880,22 @@ BarWidget {
               Repeater {
                 model: root.guideVisibleSlotLabels
 
-                Text {
+                Item {
                   required property var modelData
                   width: root.guideSlotPixelWidth
-                  textFormat: Text.PlainText
-                  text: modelData
-                  color: Color.accent
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                  elide: Text.ElideRight
+                  height: parent.height
+
+                  Text {
+                    anchors.fill: parent
+                    textFormat: Text.PlainText
+                    text: parent.modelData
+                    color: Model.slotIsNow(parent.modelData) ? Color.accent : Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.bold: Model.slotIsNow(parent.modelData)
+                    elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
+                  }
                 }
               }
             }
@@ -1896,7 +1919,7 @@ BarWidget {
             Column {
               id: guideCol
               width: guideFlickable.width
-              spacing: Style.space(6)
+              spacing: Style.space(4)
 
               Repeater {
                 model: root.guideList
@@ -1905,12 +1928,15 @@ BarWidget {
                   id: gridRow
                   required property var modelData
                   required property int index
-                  readonly property string netCol: Model.networkColor(modelData.network, Color.accent)
-                  readonly property bool isCurrent: root.activeChannelName === modelData.station || root.activeChannelName === modelData.channel_number
+                  readonly property string playIdent: Model.guidePlayIdent(modelData)
+                  readonly property bool isCurrent: root.activeChannelName === playIdent ||
+                    root.activeChannelName === modelData.tune_name ||
+                    root.activeChannelName === modelData.station ||
+                    root.activeChannelName === modelData.channel_number
                   readonly property var blocks: Model.programBlocks(modelData, root.guideVisibleSlotLabels)
 
                   width: guideCol.width
-                  height: Style.space(52)
+                  height: Style.space(56)
                   foreground: root.bar.foreground
                   accent: Color.accent
                   hasCursor: root.guideModalOpen && root.cursorActive && root.guideCursorIndex === index
@@ -1926,30 +1952,38 @@ BarWidget {
                       height: parent.height
                       anchors.left: parent.left
                       radius: Style.spacing.labelGap
-                      color: Style.normalFillFor(root.bar.foreground, Color.accent)
-                      borderSpec: Border.controlSpec("normal", gridRow.netCol, gridRow.netCol)
+                      color: gridRow.isCurrent
+                        ? Style.selectedFillFor(root.bar.foreground, Color.accent)
+                        : Style.normalFillFor(root.bar.foreground, Color.accent)
+                      borderSpec: Border.controlSpec(gridRow.isCurrent ? "focus" : "normal", root.bar.foreground, Color.accent)
 
                       Column {
-                        anchors.centerIn: parent
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: Style.space(8)
+                        anchors.rightMargin: Style.space(8)
                         spacing: Style.space(2)
 
                         Text {
-                          anchors.horizontalCenter: parent.horizontalCenter
+                          width: parent.width
                           textFormat: Text.PlainText
                           text: gridRow.modelData.channel_number || "OTA"
-                          color: root.bar.foreground
+                          color: gridRow.isCurrent ? Color.accent : root.bar.foreground
                           font.family: root.bar.fontFamily
                           font.pixelSize: Style.font.bodySmall
                           font.bold: true
+                          elide: Text.ElideRight
                         }
 
                         Text {
-                          anchors.horizontalCenter: parent.horizontalCenter
+                          width: parent.width
                           textFormat: Text.PlainText
-                          text: Model.networkShort(gridRow.modelData.network)
+                          text: gridRow.modelData.callsign || gridRow.modelData.station || Model.networkShort(gridRow.modelData.network)
                           color: Qt.darker(root.bar.foreground, 1.4)
                           font.family: root.bar.fontFamily
                           font.pixelSize: Style.font.caption
+                          elide: Text.ElideRight
                           visible: text !== ""
                         }
                       }
@@ -1958,7 +1992,7 @@ BarWidget {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root.selectChannel(gridRow.modelData.station || gridRow.modelData.channel_number)
+                        onClicked: root.selectChannel(gridRow.playIdent)
                       }
                     }
 
@@ -1966,13 +2000,13 @@ BarWidget {
                       id: recBtn
                       anchors.right: parent.right
                       anchors.verticalCenter: parent.verticalCenter
-                      readonly property bool isRec: root.isChannelRecording(gridRow.modelData.station || gridRow.modelData.channel_number)
+                      readonly property bool isRec: root.isChannelRecording(gridRow.playIdent)
                       iconText: isRec ? "󰓛" : "󰑈"
                       tooltipText: isRec ? "Stop recording" : "Record"
                       foreground: isRec ? Color.urgent : root.bar.foreground
                       hoverColor: Color.accent
                       fontFamily: root.bar.fontFamily
-                      onClicked: root.toggleRecord(gridRow.modelData.station || gridRow.modelData.channel_number)
+                      onClicked: root.toggleRecord(gridRow.playIdent)
                     }
 
                     Row {
@@ -1992,30 +2026,53 @@ BarWidget {
                           width: root.guideSlotPixelWidth * Math.max(1, Number(modelData.span) || 1) + root.guideSlotGap * (Math.max(1, Number(modelData.span) || 1) - 1)
                           height: parent.height
                           radius: Style.spacing.labelGap
-                          color: modelData.empty ? "transparent" : Style.normalFillFor(root.bar.foreground, Color.accent)
-                          borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
-                          visible: true
+                          color: {
+                            if (modelData.empty) return "transparent"
+                            if (modelData.now) return Style.selectedFillFor(root.bar.foreground, Color.accent)
+                            return Style.normalFillFor(root.bar.foreground, Color.accent)
+                          }
+                          borderSpec: modelData.empty
+                            ? Border.controlSpec("normal", root.bar.foreground, root.bar.foreground)
+                            : Border.controlSpec(modelData.now ? "focus" : "normal", root.bar.foreground, Color.accent)
+                          opacity: modelData.empty ? 0.35 : 1
 
-                          Text {
+                          Column {
                             anchors.fill: parent
                             anchors.leftMargin: Style.space(8)
                             anchors.rightMargin: Style.space(8)
-                            textFormat: Text.PlainText
-                            text: modelData.title || ""
-                            color: gridRow.isCurrent ? Color.accent : root.bar.foreground
-                            font.family: root.bar.fontFamily
-                            font.pixelSize: Style.font.bodySmall
-                            font.bold: true
-                            elide: Text.ElideRight
-                            verticalAlignment: Text.AlignVCenter
+                            anchors.topMargin: Style.space(4)
+                            anchors.bottomMargin: Style.space(4)
+                            spacing: Style.space(2)
                             visible: !modelData.empty
+
+                            Text {
+                              width: parent.width
+                              textFormat: Text.PlainText
+                              text: modelData.title || ""
+                              color: modelData.now || gridRow.isCurrent ? Color.accent : root.bar.foreground
+                              font.family: root.bar.fontFamily
+                              font.pixelSize: Style.font.bodySmall
+                              font.bold: true
+                              elide: Text.ElideRight
+                            }
+
+                            Text {
+                              width: parent.width
+                              textFormat: Text.PlainText
+                              text: (modelData.start && modelData.end) ? (modelData.start + " – " + modelData.end) : ""
+                              color: Qt.darker(root.bar.foreground, 1.5)
+                              font.family: root.bar.fontFamily
+                              font.pixelSize: Style.font.caption
+                              elide: Text.ElideRight
+                              visible: text !== ""
+                            }
                           }
 
                           MouseArea {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.toggleRecord(gridRow.modelData.station || gridRow.modelData.channel_number)
+                            onClicked: root.selectChannel(gridRow.playIdent)
                           }
                         }
                       }

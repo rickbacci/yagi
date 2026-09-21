@@ -384,6 +384,13 @@ class AtscScanner:
             except Exception:
                 pass
 
+        if target_json == CHANNELS_JSON_PATH:
+            try:
+                from engine.guide import sync_guide_from_channels
+                sync_guide_from_channels(enriched_channels)
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
     scanner = AtscScanner()
