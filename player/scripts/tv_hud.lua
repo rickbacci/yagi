@@ -3,20 +3,41 @@
 
 local utils = require "mp.utils"
 
-local overlay = mp.create_osd_overlay("ass-events")
-overlay.res_x = 1280
-overlay.res_y = 720
-overlay.z = 10
+local function dummy_overlay(z)
+    local o = { data = "", res_x = 1280, res_y = 720, z = z or 10 }
+    function o:update() end
+    function o:remove() end
+    return o
+end
 
--- Separate overlay so HUD redraws and file-loaded cannot swallow the LIVE flash.
-local live_overlay = mp.create_osd_overlay("ass-events")
-live_overlay.res_x = 1280
-live_overlay.res_y = 720
-live_overlay.z = 40
+local function make_overlay(z)
+    local ok, ov = pcall(function()
+        local o = mp.create_osd_overlay("ass-events")
+        o.res_x = 1280
+        o.res_y = 720
+        o.z = z
+        return o
+    end)
+    if ok and ov then
+        return ov
+    end
+    mp.msg.error("tv_hud osd-overlay failed: " .. tostring(ov))
+    return dummy_overlay(z)
+end
 
+local overlay = make_overlay(10)
+local live_overlay = make_overlay(40)
+
+local KEY_LEGEND = "j/k ch  ·  Space pause  ·  ←/→ skip  ·  l live  ·  m mute  ·  Super+F full  ·  c CC  ·  r rec"
+local pointer_in = false
 local hud_visible = false
 local hide_timer = nil
 local HIDE_DELAY = 3.5
+local SURF_COMMIT_DELAY = 0.9
+local surf_idx = nil
+local surf_timer = nil
+local surf_busy = false
+local surf_preview = nil
 local live_timer = nil
 local live_flash_until = 0
 local live_blink = true
@@ -147,7 +168,7 @@ end
 local function is_timeshift_playback()
     if timeshift_file_opt() then return true end
     local path = mp.get_property("path") or ""
-    if follow_sock_opt() and (path == "-" or path:match("^fd://") or path:match("^fdclose://")) then
+    if follow_sock_opt() and (path == "-" or path:match("^fd://") or path:match("^fdclose://") or path:find("omarchy-tv-follow.fifo", 1, true)) then
         return true
     end
     if path == "" or path:match("^dvb://") then return false end
@@ -251,15 +272,6 @@ local function atsc_duration()
     return (size * 8) / ATSC_BPS
 end
 
-local function timeshift_behind(slack)
-    slack = slack or LIVE_SLACK
-    if not is_timeshift_playback() then return false end
-    virt_update()
-    local dur = atsc_duration()
-    if dur <= 0 then return false end
-    return (dur - virt_pos) > slack
-end
-
 local function virt_update()
     if not is_file_playback() then
         virt_last = nil
@@ -275,6 +287,15 @@ local function virt_update()
     end
     virt_last = now
     return virt_pos
+end
+
+local function timeshift_behind(slack)
+    slack = slack or LIVE_SLACK
+    if not is_timeshift_playback() then return false end
+    virt_update()
+    local dur = atsc_duration()
+    if dur <= 0 then return false end
+    return (dur - virt_pos) > slack
 end
 
 local function reset_virt()
@@ -349,7 +370,25 @@ local function write_player_state(running, channel, station)
     os.rename(tmp, PLAYER_STATE_PATH)
 end
 
+local function guide_for_channel(matched_ch)
+    if not matched_ch then return nil end
+    if matched_ch.channel_number and cached_guide[matched_ch.channel_number] then
+        return cached_guide[matched_ch.channel_number]
+    end
+    for _, p in pairs(cached_guide) do
+        if p.station and (p.station == matched_ch.name or p.station == matched_ch.tune_name) then
+            return p
+        elseif p.network and matched_ch.network and string.lower(p.network) == string.lower(matched_ch.network) then
+            return p
+        end
+    end
+    return nil
+end
+
 local function get_active_info()
+    if surf_preview then
+        return surf_preview, guide_for_channel(surf_preview)
+    end
     local path = mp.get_property("path") or ""
     local tune_name = nil
     if is_timeshift_playback() then
@@ -388,22 +427,7 @@ local function get_active_info()
             }
         end
 
-        local prog = nil
-        if matched_ch.channel_number and cached_guide[matched_ch.channel_number] then
-            prog = cached_guide[matched_ch.channel_number]
-        else
-            for k, p in pairs(cached_guide) do
-                if p.station and (p.station == matched_ch.name or p.station == matched_ch.tune_name) then
-                    prog = p
-                    break
-                elseif p.network and matched_ch.network and string.lower(p.network) == string.lower(matched_ch.network) then
-                    prog = p
-                    break
-                end
-            end
-        end
-
-        return matched_ch, prog
+        return matched_ch, guide_for_channel(matched_ch)
     end
 
     local name = path:match("([^/]+)$") or path
@@ -418,6 +442,7 @@ local function get_active_info()
 end
 
 local function sync_player_state()
+    if surf_preview then return end
     local ch = select(1, get_active_info())
     if ch then
         write_player_state(true, ch.tune_name or ch.name or "", ch.display_name or "")
@@ -598,6 +623,9 @@ local function hide_live_badge()
 end
 
 local function hide_hud()
+    if surf_preview then
+        return
+    end
     if live_flash_until > mp.get_time() then
         return
     end
@@ -624,6 +652,9 @@ local function show_hud()
             return
         end
         local delay = HIDE_DELAY
+        if surf_preview then
+            delay = math.max(delay, SURF_COMMIT_DELAY + 2)
+        end
         if live_flash_until > mp.get_time() then
             delay = math.max(delay, live_flash_until - mp.get_time() + 0.1)
         end
@@ -731,23 +762,77 @@ local function channel_index_for(pool, tune_name)
     return nil
 end
 
-local function surf(delta)
-    mp.commandv("set", "pause", "no")
-    if is_file_playback() then
-        local cli = tv_cli()
-        mp.command_native_async({
-            name = "subprocess",
-            playback_only = false,
-            args = {cli, delta > 0 and "next" or "prev"}
-        }, function()
-            show_hud()
-        end)
+local function live_tune_name()
+    reload_data()
+    local ts = cached_timeshift or {}
+    local name = tostring(ts.tune_name or ts.channel or "")
+    if name ~= "" then return name end
+    local saved = surf_preview
+    surf_preview = nil
+    local ch = select(1, get_active_info())
+    surf_preview = saved
+    if ch then return tostring(ch.tune_name or ch.name or "") end
+    return ""
+end
+
+local function format_ch_banner(ch)
+    if not ch then return "" end
+    local num = tostring(ch.channel_number or "")
+    local name = ch.display_name or ch.callsign or ch.name or ch.tune_name or ""
+    if num ~= "" and num ~= "OTA" and num ~= "REC" then
+        return num .. "  " .. name
+    end
+    return name
+end
+
+local function commit_surf()
+    surf_timer = nil
+    local pool = surf_pool()
+    local n = pool and #pool or 0
+    if n == 0 or not surf_idx or not pool[surf_idx] then
         return
     end
+    if surf_busy then
+        surf_timer = mp.add_timeout(0.3, commit_surf)
+        return
+    end
+    local ch = pool[surf_idx]
+    local target = ch.tune_name or ch.name or ch.raw_name or ""
+    if target == "" then return end
+    if target == live_tune_name() then
+        surf_preview = nil
+        show_hud()
+        return
+    end
+    surf_busy = true
+    surf_preview = ch
+    show_hud()
+    local cli = tv_cli()
+    mp.command_native_async({
+        name = "subprocess",
+        playback_only = false,
+        args = {cli, "play", target}
+    }, function()
+        surf_busy = false
+        reload_data()
+        local live = live_tune_name()
+        if surf_preview then
+            local want = surf_preview.tune_name or surf_preview.name
+            if want == live then
+                surf_preview = nil
+            end
+        end
+        show_hud()
+        -- Extra j/k during the tune already reset surf_timer. Do not
+        -- start a second play from this callback — that paused the
+        -- follow pipe and froze the picture.
+    end)
+end
+
+local function surf(delta)
     if not cached_channels or #cached_channels == 0 then
         reload_data()
     else
-        -- Favorites / tab prefs change without a channel retune.
         local f_fav = io.open(FAVORITES_PATH, "r")
         if f_fav then
             local content = f_fav:read("*all")
@@ -762,29 +847,29 @@ local function surf(delta)
             local data = utils.parse_json(content)
             if type(data) == "table" then cached_prefs = data end
         end
+        local f_ts = io.open(TIMESHIFT_ACTIVE_PATH, "r")
+        if f_ts then
+            local content = f_ts:read("*all")
+            f_ts:close()
+            local data = utils.parse_json(content)
+            if type(data) == "table" then cached_timeshift = data end
+        end
     end
     local pool = surf_pool()
     local n = pool and #pool or 0
     if n == 0 then return end
-    local path = mp.get_property("path") or ""
-    if not path:match("^dvb://") then
-        return
+    if not surf_idx then
+        surf_idx = channel_index_for(pool, live_tune_name()) or 1
     end
-    local tune_name = path:gsub("^dvb://", "")
-    local idx = channel_index_for(pool, tune_name)
-    local next_i
-    if not idx then
-        next_i = delta > 0 and 1 or n
-    else
-        next_i = (idx - 1 + delta) % n
-        if next_i < 0 then next_i = next_i + n end
-        next_i = next_i + 1
-    end
-    local ch = pool[next_i]
-    local target = (ch and (ch.tune_name or ch.name or ch.raw_name)) or ""
-    if target == "" or target == tune_name then return end
-    mp.commandv("loadfile", "dvb://" .. target, "replace")
+    surf_idx = ((surf_idx - 1 + delta) % n) + 1
+    if surf_idx < 1 then surf_idx = surf_idx + n end
+    surf_preview = pool[surf_idx]
     show_hud()
+    if surf_timer then
+        surf_timer:kill()
+        surf_timer = nil
+    end
+    surf_timer = mp.add_timeout(SURF_COMMIT_DELAY, commit_surf)
 end
 
 local returning_live = false
@@ -989,12 +1074,28 @@ end)
 mp.register_script_message("tv-live-edge", function()
     seek_live_edge()
 end)
+mp.register_script_message("tv-retuned", function()
+    reload_data()
+    reset_virt()
+    pcall(function()
+        mp.commandv("set", "aid", "auto")
+        mp.commandv("set", "pause", "no")
+    end)
+    local live = live_tune_name()
+    if surf_preview then
+        local want = surf_preview.tune_name or surf_preview.name
+        if want == live then
+            surf_preview = nil
+        end
+    end
+    show_hud()
+end)
 mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)
 mp.add_forced_key_binding("l", "tv_return_live", request_live)
-mp.add_forced_key_binding("UP", "tv_surf_next", surf_next)
-mp.add_forced_key_binding("k", "tv_surf_next_k", surf_next)
-mp.add_forced_key_binding("DOWN", "tv_surf_prev", surf_prev)
-mp.add_forced_key_binding("j", "tv_surf_prev_j", surf_prev)
+mp.add_forced_key_binding("UP", "tv_surf_next", surf_next, {repeatable = false})
+mp.add_forced_key_binding("k", "tv_surf_next_k", surf_next, {repeatable = false})
+mp.add_forced_key_binding("DOWN", "tv_surf_prev", surf_prev, {repeatable = false})
+mp.add_forced_key_binding("j", "tv_surf_prev_j", surf_prev, {repeatable = false})
 mp.add_forced_key_binding("WHEEL_UP", "tv_vol_up", vol_up)
 mp.add_forced_key_binding("WHEEL_DOWN", "tv_vol_down", vol_down)
 
@@ -1100,11 +1201,11 @@ mp.register_event("shutdown", function()
 end)
 
 mp.observe_property("volume", "number", function(_, _)
-    if hud_visible then render_hud() end
+    if hud_visible then pcall(render_hud) end
 end)
 
 mp.observe_property("mute", "bool", function(_, _)
-    if hud_visible then render_hud() end
+    if hud_visible then pcall(render_hud) end
 end)
 
 mp.observe_property("pause", "bool", function(_, paused)
@@ -1112,32 +1213,27 @@ mp.observe_property("pause", "bool", function(_, paused)
     sync_player_state()
 end)
 
--- Mouse Activity
+-- Mouse Activity: flash chords with show-text (osd-overlay does not paint here).
 mp.observe_property("mouse-pos", "native", function(_, pos)
-    if pos and pos.hover then
+    local hover = pos and pos.hover
+    if hover and not pointer_in then
+        mp.osd_message(KEY_LEGEND, HIDE_DELAY)
         show_hud()
     end
+    pointer_in = not not hover
 end)
 
-mp.add_forced_key_binding("MBTN_MID", "tv_mute_toggle", function()
+mp.add_forced_key_binding("m", "tv_mute_toggle", function()
+    mp.command("cycle mute")
+    show_hud()
+end)
+mp.add_forced_key_binding("MBTN_MID", "tv_mute_mid", function()
     mp.command("cycle mute")
     show_hud()
 end)
 
--- Hyprland owns the floating PiP size. MPV's own fullscreen does not
--- restore that default geometry, so toggle compositor fullscreen instead.
-local HYPR_FS_TOGGLE = 'hl.dispatch(hl.dsp.window.fullscreen({ mode = "fullscreen", action = "toggle", layout_aware = false, window = "class:^(omarchy-tv)$" }))'
-
-local function toggle_window_fullscreen()
-    mp.command_native_async({
-        name = "subprocess",
-        playback_only = false,
-        args = { "hyprctl", "eval", HYPR_FS_TOGGLE }
-    }, function() end)
-end
-
-mp.add_forced_key_binding("MBTN_LEFT_DBL", "tv_fs_dbl", toggle_window_fullscreen)
-mp.add_forced_key_binding("f", "tv_fs_key", toggle_window_fullscreen)
+-- Fullscreen is Omarchy Super+F only (see omarchy-tv fullscreen). Do not
+-- bind `f` or double-click — stock mpv fullscreen is also off.
 mp.add_forced_key_binding("c", "tv_sub_cycle", function()
     mp.command("cycle sub")
     show_hud()

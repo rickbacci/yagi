@@ -25,8 +25,15 @@ into `~/.cache/omarchy/tv/timeshift/live.ts`, a follow copy of that file
 to stdout (waits at EOF instead of closing), and one windowed MPV that
 reads the pipe (no `dvbin` in the window). Pause stops the reader; the
 dump keeps writing. Skip is a byte-offset SEEK on the follow socket.
-Return-to-live seeks the write head. Channel change wipes the dump and
-opens one new window. Library recordings are keepable files in `~/Videos/TV`.
+Return-to-live seeks the write head. `j`/`k` flash a channel banner and
+tune once after you stop on a station. A committed tune fills the new dump,
+then `pip-relaunch` remaps the PiP in a new session (this mpv will not
+switch muxes on stdin; HUD `play` must not quit the window itself). If Tuner 1
+is recording, that committed tune uses the live tuner (0) and does not
+steal the recording. If Tuner 1 is idle, it may lock the next station
+while the dump starts. Stacked tunes while a retune is running wait for
+the banner choice, not for every key.
+Library recordings are keepable files in `~/Videos/TV`.
 Do not spawn a second `omarchy-tv` window. Do not open an idle/black PiP
 while the dump starts. mpv 0.41 `--keep-open` does not follow a growing
 `live.ts`; that is why the window reads the follow pipe.
@@ -104,15 +111,16 @@ changes: user must close the player and retune.
 
 ## Player keys (HUD only)
 
-Listed on the MPV HUD (mouse over the player). Do not paint them on the plugin. Super+K is Hyprland’s cheatsheet, not TV.
+Listed on the MPV HUD (pointer enters the PiP — chords flash a few seconds via `show-text`). Do not paint them on the plugin. Super+K is Hyprland’s cheatsheet, not TV.
 
 - Space — pause live (dump fills) / play from that moment, or pause a file
-- j / k / ↓ / ↑ — always previous / next channel (file playback returns to live first)
+- j / k / ↓ / ↑ — flash the full channel banner for the next/previous station; the tuner changes after you stop on one. Recording on Tuner 1 is left alone. File playback returns to live when that commit runs.
 - ← / → — ±15 s in the dump or a recording. On a recording, last skip retunes live. On the dump, last skip toward live seeks the write head. → while already live flashes a red LIVE badge; it does not fill the bar as a fake skip
 - l — seek dump write head, or retune after a recording
 - r — start/stop library record (while live dump is running)
-- f / double-click — compositor fullscreen
-- Wheel / middle-click — volume / mute
+- Super+F / Cmd+F — Omarchy fullscreen. The wrapper unpins this PiP first because Hyprland no-ops Super+F on a pinned window. Bare `f` and double-click do not fullscreen. Super+LMB moves the PiP; mpv left-drag is off.
+- c — captions
+- `m` / middle-click — mute only this TV window (mpv stream mute). Does not mute other apps. Wheel is volume.
 
 ## Layout
 
@@ -137,7 +145,7 @@ Listed on the MPV HUD (mouse over the player). Do not paint them on the plugin. 
 - Atomic JSON: write `.tmp`, `os.replace`.
 - Scan dwell ≥ 1.2 s.
 - Plugin: `Color.*` / `Style.*` tokens; no hardcoded key chords.
-- Hyprland class `omarchy-tv` is a floated, pinned, aspect-locked PiP.
+- Hyprland class `omarchy-tv` matches Omarchy `pip.lua` (float, pin, aspect, corner). Pin is static; Super+F goes through `omarchy-tv fullscreen`.
 - Tests: `python3 -m unittest discover tests` must be 100% before commit.
 - Do not commit unless the user asked.
 
@@ -161,9 +169,13 @@ Then we dumped to `live.ts` and played the file with `--keep-open`. That predict
 
 Cmd+W / compositor close of the PiP was the next miss: lua cleared now-playing (list came back) but the dump kept the tuner. Clicking another channel started a new dump; the flyout `sync` timer (every 1.5s while a station name is set) saw no window yet and wiped that dump. Super+W is Close TV for the dump, but not while a retune lock is held.
 
+`j` toggling captions was stock mpv (`cycle sub`). The HUD script path was on the command line but its forced bindings were not in `input-bindings`. Windowed mpv stdout was DEVNULL and stderr was an empty `hud.log` (no TTY, no `--log-file`), so lua load errors vanished while we were building. `osd-overlay` at the top of `tv_hud.lua` can abort the whole script on this gpu-next; keys must still register. Overlay ASS for the bottom legend does not paint here — `osd_message` / `show-text` does.
+
+Plain left-drag moving the PiP was mpv `--window-dragging` (default yes). Omarchy move is Super+LMB (`hl.dsp.window.drag()`). Super+F doing nothing was Hyprland pin: pin is a static window-rule effect, and `hl.dsp.window.fullscreen({ mode = "fullscreen" })` stays at fullscreen 0 while pinned (measured: 1067×600 stayed put; after unpin the same dispatcher went fullscreen 2 at 2150×900). `hyprctl eval` with a class regex is not Omarchy Super+F. HUD `f` / double-click were a second fullscreen path; fullscreen is Super+F only. `j` “closing” the window was `omarchy-tv prev` quitting the PiP before the new dump existed. Live surf now keeps the window. Feeding a new mux into the same lavf/cache without reset froze the picture (follow kept stuffing stdin; `keep-open` plus `--cache-pause` sat on underrun). Stopping the dump *before* ATSC lock made every `j` wait the whole dwell with a frozen frame. Next station locks on the free tuner when Tuner 1 is idle, then `loadfile - replace` + follow REOPEN. Stacked `j` during a retune started a second dump and froze. `loadfile - replace` on the follow pipe quit this mpv — do not use it. Reaping leftover dumps by matching `omarchy/tv/timeshift/` in argv also killed the PiP (`--log-file=.../hud.log`). Only match `--stream-dump=`. Retuning on every `j`/`k` froze the picture and cut audio; the banner must move immediately and the tuner waits until you stop on a station. After a Tuner-1 overlap, the live dump kept `timeshift-next.sock`; the next retune bound the new dump to that same socket and `stop_dump` quit the new dump — picture froze, audio gone. Alternate dump IPC sockets. A recording on Tuner 1 means overlap is skipped; the committed tune retunes Tuner 0. White `osd_message` channel names were not the HUD banner — `j`/`k` must preview `surf_preview` through `show_hud`. Holding `j` was mpv key-repeat (four prev steps from one press). A play callback that immediately started a second `omarchy-tv play` paused the follow pipe on top of the first cutover and froze the picture (audio underrun). One commit after keys idle; extra `j`/`k` only move the banner and reset the timer. REOPEN of stdin still left the old picture: lavf listed new MPEG-2 tracks after `tv-retuned` but the VO stayed on the previous mux. `loadfile -` quit this mpv. A named FIFO also failed: mpegts probe saw corrupt packets / no audio or video and mpv exited. Recycle-after-dump still closed the window: HUD `omarchy-tv play` is an mpv child (`detach=no`); after ATSC lock it sent `quit` and died with the PiP, so `launch_file` never ran (hud.log: play WEWSHD at 9.7s, quit at 15.1s, then shutdown `sync`; `player_state` running false; dump leftover on Tuner 1). `pip-relaunch` is a new session that holds the retune lock across quit+launch. Do not unmute on `tv-retuned` — `m` is TV-only mute.
+
 Learn: when the user still cannot see it, the assumption is wrong, not the paint. Probe `path`, `eof-reached`, and `time-pos` before another HUD pass. Write the failed prediction here, not another overlay.
 
-The rewritten invariant: dump TS on Tuner 0, follow that file to a pipe, one windowed MPV on stdin. That is how the picture keeps moving on this mpv 0.41. After a behavior change, AGENTS / DESIGN / this skill / README / HUD must match. Guessed constants (15 s skip, overlay `pos`) are not spec.
+The rewritten invariant: dump TS on Tuner 0, follow that file to a pipe, one windowed MPV on stdin. Channel change remaps that PiP from a new session after the new dump exists. After a behavior change, AGENTS / DESIGN / this skill / README / HUD must match. Guessed constants (15 s skip, overlay `pos`) are not spec.
 
 ## What reviewers would cut later
 

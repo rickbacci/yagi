@@ -20,7 +20,9 @@ from engine.paths import (
     PLAYER_STATE_PATH,
     FAVORITES_JSON_PATH,
     UI_PREFS_PATH,
+    FOLLOW_FIFO_PATH,
     FOLLOW_SOCKET_PATH,
+    TIMESHIFT_DIR,
 )
 from engine.dvr import MIN_PLAYABLE_BYTES
 from engine.timeshift import Timeshift, is_timeshift_path
@@ -28,6 +30,76 @@ from engine.timeshift import Timeshift, is_timeshift_path
 # Dump lock plus lua/lavf can outrun a 3s IPC poll. The flyout treats a
 # non-zero CLI as "TV didn't open" even if mpv is still coming up.
 LAUNCH_SOCKET_WAIT_SECS = 12.0
+
+# Same lua as /usr/share/omarchy/default/hypr/bindings/tiling.lua Super+F.
+OMARCHY_FULLSCREEN_LUA = 'hl.dsp.window.fullscreen({ mode = "fullscreen" })'
+
+
+def _hypr_json(subcommand: str):
+    result = subprocess.run(
+        ["hyprctl", subcommand, "-j"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        err = (result.stdout + result.stderr).strip()
+        print(f"hyprctl {subcommand} -j failed: {err}", file=sys.stderr)
+        return None
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        print(f"hyprctl {subcommand} -j: {exc}", file=sys.stderr)
+        return None
+
+
+def _hypr_dispatch(lua: str) -> bool:
+    result = subprocess.run(
+        ["hyprctl", "dispatch", lua],
+        capture_output=True,
+        text=True,
+    )
+    out = (result.stdout + result.stderr).strip()
+    if result.returncode != 0 or (out and out != "ok"):
+        print(f"hyprctl dispatch {lua!r} failed: {out}", file=sys.stderr)
+        return False
+    return True
+
+
+def _hypr_tv_client():
+    clients = _hypr_json("clients") or []
+    return next(
+        (c for c in clients if isinstance(c, dict) and c.get("class") == "omarchy-tv"),
+        None,
+    )
+
+
+def _toggle_omarchy_fullscreen(target_tv: bool = False) -> None:
+    """Unpin omarchy-tv if needed, then the same fullscreen dispatcher Omarchy Super+F uses.
+
+    Pin is a static window-rule effect. Super+F on a pinned client stays at
+    fullscreen 0 (measured on this Hyprland). Super+F special-cases the PiP
+    when it is the focused window. `--player` targets the TV window from CLI.
+    """
+    active = _hypr_json("activewindow") or {}
+    target = active if active.get("class") == "omarchy-tv" else None
+    if target_tv and target is None:
+        target = _hypr_tv_client()
+    addr = (target or {}).get("address")
+    is_tv = bool(addr)
+    pinned = bool((target or {}).get("pinned"))
+    was_fs = int((target or {}).get("fullscreen") or 0) != 0
+    win = f', window = "address:{addr}"' if is_tv else ""
+    if is_tv and pinned and not was_fs:
+        _hypr_dispatch(f'hl.dsp.window.pin({{ window = "address:{addr}" }})')
+    if is_tv:
+        _hypr_dispatch(f'hl.dsp.window.fullscreen({{ mode = "fullscreen"{win} }})')
+    else:
+        _hypr_dispatch(OMARCHY_FULLSCREEN_LUA)
+    if not is_tv or not was_fs:
+        return
+    after = _hypr_tv_client() or {}
+    if int(after.get("fullscreen") or 0) == 0 and not after.get("pinned"):
+        _hypr_dispatch(f'hl.dsp.window.pin({{ window = "address:{addr}" }})')
 
 
 def update_player_state(
@@ -138,8 +210,13 @@ def is_dvb_path(path: Optional[str]) -> bool:
 def is_follow_path(path: Optional[str]) -> bool:
     if not isinstance(path, str) or not path.strip():
         return False
-    p = path.strip().lower()
-    return p in ("-", "fd://0", "fdclose://0", "/dev/stdin")
+    p = path.strip()
+    low = p.lower()
+    if low in ("-", "fd://0", "fdclose://0", "/dev/stdin"):
+        return True
+    if p == FOLLOW_FIFO_PATH or p.endswith("omarchy-tv-follow.fifo"):
+        return True
+    return False
 
 
 def load_last_live_channel(state_path: Optional[str] = None) -> str:
@@ -363,25 +440,81 @@ class MpvController:
             return False
         return self.tune(channel_name, adapter_id=adapter_id)
 
+    @staticmethod
+    def _tv_cli() -> str:
+        return os.path.join(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+            "bin",
+            "omarchy-tv",
+        )
+
+    def spawn_pip_relaunch(self, channel: str, station: str = "") -> None:
+        """Remap in a new session so HUD `play` can die with the old PiP."""
+        cmd = [self._tv_cli(), "pip-relaunch", channel]
+        if station:
+            cmd.extend(["--station", station])
+        subprocess.Popen(
+            cmd,
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+
+    def relaunch_pip(self, channel: str, station: str = "") -> bool:
+        """Quit the old PiP, then open a new one on the dump already filling."""
+        for _ in range(40):
+            if Timeshift.acquire_tune_lock():
+                break
+            time.sleep(0.05)
+        else:
+            return False
+        try:
+            state = Timeshift.load_state()
+            dump_path = state.get("path") or ""
+            if not dump_path or not os.path.isfile(dump_path):
+                dump_path = os.path.join(TIMESHIFT_DIR, "live.ts")
+            if self.is_running():
+                self.send_command(["quit"])
+                self._wait_until_stopped()
+            else:
+                self._reap_stale_window()
+            return self.launch_file(
+                dump_path,
+                mode="live",
+                channel=channel,
+                station=station,
+            )
+        finally:
+            Timeshift.release_tune_lock()
+
     def tune(self, channel_name: str, adapter_id: Optional[int] = None) -> bool:
-        """Dumps the station to live.ts and plays the follow pipe in one PiP."""
+        """Dumps the station to live.ts. A live PiP remaps after the new dump exists."""
         from engine.enrichment import match_channel
-        Timeshift.acquire_tune_lock()
+
+        keep_window = self.is_running() and self.playback_mode() == "live"
+        if not Timeshift.acquire_tune_lock():
+            return True
         try:
             self.channels = self._load_channels()
             matched = match_channel(channel_name, self.channels)
             target_name = (matched.get("tune_name") or matched.get("name")) if matched else channel_name
             station = matched.get("display_name", "") if matched else ""
 
-            if self.is_running():
-                self.send_command(["quit"])
-                self._wait_until_stopped()
-
-            dump_path = Timeshift.start_dump(target_name, adapter_id=adapter_id)
+            if keep_window:
+                dump_path = Timeshift.retune_keep_window(target_name)
+            else:
+                dump_path = Timeshift.start_dump(target_name, adapter_id=adapter_id)
             if not dump_path:
                 return False
 
-            self._reap_stale_window()
+            # stdin lavf will not switch muxes. Recycle only after the new
+            # dump exists. Do not quit from HUD's `omarchy-tv play` child —
+            # that process dies with the window and never relaunches.
+            if keep_window:
+                self.spawn_pip_relaunch(target_name, station)
+                return True
             ok = self.launch_file(
                 dump_path,
                 mode="live",
@@ -500,8 +633,10 @@ class MpvController:
             "--hwdec=auto-safe",
             "--geometry=1280x720",
             "--keepaspect-window=no",
+            "--window-dragging=no",
             "--no-osc",
             "--osd-bar=no",
+            "--input-default-bindings=no",
             f"--script={hud_script}",
             "--osd-level=1",
             "--demuxer-lavf-o=scan_all_pmts=1,fflags=+genpts+discardcorrupt",
@@ -520,31 +655,23 @@ class MpvController:
                 "--demuxer-lavf-format=mpegts",
                 "--keep-open=yes",
                 "--keep-open-pause=no",
+                "--cache-pause=no",
             ])
             stdin = follow.stdout
         else:
             cmd.append("--force-seekable=yes")
+        Timeshift.ensure_dir()
+        log_path = os.path.join(TIMESHIFT_DIR, "hud.log")
+        cmd.append(f"--log-file={log_path}")
         cmd.append("--script-opts=" + ",".join(script_opts))
         cmd.append("-" if live_dump else file_path)
-        err_log = subprocess.DEVNULL
-        if live_dump:
-            err_path = os.path.join(os.path.dirname(file_path), "hud.log")
-            try:
-                err_log = open(err_path, "ab")
-            except OSError:
-                err_log = subprocess.DEVNULL
         self.proc = subprocess.Popen(
             cmd,
             stdin=stdin,
             stdout=subprocess.DEVNULL,
-            stderr=err_log,
+            stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        if err_log is not subprocess.DEVNULL:
-            try:
-                err_log.close()
-            except OSError:
-                pass
         if follow is not None and follow.stdout is not None:
             try:
                 follow.stdout.close()
@@ -678,17 +805,9 @@ class MpvController:
         res = self.send_command(["script-message", "tv-seek", str(seconds)])
         return res is not None and res.get("error") == "success"
 
-    def toggle_fullscreen(self) -> None:
-        subprocess.Popen(
-            [
-                "hyprctl",
-                "eval",
-                'hl.dispatch(hl.dsp.window.fullscreen({ mode = "fullscreen", action = "toggle", layout_aware = false, window = "class:^(omarchy-tv)$" }))',
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+    def toggle_fullscreen(self, target_tv: bool = False) -> None:
+        """Omarchy Super+F dispatcher. Unpin this PiP first — Hyprland no-ops fullscreen while pinned."""
+        _toggle_omarchy_fullscreen(target_tv=target_tv)
 
     def show_osd(self, text: str, duration_ms: int = 3000) -> None:
         self.send_command(["show-text", text, str(duration_ms)])

@@ -54,7 +54,7 @@ Hauppauge WinTV-dualHD is two adapters. `TunerManager.get_available_tuner()` pre
 | Role | Adapter | Why |
 | --- | --- | --- |
 | Live dump + pause-live file | 0 | Headless MPV `--stream-dump` of `dvb://` into `live.ts` |
-| Scan, EPG refresh, library record | 1 | Must not steal the live frontend |
+| Scan, EPG refresh, library record | 1 | Must not steal the live frontend. A recording holds this adapter; live `j`/`k` then retune Tuner 0. |
 
 Background work **must** drop `/dev/dvb/adapter*/frontend0` before MPV opens the same adapter (`EBUSY`).
 
@@ -81,11 +81,11 @@ The PiP is **always file-only MPV** (no `dvbin` in the window). Live is a never-
 
 A finished library recording, or a seek that reaches the end of that file, should call `return_to_live()` and retune the last live station. MPEG-TS often reports `duration` 0, so the HUD estimates length from file size at the ATSC rate (~19.39 Mbps), seeks by byte offset, and treats the last 15s skip (or EOF) as return-to-live.
 
-On live TV, a headless MPV dumps the station to `live.ts` while a follow process copies that file to the PiP’s stdin, waiting at EOF so the picture keeps moving. Pause stops the reader; the dump keeps writing. Skip is a byte-offset SEEK on the follow socket (same 188-byte TS alignment as a library recording). `l` / catch-up seeks the write head. `→` while already on the write head flashes LIVE and does not jump the bar. Channel change stops the dump, wipes `live.ts`, and starts a new dump + one new window. Do not play `dvb://` in the PiP — mpv 0.41 `dvbin` cache is not seekable. `drop-buffers` desyncs the tuner and must not be used.
+On live TV, a headless MPV dumps the station to `live.ts` while a follow process copies that file to the PiP’s stdin, waiting at EOF so the picture keeps moving. Pause stops the reader; the dump keeps writing. Skip is a byte-offset SEEK on the follow socket (same 188-byte TS alignment as a library recording). `l` / catch-up seeks the write head. `→` while already on the write head flashes LIVE and does not jump the bar. `j`/`k` flash the full channel banner immediately and do not retune until you stop on a station. The one committed tune locks the next station on Tuner 1 only when that tuner is idle, then `pip-relaunch` remaps the PiP onto the new dump (stdin lavf will not switch muxes; `loadfile -` quit this mpv; quitting from HUD `play` also died with the window). If Tuner 1 is recording, Tuner 0 retunes after you settle. Do not play `dvb://` in the PiP. `drop-buffers` desyncs the tuner and must not be used. `m` / middle-click mute only the TV stream (mpv `mute`), not the desktop.
 
 ### E. Reactive UI, atomic state
 
-Scanner, DVR, and player write JSON via `.tmp` + `os.replace`. Quickshell `FileView` binds those files. `player_state.json` is the now-playing contract; `omarchy-tv sync` / MPV shutdown / dead-pid reconcile clear it when the window is already gone. Cmd+W is Close TV for the leftover dump, but `sync` must not wipe a dump while a retune lock is held (channel click starts dump before the new window exists).
+Scanner, DVR, and player write JSON via `.tmp` + `os.replace`. Quickshell `FileView` binds those files. `player_state.json` is the now-playing contract; `omarchy-tv sync` / MPV shutdown / dead-pid reconcile clear it when the window is already gone. Cmd+W is Close TV for the leftover dump, but `sync` must not wipe a dump while a retune lock is held (channel click starts dump before the picture is ready).
 
 ### F. Zero privilege
 
@@ -98,17 +98,24 @@ QML uses `Color.*`, `Style.space()`, `Style.font.*`, `root.bar.*`. Plugin must n
 ### H. Hyprland PiP
 
 ```lua
-o.window("omarchy-tv", {
+o.window({ class = "^omarchy-tv$", fullscreen = false }, {
+  tag = "-default-opacity",
   float = true,
   pin = true,
-  size = { 720, 405 },
   keep_aspect_ratio = true,
+  border_size = 0,
+  size = { "(monitor_h*32/27)", "(monitor_h*2/3)" },
   opacity = "1 1",
   move = { "(monitor_w-window_w-40)", "(monitor_h-window_h-40)" },
 })
+o.window("omarchy-tv", {
+  no_shortcuts_inhibit = true,
+  tag = "-default-opacity",
+  opacity = "1 1",
+})
 ```
 
-Fullscreen is a compositor toggle (`hyprctl eval` on that class), not MPV’s own fullscreen, so geometry restores.
+Same pattern as Omarchy Chrome PiP (`pip.lua`). Pin is static: Super+F no-ops until the PiP is unpinned. Super+F is the only fullscreen chord (`omarchy-tv fullscreen` unpins, then `hl.dsp.window.fullscreen({ mode = "fullscreen" })` — the same dispatcher as tiling.lua). Do not bind HUD `f` or double-click. mpv `--window-dragging=no`; move is Omarchy Super+LMB. Pointer-enter flashes the TV chords with `show-text`. Windowed mpv writes `~/.cache/omarchy/tv/timeshift/hud.log` via `--log-file`.
 
 ---
 

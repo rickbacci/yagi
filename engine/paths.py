@@ -22,6 +22,7 @@ UI_PREFS_PATH = os.path.join(CONFIG_DIR, "ui_prefs.json")
 _XDG_CACHE = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
 TIMESHIFT_DIR = os.path.join(_XDG_CACHE, "omarchy", "tv", "timeshift")
 TIMESHIFT_FILE = os.path.join(TIMESHIFT_DIR, "live.ts")
+TIMESHIFT_NEXT_FILE = os.path.join(TIMESHIFT_DIR, "live.next.ts")
 TIMESHIFT_ACTIVE_PATH = os.path.join(CONFIG_DIR, "timeshift_active.json")
 
 
@@ -43,5 +44,7 @@ def get_runtime_socket(name: str) -> str:
 MPV_SOCKET_PATH = get_runtime_socket("omarchy-tv-mpv.sock")
 DAEMON_SOCKET_PATH = get_runtime_socket("omarchy-tv-daemon.sock")
 TIMESHIFT_SOCKET_PATH = get_runtime_socket("omarchy-tv-timeshift.sock")
+TIMESHIFT_NEXT_SOCKET_PATH = get_runtime_socket("omarchy-tv-timeshift-next.sock")
 FOLLOW_SOCKET_PATH = get_runtime_socket("omarchy-tv-follow.sock")
+FOLLOW_FIFO_PATH = get_runtime_socket("omarchy-tv-follow.fifo")
 TUNE_LOCK_PATH = get_runtime_socket("omarchy-tv-tune.lock")

@@ -28,14 +28,30 @@ def align_ts_offset(n: int) -> int:
 
 
 class TsFollower:
-    def __init__(self, path: str, start_byte: int, sock_path: str):
+    def __init__(self, path: str, start_byte: int, sock_path: str, dest_fifo: Optional[str] = None):
         self.path = path
         self.pos = align_ts_offset(start_byte)
         self.sock_path = sock_path
+        self.dest_fifo = dest_fifo or ""
         self._fd: Optional[int] = None
+        self._out_fd: Optional[int] = None
         self._srv: Optional[socket.socket] = None
         self._lock = threading.Lock()
+        self._reopen_gate = threading.Lock()
         self._running = True
+        self._paused = False
+
+    def _open_dest(self) -> None:
+        if not self.dest_fifo:
+            return
+        while self._running:
+            try:
+                self._out_fd = os.open(self.dest_fifo, os.O_WRONLY)
+                return
+            except FileNotFoundError:
+                time.sleep(0.05)
+            except OSError:
+                time.sleep(0.05)
 
     def _open_file(self) -> None:
         while self._running:
@@ -62,6 +78,40 @@ class TsFollower:
         srv.listen(4)
         srv.settimeout(0.2)
         self._srv = srv
+
+    def _reopen_from_start(self) -> None:
+        """Drop the current inode and wait for PATH to exist again (channel change)."""
+        with self._reopen_gate:
+            with self._lock:
+                if self._fd is not None:
+                    try:
+                        os.close(self._fd)
+                    except OSError:
+                        pass
+                    self._fd = None
+                self.pos = 0
+            self._open_file()
+
+    def _maybe_reopen(self) -> None:
+        """Follow a replaced or truncated live.ts instead of sitting on a dead inode."""
+        with self._lock:
+            fd = self._fd
+            pos = self.pos
+        try:
+            st = os.stat(self.path)
+        except FileNotFoundError:
+            self._reopen_from_start()
+            return
+        if fd is None:
+            self._open_file()
+            return
+        try:
+            fd_st = os.fstat(fd)
+        except OSError:
+            self._reopen_from_start()
+            return
+        if st.st_ino != fd_st.st_ino or st.st_size < pos:
+            self._reopen_from_start()
 
     def _apply_seek(self, byte: int) -> None:
         target = align_ts_offset(byte)
@@ -91,6 +141,13 @@ class TsFollower:
                     data = conn.recv(256).decode("utf-8", "replace").strip()
                 except OSError:
                     continue
+            if data.upper().startswith("PAUSE"):
+                self._paused = True
+                continue
+            if data.upper().startswith("REOPEN"):
+                self._paused = False
+                self._reopen_from_start()
+                continue
             if data.upper().startswith("SEEK"):
                 parts = data.split()
                 try:
@@ -102,11 +159,15 @@ class TsFollower:
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
         self._bind_sock()
         self._open_file()
+        self._open_dest()
         ctl = threading.Thread(target=self._ctl_loop, name="follow-ctl", daemon=True)
         ctl.start()
         stdout = sys.stdout.buffer
         try:
             while self._running:
+                if self._paused:
+                    time.sleep(0.04)
+                    continue
                 with self._lock:
                     fd = self._fd
                     if fd is None:
@@ -120,11 +181,23 @@ class TsFollower:
                             self.pos += len(buf)
                 if buf:
                     try:
-                        stdout.write(buf)
-                        stdout.flush()
-                    except BrokenPipeError:
-                        return
+                        if self._out_fd is not None:
+                            os.write(self._out_fd, buf)
+                        else:
+                            stdout.write(buf)
+                            stdout.flush()
+                    except (BrokenPipeError, OSError):
+                        if not self.dest_fifo:
+                            return
+                        if self._out_fd is not None:
+                            try:
+                                os.close(self._out_fd)
+                            except OSError:
+                                pass
+                            self._out_fd = None
+                        self._open_dest()
                 else:
+                    self._maybe_reopen()
                     time.sleep(0.04)
         finally:
             self._running = False
@@ -134,6 +207,12 @@ class TsFollower:
                 except OSError:
                     pass
                 self._fd = None
+            if self._out_fd is not None:
+                try:
+                    os.close(self._out_fd)
+                except OSError:
+                    pass
+                self._out_fd = None
             if self._srv is not None:
                 try:
                     self._srv.close()
@@ -149,9 +228,10 @@ class TsFollower:
 def main(argv: Optional[List[str]] = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) < 3:
-        sys.stderr.write("usage: follow_ts.py PATH START_BYTE SOCK\n")
+        sys.stderr.write("usage: follow_ts.py PATH START_BYTE SOCK [FIFO]\n")
         return 2
-    TsFollower(args[0], int(args[1]), args[2]).run()
+    fifo = args[3] if len(args) > 3 else None
+    TsFollower(args[0], int(args[1]), args[2], fifo).run()
     return 0
 
 

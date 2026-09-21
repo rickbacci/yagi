@@ -20,7 +20,7 @@ Omarchy TV is a native ATSC 1.0 live-TV suite. Click the antenna on the Omarchy 
 
 **Record.** Tuner 1 dumps the live multiplex to `~/Videos/TV` while you keep watching on Tuner 0. Start and stop from the flyout, the HUD (`r` on live TV), or `omarchy-tv record`. Play a finished file from the Recordings library. When that file ends, playback returns to the last live station.
 
-**Pause live.** Tuner 0 is a headless dump into `~/.cache/omarchy/tv/timeshift/live.ts`. The PiP reads a follow pipe of that file so playback does not freeze at EOF. Pause freezes the picture; skip seeks in the dump; `→` at live flashes LIVE rather than filling the bar; `l` seeks the write head. Channel change wipes the dump. Tuner 1 stays free to record. The dump is not a library recording.
+**Pause live.** Tuner 0 is a headless dump into `~/.cache/omarchy/tv/timeshift/live.ts`. The PiP reads a follow pipe of that file so playback does not freeze at EOF. Pause freezes the picture; skip seeks in the dump; `→` at live flashes LIVE rather than filling the bar; `l` seeks the write head. Channel change fills a new dump, then remaps the PiP. Tuner 1 stays free to record. The dump is not a library recording.
 
 **Library cap.** Recordings are pruned oldest-first against an automatic budget (about 20 GB, smaller on tight disks), or a fixed size, or unlimited.
 
@@ -96,13 +96,20 @@ omarchy bar put richardb.omarchy-tv --section right
 In `~/.config/hypr/hyprland.lua`:
 
 ```lua
-o.window("omarchy-tv", {
+o.window({ class = "^omarchy-tv$", fullscreen = false }, {
+  tag = "-default-opacity",
   float = true,
   pin = true,
-  size = { 720, 405 },
   keep_aspect_ratio = true,
+  border_size = 0,
+  size = { "(monitor_h*32/27)", "(monitor_h*2/3)" },
   opacity = "1 1",
   move = { "(monitor_w-window_w-40)", "(monitor_h-window_h-40)" },
+})
+o.window("omarchy-tv", {
+  no_shortcuts_inhibit = true,
+  tag = "-default-opacity",
+  opacity = "1 1",
 })
 ```
 
@@ -130,6 +137,7 @@ omarchy-tv list                            # saved channels
 omarchy-tv guide                           # now/next EPG dump
 omarchy-tv play "8.1 FOX"
 omarchy-tv next | prev | stop
+omarchy-tv fullscreen              # Super+F path; unpins the TV PiP first if it is focused
 omarchy-tv pause                           # freeze live; dump keeps filling
 omarchy-tv live                            # seek dump write head, or retune after a file
 omarchy-tv seek 15                         # skip 15s in the live dump or a recording
@@ -147,18 +155,19 @@ omarchy-tv pref library-max auto|20|50|off
 
 ## Player HUD keys
 
-These chords are painted on the MPV HUD only. The shell plugin does not duplicate them.
+These chords flash on the picture when the pointer enters the PiP (`show-text`). The shell plugin does not duplicate them. Super+K is Omarchy’s cheatsheet, not TV. Fullscreen is Super+F / Cmd+F only (the wrapper unpins this PiP first — Hyprland will not fullscreen a pinned window). Bare `f` does nothing on the player. Move the PiP with Super+LMB, not a plain left drag. `j`/`k` flash the full channel banner; the tuner moves after you stop on a station.
 
 | Key | Live TV | Recording |
 | --- | --- | --- |
 | `Space` | Pause (dump keeps filling) / Play | Pause / resume |
-| `j` / `k` or ↓ / ↑ | Previous / next channel (new dump) | Same — returns to live first |
+| `j` / `k` or ↓ / ↑ | Banner through channels; tunes after you stop | Same — commit returns to live |
 | ← / → | ±15 s in the dump; last skip toward live seeks the write head | −15 / +15 s; last skip retunes live |
 | `l` | Seek the dump write head (live) | Return to live (new dump) |
 | `r` | Start or stop a library recording | ignored |
-| `f` / double-click | Hyprland fullscreen toggle | same |
+| Super+F / Cmd+F | Omarchy fullscreen (unpins this PiP first) | same |
 | `c` | Cycle subtitles | same |
-| Wheel / middle-click | Volume / mute | same |
+| `m` / middle-click | Mute only this TV window | same |
+| Wheel | Volume | same |
 
 MPEG-TS files often have no duration. The HUD estimates length from file size (~19.39 Mbps) and counts 15s skips. Catching that end, or EOF, retunes the last live station.
 

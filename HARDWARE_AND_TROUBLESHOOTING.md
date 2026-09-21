@@ -132,7 +132,10 @@ omarchy-shell shell broadcast richardb.omarchy-tv next
 ## 8. Playback gotchas
 
 * **No window / flyout thinks you are watching** — `--force-window=yes` waits for a video frame. Live uses `--force-window=immediate` on the follow pipe so the PiP maps as soon as MPV starts. An idle PiP (`--idle=yes`, no file) is still wrong — that is a second black window. A second click on the same channel while tuning used to kill the CLI and leave the dump holding the tuner. Close extras, then `omarchy-tv play`. Live is the follow pipe, not a snapshot of `live.ts` (`keep-open` hits EOF in about a second).
-* **→ fills the bar / no red LIVE** — lua HUD loads at MPV start. Close TV and retune after HUD edits. → at the write head should flash LIVE, not skip. ← then → walks the dump in 15 s steps.
+* **→ fills the bar / no red LIVE / `j` is captions** — lua HUD loads at MPV start. Close TV and retune after HUD edits. Stock mpv keys are off (`--input-default-bindings=no`). Lua errors go to `~/.cache/omarchy/tv/timeshift/hud.log` (`--log-file`). → at the write head should flash LIVE, not skip. Pointer-enter flashes `j/k` and the rest.
+* **Left-drag moves the PiP without Super** — mpv `--window-dragging` default is yes. Live launch must pass `--window-dragging=no`. Omarchy move is Super+LMB.
+* **Super+F does nothing** — Hyprland will not fullscreen a pinned window. Pin is static (applied at map). `omarchy-tv fullscreen` unpins, then the same dispatcher as Omarchy Super+F. Bare `f` is not a TV fullscreen key.
+* **`j`/`k` freeze, no sound, picture never changes** — flash the full HUD banner; tune once after you stop. After the new dump exists, `pip-relaunch` remaps the PiP (stdin lavf will not switch muxes; `loadfile -` quit; quitting from HUD `play` killed the relaunch; a named FIFO probed corrupt and exited). `m` mutes only this window. HUD lua loads at MPV start.
 * **Black screen on a recording** — dump was empty (under 256 KB) or MPV was still in dvbin mode. Library playback must be a file-only MPV instance.
 * **Seek never reaches live** — live path is the follow pipe (`-`), not `dvb://`. `l` seeks the write head. Close TV and retune once if an old MPV process is still running.
 * **Pause does not resume** — Space only cycles the PiP pause. Adapter 0 must still be dumping. Check `omarchy-tv status` if adapter 0 is stuck.

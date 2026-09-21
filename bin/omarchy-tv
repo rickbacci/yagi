@@ -263,6 +263,13 @@ def cmd_play(args):
         sys.exit(1)
 
 
+def cmd_pip_relaunch(args):
+    """Internal: remap the PiP after a live dump is already filling."""
+    player = MpvController()
+    if not player.relaunch_pip(args.channel, args.station or ""):
+        sys.exit(1)
+
+
 def cmd_live(args):
     player = MpvController()
     target = getattr(args, "channel", None)
@@ -274,6 +281,10 @@ def cmd_live(args):
 
 def cmd_pause(args):
     MpvController().toggle_pause()
+
+
+def cmd_fullscreen(args):
+    MpvController().toggle_fullscreen(target_tv=bool(getattr(args, "player", False)))
 
 
 def cmd_seek(args):
@@ -464,12 +475,28 @@ def main():
     p_play.add_argument("channel", help="Channel name or callsign to tune")
     p_play.set_defaults(func=cmd_play)
 
+    p_relaunch = subparsers.add_parser("pip-relaunch", help=argparse.SUPPRESS)
+    p_relaunch.add_argument("channel")
+    p_relaunch.add_argument("--station", default="")
+    p_relaunch.set_defaults(func=cmd_pip_relaunch)
+
     p_live = subparsers.add_parser("live", help="Seek live dump write head, or retune after a recording")
     p_live.add_argument("channel", nargs="?", help="Optional channel; defaults to last live station")
     p_live.set_defaults(func=cmd_live)
 
     p_pause = subparsers.add_parser("pause", help="Pause or resume (live dump keeps filling)")
     p_pause.set_defaults(func=cmd_pause)
+
+    p_fs = subparsers.add_parser(
+        "fullscreen",
+        help="Omarchy fullscreen on the focused window; unpin the TV PiP first if it is focused",
+    )
+    p_fs.add_argument(
+        "--player",
+        action="store_true",
+        help="Target the omarchy-tv window even if it is not focused",
+    )
+    p_fs.set_defaults(func=cmd_fullscreen)
 
     p_seek = subparsers.add_parser("seek", help="Seek the live dump or a recording by seconds")
     p_seek.add_argument("seconds", type=float, help="Relative seconds, e.g. 10 or -10")

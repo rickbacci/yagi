@@ -19,7 +19,10 @@ from player.controller import (
     is_dvb_path,
     is_follow_path,
     channel_index,
+    _toggle_omarchy_fullscreen,
+    OMARCHY_FULLSCREEN_LUA,
 )
+from engine.paths import FOLLOW_FIFO_PATH
 from engine.enrichment import enrich_and_sort_channels
 from engine.timeshift import Timeshift
 
@@ -143,6 +146,7 @@ class TestPathAndIndexHelpers(unittest.TestCase):
         self.assertFalse(is_dvb_path("/home/richardb/Videos/TV/show.ts"))
         self.assertTrue(is_follow_path("-"))
         self.assertTrue(is_follow_path("fd://0"))
+        self.assertTrue(is_follow_path(FOLLOW_FIFO_PATH))
         self.assertFalse(is_follow_path("dvb://WKYC-HD"))
 
     def test_channel_index_uses_enriched_fields(self):
@@ -291,12 +295,16 @@ class TestMpvPlayerController(unittest.TestCase):
         mock_follow.assert_called_once()
         cmd = mock_popen.call_args[0][0]
         self.assertIn("--force-window=immediate", cmd)
+        self.assertIn("--window-dragging=no", cmd)
         self.assertNotIn("--idle=yes", cmd)
         self.assertFalse(any(str(arg).startswith("--dvbin-") for arg in cmd))
         self.assertEqual(cmd[-1], "-")
         self.assertIn("--demuxer-lavf-format=mpegts", cmd)
+        self.assertIn("--cache-pause=no", cmd)
         self.assertTrue(any("tv_hud-timeshift-file=" in str(arg) for arg in cmd))
         self.assertTrue(any("tv_hud-follow-sock=" in str(arg) for arg in cmd))
+        self.assertIn("--input-default-bindings=no", cmd)
+        self.assertTrue(any(str(arg).startswith("--log-file=") for arg in cmd))
         self.assertTrue(any(str(arg).startswith("--script-opts=tv_hud-cli=") for arg in cmd))
 
     def test_update_player_state_atomic(self):
@@ -433,13 +441,36 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
     def test_get_active_channel_name_skips_mpv_events(self):
         self.assertEqual(self.controller.get_active_channel_name(), "WKYC-HD")
 
-    def test_channel_up_loadfiles_timeshift_dump(self):
-        with patch.object(self.controller, "launch_file", return_value=True) as mock_launch:
+    def test_channel_up_spawns_relaunch_instead_of_quitting_in_play(self):
+        with patch.object(self.controller, "launch_file", return_value=True) as mock_launch, \
+             patch("player.controller.subprocess.Popen") as mock_popen, \
+             patch("player.controller.Timeshift.retune_keep_window", return_value=self.dump_path) as mock_retune, \
+             patch("player.controller.Timeshift.load_state", return_value={"follow_pid": 99}), \
+             patch("player.controller.Timeshift._pid_alive", return_value=True), \
+             patch("player.controller.update_player_state"):
             self.controller.channel_up()
-        mock_launch.assert_called()
-        self.assertEqual(mock_launch.call_args[0][0], self.dump_path)
-        self.assertFalse(any(str(item).startswith("dvb://") for item in mock_launch.call_args[0]))
+        mock_retune.assert_called()
+        mock_launch.assert_not_called()
+        argv = mock_popen.call_args[0][0]
+        self.assertIn("pip-relaunch", argv)
+        self.assertTrue(mock_popen.call_args.kwargs.get("start_new_session"))
+        self.assertFalse(
+            any((c.get("command") or [None])[0] == "quit" for c in self.server.commands)
+        )
         self.assertEqual(self.controller.current_channel_index, 1)
+
+    def test_relaunch_pip_quits_then_launches(self):
+        with patch.object(self.controller, "launch_file", return_value=True) as mock_launch, \
+             patch("player.controller.Timeshift.acquire_tune_lock", return_value=True), \
+             patch("player.controller.Timeshift.release_tune_lock"), \
+             patch("player.controller.Timeshift.load_state", return_value={"path": self.dump_path}), \
+             patch("player.controller.update_player_state"):
+            self.assertTrue(self.controller.relaunch_pip("WEWSHD", "WEWS"))
+        self.assertTrue(
+            any((c.get("command") or [None])[0] == "quit" for c in self.server.commands)
+        )
+        mock_launch.assert_called_once()
+        self.assertEqual(mock_launch.call_args.kwargs.get("channel"), "WEWSHD")
 
     def test_play_file_rejects_path_outside_library(self):
         with patch("player.controller.RECORDINGS_DIR", self.tmp_dir.name):
@@ -531,30 +562,39 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self.assertIn(["script-message", "tv-seek", "15"], sent)
 
     def test_channel_down_wraps_to_last_station(self):
-        with patch.object(self.controller, "launch_file", return_value=True) as mock_launch:
+        with patch("player.controller.Timeshift.retune_keep_window", return_value=self.dump_path), \
+             patch("player.controller.Timeshift.load_state", return_value={"follow_pid": 99}), \
+             patch("player.controller.Timeshift._pid_alive", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_reopen", return_value=True), \
+             patch("player.controller.update_player_state"):
             self.controller.channel_down()
-        self.assertEqual(mock_launch.call_args[0][0], self.dump_path)
         self.assertEqual(self.controller.current_channel_index, len(ENRICHED_CHANNELS) - 1)
 
     def test_channel_up_from_url_encoded_cozi(self):
         self._ch_patcher.stop()
         self._ch_patcher = patch("player.controller.Timeshift.current_channel", return_value="COZI TV")
         self._ch_patcher.start()
-        with patch.object(self.controller, "launch_file", return_value=True) as mock_launch:
+        with patch("player.controller.Timeshift.retune_keep_window", return_value=self.dump_path) as mock_retune, \
+             patch("player.controller.Timeshift.load_state", return_value={"follow_pid": 99}), \
+             patch("player.controller.Timeshift._pid_alive", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_reopen", return_value=True), \
+             patch("player.controller.update_player_state"):
             self.controller.channel_up()
-        self.assertEqual(mock_launch.call_args[0][0], self.dump_path)
+        mock_retune.assert_called()
 
 
 class TestLuaChannelKeys(unittest.TestCase):
     def test_jk_surf_inside_mpv_not_via_blocking_cli(self):
         with open(LUA_HUD, encoding="utf-8") as f:
             src = f.read()
-        self.assertIn('mp.add_forced_key_binding("j", "tv_surf_prev_j", surf_prev)', src)
-        self.assertIn('mp.add_forced_key_binding("k", "tv_surf_next_k", surf_next)', src)
+        self.assertIn('mp.add_forced_key_binding("j", "tv_surf_prev_j", surf_prev, {repeatable = false})', src)
+        self.assertIn('mp.add_forced_key_binding("k", "tv_surf_next_k", surf_next, {repeatable = false})', src)
         self.assertIn('mp.commandv("loadfile"', src)
         self.assertIn("is_timeshift_playback", src)
         self.assertIn("is_library_playback", src)
         self.assertIn("timeshift_behind", src)
+        self.assertIn("local function virt_update()", src)
+        self.assertLess(src.find("local function virt_update()"), src.find("local function timeshift_behind"))
         self.assertIn("tv_return_live", src)
         self.assertIn('"live"', src)
         self.assertIn("tv_pause", src)
@@ -564,7 +604,14 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("seek_live_edge", src)
         self.assertIn("behind_live", src)
         self.assertIn("tv-live-edge", src)
-        self.assertIn('delta > 0 and "next" or "prev"', src)
+        self.assertIn("tv-retuned", src)
+        self.assertIn("SURF_COMMIT_DELAY", src)
+        self.assertIn("format_ch_banner", src)
+        self.assertIn("surf_preview", src)
+        self.assertIn("repeatable = false", src)
+        self.assertIn('"play", target', src)
+        self.assertNotIn("add_timeout(0.2, commit_surf)", src)
+        self.assertNotIn('delta > 0 and "next" or "prev"', src)
         self.assertIn('mp.commandv("set", "pause", "no")', src)
         self.assertIn("seek", src)
         self.assertIn("go_live", src)
@@ -575,6 +622,7 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("tv_cli", src)
         self.assertIn("local function surf_next()\n    surf(1)\nend", src)
         self.assertIn("if is_file_playback() then", src)
+        self.assertIn("surf_busy", src)
         self.assertIn("timeshift_active.json", src)
         self.assertIn("SEEK_STEP = 15", src)
         self.assertIn("file_progress", src)
@@ -584,6 +632,9 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("timeshift-file", src)
         self.assertIn("follow-sock", src)
         self.assertIn("pcall(show_hud)", src)
+        self.assertIn("KEY_LEGEND", src)
+        self.assertIn("tv_hud osd-overlay failed", src)
+        self.assertIn("pointer_in", src)
         self.assertIn("show_hud:", src)
         self.assertIn("prog.end_time or", src)
         self.assertIn("live_overlay", src)
@@ -603,17 +654,85 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertNotIn("Unseekable live buffer", src)
         self.assertNotIn("drop-buffers", src)
         self.assertNotIn('mp.command("cycle fullscreen")', src)
+        self.assertNotIn("toggle_window_fullscreen", src)
+        self.assertNotIn("tv_fs_key", src)
+        self.assertNotIn("MBTN_LEFT_DBL", src)
+        self.assertNotIn("HYPR_FS_TOGGLE", src)
+        self.assertNotIn("hyprctl", src)
+        self.assertIn("Super+F full", src)
+        self.assertIn("m mute", src)
+        self.assertIn('add_forced_key_binding("m", "tv_mute_toggle"', src)
+        self.assertIn("omarchy-tv-follow.fifo", src)
         self.assertIn("video-codec", src)
         self.assertIn("show_live_badge", src)
         self.assertIn("joined_live_flash", src)
         self.assertIn("osd_message", src)
         self.assertIn('"LIVE"', src)
         self.assertIn('"record", "stop"', src)
-        self.assertIn("MBTN_LEFT_DBL", src)
-        self.assertIn("toggle_window_fullscreen", src)
-        self.assertIn("hyprctl", src)
         self.assertIn("LIVE_SLACK", src)
         self.assertIn("is_library_playback()", src)
+
+
+class TestOmarchyFullscreen(unittest.TestCase):
+    @patch("player.controller.subprocess.run")
+    def test_unpins_tv_then_uses_omarchy_dispatcher(self, mock_run):
+        tv = {
+            "class": "omarchy-tv",
+            "address": "0xabc",
+            "pinned": True,
+            "fullscreen": 0,
+        }
+        after = {**tv, "pinned": False, "fullscreen": 2}
+
+        def fake_run(cmd, capture_output=True, text=True):
+            m = MagicMock()
+            m.returncode = 0
+            m.stderr = ""
+            if cmd[:3] == ["hyprctl", "activewindow", "-j"]:
+                m.stdout = json.dumps(tv)
+            elif cmd[:3] == ["hyprctl", "clients", "-j"]:
+                m.stdout = json.dumps([after])
+            else:
+                m.stdout = "ok"
+            return m
+
+        mock_run.side_effect = fake_run
+        _toggle_omarchy_fullscreen(target_tv=True)
+        dispatched = [
+            call.args[0][2]
+            for call in mock_run.call_args_list
+            if call.args[0][:2] == ["hyprctl", "dispatch"]
+        ]
+        self.assertEqual(
+            dispatched[0],
+            'hl.dsp.window.pin({ window = "address:0xabc" })',
+        )
+        self.assertEqual(
+            dispatched[1],
+            'hl.dsp.window.fullscreen({ mode = "fullscreen", window = "address:0xabc" })',
+        )
+        self.assertEqual(len(dispatched), 2)
+
+    @patch("player.controller.subprocess.run")
+    def test_other_windows_keep_stock_omarchy_fullscreen(self, mock_run):
+        def fake_run(cmd, capture_output=True, text=True):
+            m = MagicMock()
+            m.returncode = 0
+            m.stderr = ""
+            if cmd[:3] == ["hyprctl", "activewindow", "-j"]:
+                m.stdout = json.dumps({"class": "kitty", "pinned": False, "fullscreen": 0})
+            else:
+                m.stdout = "ok"
+            return m
+
+        mock_run.side_effect = fake_run
+        _toggle_omarchy_fullscreen()
+        dispatched = [
+            call.args[0][2]
+            for call in mock_run.call_args_list
+            if call.args[0][:2] == ["hyprctl", "dispatch"]
+        ]
+        self.assertEqual(dispatched, [OMARCHY_FULLSCREEN_LUA])
 
 
 class TestCliNextPrev(unittest.TestCase):
@@ -630,6 +749,7 @@ class TestCliNextPrev(unittest.TestCase):
         self.assertIn("next", res.stdout)
         self.assertIn("prev", res.stdout)
         self.assertIn("live", res.stdout)
+        self.assertIn("fullscreen", res.stdout)
         self.assertIn("sync", res.stdout)
 
 
