@@ -13,6 +13,7 @@ import signal
 import threading
 import sys
 import subprocess
+import shutil
 from datetime import datetime
 from typing import List, Dict, Optional, Any, Set
 
@@ -23,6 +24,8 @@ from engine.paths import (
     MPV_CHANNELS_CONF,
     RECORDINGS_DIR,
     RECORDINGS_ACTIVE_PATH,
+    RECORDINGS_INDEX_PATH,
+    UI_PREFS_PATH,
     get_runtime_socket,
 )
 from engine.tuner import TunerManager
@@ -42,9 +45,67 @@ def format_bytes(bytes_count: int) -> str:
         return f"{bytes_count / (1024 * 1024 * 1024):.2f} GB"
 
 
+# PAT/PMT-only dumps are ~4 KB. Real ATSC MPEG-TS grows by megabytes per second.
+MIN_PLAYABLE_BYTES = 256 * 1024
+GIB = 1024 ** 3
+DEFAULT_LIBRARY_BUDGET_GIB = 20
+MIN_LIBRARY_BUDGET_GIB = 2
+KEEP_FREE_GIB = 8
+
+
+def load_ui_prefs(prefs_path: Optional[str] = None) -> Dict[str, Any]:
+    target = prefs_path or UI_PREFS_PATH
+    if os.path.exists(target):
+        try:
+            with open(target, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {}
+
+
+def default_library_budget_bytes(recordings_dir: str) -> int:
+    """Small starting cap: 20 GB, shrunk when the volume is tight."""
+    try:
+        os.makedirs(recordings_dir, exist_ok=True)
+        usage = shutil.disk_usage(recordings_dir)
+    except OSError:
+        return DEFAULT_LIBRARY_BUDGET_GIB * GIB
+    small = DEFAULT_LIBRARY_BUDGET_GIB * GIB
+    volume_cap = max(MIN_LIBRARY_BUDGET_GIB * GIB, int(usage.total * 0.15))
+    keep_free = KEEP_FREE_GIB * GIB
+    if usage.free < keep_free + MIN_LIBRARY_BUDGET_GIB * GIB:
+        return max(GIB, int(usage.free * 0.5))
+    free_cap = max(MIN_LIBRARY_BUDGET_GIB * GIB, usage.free - keep_free)
+    return int(min(small, volume_cap, free_cap))
+
+
+def resolve_library_budget_bytes(
+    recordings_dir: Optional[str] = None,
+    prefs: Optional[Dict[str, Any]] = None,
+) -> Optional[int]:
+    """Returns the library cap in bytes, or None when pruning is off."""
+    rec_dir = recordings_dir or RECORDINGS_DIR
+    prefs = prefs if prefs is not None else load_ui_prefs()
+    raw = prefs.get("library_max_gb", "auto")
+    if raw in (0, 0.0, "0", "off", "none", "unlimited"):
+        return None
+    if raw in (None, "", "auto"):
+        return default_library_budget_bytes(rec_dir)
+    try:
+        gb = float(raw)
+    except (TypeError, ValueError):
+        return default_library_budget_bytes(rec_dir)
+    if gb <= 0:
+        return None
+    return int(gb * GIB)
+
+
 def sanitize_filename(name: str) -> str:
     """Sanitize string for safe cross-platform filesystem filenames."""
-    clean = re.sub(r'[\\/*?:"<>|]', "", name)
+    clean = re.sub(r"[\\/*?:\"<>|'`’]", "", name)
     clean = re.sub(r"\s+", "_", clean).strip("._-")
     return clean or "recording"
 
@@ -267,6 +328,7 @@ class DvrManager:
 
         # Ensure recordings directory exists
         os.makedirs(rec_dir, mode=0o755, exist_ok=True)
+        cls.enforce_library_budget(recordings_dir=rec_dir, active_path=act_path)
 
         # 1. Match channel
         channels: List[Dict[str, Any]] = []
@@ -341,6 +403,7 @@ class DvrManager:
             f"--stream-dump={file_path}",
             "--vo=null",
             "--ao=null",
+            "--cache=yes",
             f"--input-ipc-server={socket_path}",
             f"--dvbin-card={adapter_id}",
             f"--dvbin-file={m_path}",
@@ -355,6 +418,9 @@ class DvrManager:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        exited = proc.poll()
+        if isinstance(exited, int):
+            raise RuntimeError("Recorder exited before the tuner locked. Try again when a tuner is free.")
 
         session = DvrSession(
             session_id=session_id,
@@ -372,6 +438,8 @@ class DvrManager:
 
         current_sessions.append(session)
         cls.save_active_sessions(current_sessions, act_path)
+        if os.path.realpath(rec_dir) == os.path.realpath(RECORDINGS_DIR):
+            cls.refresh_library_index(recordings_dir=rec_dir)
 
         # 6. If duration is set, schedule background termination via detached timer process
         if duration and duration > 0:
@@ -421,6 +489,7 @@ class DvrManager:
                 remaining.append(s)
 
         cls.save_active_sessions(remaining, act_path)
+        cls.refresh_library_index()
         return stopped
 
     @classmethod
@@ -451,6 +520,7 @@ class DvrManager:
                         "path": entry.path,
                         "size_bytes": stat.st_size,
                         "size_formatted": format_bytes(stat.st_size),
+                        "playable": stat.st_size >= MIN_PLAYABLE_BYTES,
                         "mtime": stat.st_mtime,
                         "date_formatted": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
                         "channel_number": ch_num,
@@ -462,6 +532,95 @@ class DvrManager:
 
         results.sort(key=lambda x: x["mtime"], reverse=True)
         return results
+
+    @classmethod
+    def enforce_library_budget(
+        cls,
+        recordings_dir: Optional[str] = None,
+        prefs: Optional[Dict[str, Any]] = None,
+        keep_paths: Optional[Set[str]] = None,
+        active_path: Optional[str] = None,
+    ) -> List[str]:
+        """Deletes oldest finished recordings until the library is within cap."""
+        rec_dir = recordings_dir or RECORDINGS_DIR
+        budget = resolve_library_budget_bytes(rec_dir, prefs=prefs)
+        if budget is None:
+            return []
+
+        protected: Set[str] = set()
+        for path in keep_paths or []:
+            try:
+                protected.add(os.path.realpath(path))
+            except OSError:
+                continue
+        for session in cls.load_active_sessions(active_path or RECORDINGS_ACTIVE_PATH):
+            if session.is_active() and session.file_path:
+                try:
+                    protected.add(os.path.realpath(session.file_path))
+                except OSError:
+                    continue
+
+        recordings = cls.list_recordings(recordings_dir=rec_dir)
+        used = sum(item["size_bytes"] for item in recordings)
+        if used <= budget:
+            return []
+
+        removed: List[str] = []
+        for item in sorted(recordings, key=lambda rec: rec.get("mtime") or 0):
+            if used <= budget:
+                break
+            path = item.get("path") or ""
+            try:
+                real_path = os.path.realpath(path)
+            except OSError:
+                continue
+            if real_path in protected:
+                continue
+            try:
+                os.remove(real_path)
+            except OSError:
+                continue
+            used -= int(item.get("size_bytes") or 0)
+            removed.append(real_path)
+        return removed
+
+    @classmethod
+    def refresh_library_index(
+        cls,
+        recordings_dir: Optional[str] = None,
+        index_path: Optional[str] = None,
+        prefs: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Writes recordings.json atomically for the Quickshell library view."""
+        rec_dir = recordings_dir or RECORDINGS_DIR
+        cls.enforce_library_budget(recordings_dir=rec_dir, prefs=prefs)
+        recordings = cls.list_recordings(recordings_dir=rec_dir)
+        used = sum(item["size_bytes"] for item in recordings)
+        budget = resolve_library_budget_bytes(rec_dir, prefs=prefs)
+        raw_cap = (prefs if prefs is not None else load_ui_prefs()).get("library_max_gb", "auto")
+        target_path = index_path or RECORDINGS_INDEX_PATH
+        os.makedirs(os.path.dirname(os.path.abspath(target_path)), exist_ok=True)
+        tmp_path = f"{target_path}.tmp.{os.getpid()}"
+        payload = {
+            "recordings": recordings,
+            "updated_at": time.time(),
+            "library_bytes": used,
+            "library_bytes_formatted": format_bytes(used),
+            "library_budget_bytes": budget,
+            "library_budget_formatted": format_bytes(budget) if budget else "Unlimited",
+            "library_max_gb": raw_cap,
+        }
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            os.replace(tmp_path, target_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+        return recordings
 
     @classmethod
     def delete_recording(cls, file_path: str, recordings_dir: Optional[str] = None) -> bool:
@@ -476,5 +635,7 @@ class DvrManager:
 
         if os.path.exists(real_file):
             os.remove(real_file)
+            if recordings_dir is None or os.path.realpath(recordings_dir) == os.path.realpath(RECORDINGS_DIR):
+                cls.refresh_library_index(recordings_dir=recordings_dir)
             return True
         return False

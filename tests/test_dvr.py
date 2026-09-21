@@ -12,8 +12,11 @@ from unittest.mock import patch, MagicMock
 from engine.dvr import (
     format_bytes,
     sanitize_filename,
+    default_library_budget_bytes,
+    resolve_library_budget_bytes,
     DvrSession,
     DvrManager,
+    GIB,
 )
 from engine.tuner import TunerAdapter
 
@@ -36,6 +39,12 @@ class TestDvrEngine(unittest.TestCase):
         self.assertNotIn("<", sanitized)
         self.assertNotIn(">", sanitized)
         self.assertTrue(sanitized.startswith("WJW_FOX_8_News"))
+
+    def test_sanitize_filename_strips_apostrophes(self):
+        sanitized = sanitize_filename("CBS Evening News with Norah O'Donnell")
+        self.assertNotIn("'", sanitized)
+        self.assertNotIn("’", sanitized)
+        self.assertIn("Norah_ODonnell", sanitized)
 
     def test_dvr_session_serialization(self):
         session = DvrSession(
@@ -121,9 +130,58 @@ class TestDvrEngine(unittest.TestCase):
             self.assertTrue(success)
             self.assertFalse(os.path.exists(rec_file))
 
-            # Test path traversal prevention
             with self.assertRaises(PermissionError):
                 DvrManager.delete_recording("/etc/shadow", recordings_dir=tmp_dir)
+
+    def test_refresh_library_index_writes_json(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            rec_file = os.path.join(tmp_dir, "8.1-FOX_FOX_8_News_20260920_120000.ts")
+            with open(rec_file, "wb") as f:
+                f.write(b"index")
+            index_path = os.path.join(tmp_dir, "recordings.json")
+            records = DvrManager.refresh_library_index(recordings_dir=tmp_dir, index_path=index_path)
+            self.assertEqual(len(records), 1)
+            with open(index_path, encoding="utf-8") as f:
+                payload = json.load(f)
+            self.assertEqual(len(payload["recordings"]), 1)
+            self.assertEqual(payload["recordings"][0]["station"], "FOX")
+            self.assertFalse(payload["recordings"][0]["playable"])
+            self.assertIn("library_budget_bytes", payload)
+
+    def test_default_library_budget_is_small_on_large_disks(self):
+        usage = MagicMock(total=2 * 1024**4, used=1024**4, free=1024**4)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("engine.dvr.shutil.disk_usage", return_value=usage):
+                self.assertEqual(default_library_budget_bytes(tmp_dir), 20 * GIB)
+
+    def test_default_library_budget_shrinks_on_tight_disks(self):
+        usage = MagicMock(total=32 * GIB, used=26 * GIB, free=6 * GIB)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("engine.dvr.shutil.disk_usage", return_value=usage):
+                self.assertEqual(default_library_budget_bytes(tmp_dir), 3 * GIB)
+
+    def test_resolve_library_budget_off_and_fixed(self):
+        self.assertIsNone(resolve_library_budget_bytes("/tmp", prefs={"library_max_gb": 0}))
+        self.assertEqual(resolve_library_budget_bytes("/tmp", prefs={"library_max_gb": 20}), 20 * GIB)
+
+    def test_enforce_library_budget_deletes_oldest(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = []
+            for i, name in enumerate(["old.ts", "mid.ts", "new.ts"]):
+                path = os.path.join(tmp_dir, name)
+                with open(path, "wb") as f:
+                    f.write(b"x" * 3000)
+                os.utime(path, (1000 + i, 1000 + i))
+                paths.append(path)
+            with patch("engine.dvr.resolve_library_budget_bytes", return_value=7000):
+                removed = DvrManager.enforce_library_budget(
+                    recordings_dir=tmp_dir,
+                    active_path=os.path.join(tmp_dir, "active.json"),
+                )
+            self.assertEqual(removed, [os.path.realpath(paths[0])])
+            self.assertFalse(os.path.exists(paths[0]))
+            self.assertTrue(os.path.exists(paths[1]))
+            self.assertTrue(os.path.exists(paths[2]))
 
     @patch("subprocess.Popen")
     @patch("engine.tuner.TunerManager.get_available_tuner")
@@ -136,6 +194,7 @@ class TestDvrEngine(unittest.TestCase):
 
         fake_proc = MagicMock()
         fake_proc.pid = os.getpid()
+        fake_proc.poll.return_value = None
         mock_popen.return_value = fake_proc
 
         with tempfile.TemporaryDirectory() as tmp_dir:

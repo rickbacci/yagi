@@ -336,12 +336,15 @@ class AtscScanner:
         target_json = json_path or CHANNELS_JSON_PATH
         target_mpv = mpv_path or MPV_CHANNELS_CONF
         os.makedirs(os.path.dirname(target_json), exist_ok=True)
-        with open(target_json, "w", encoding="utf-8") as f:
-            json.dump({
-                "updated_at": time.time(),
-                "total": len(enriched_channels),
-                "channels": enriched_channels
-            }, f, indent=2)
+        payload = {
+            "updated_at": time.time(),
+            "total": len(enriched_channels),
+            "channels": enriched_channels
+        }
+        tmp_json = f"{target_json}.tmp.{os.getpid()}"
+        with open(tmp_json, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp_json, target_json)
 
         # Write MPV channels.conf in ATSC format (NAME:FREQ:8VSB:VPID:APID:SID)
         os.makedirs(os.path.dirname(target_mpv), exist_ok=True)
