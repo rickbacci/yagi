@@ -16,6 +16,13 @@ Omarchy TV is optimized for North American **ATSC 1.0** and **Clear QAM** digita
   - **Modulation**: 8VSB (ATSC OTA), QAM64 / QAM256 (Clear QAM Cable)
   - **Nodes**: Dual adapters exposed at `/dev/dvb/adapter0` and `/dev/dvb/adapter1`
 
+Omarchy TV treats them as a pair, not two copies of the same app:
+
+* **Adapter 0** — live MPV (`dvbin`). Prefer this for watching.
+* **Adapter 1** — background scan, library recording, and the pause-live dump.
+
+If a Python scan or record still holds `frontend0` when MPV starts, Linux returns `EBUSY`. Background jobs must close those file descriptors before hand-off.
+
 ---
 
 ## 2. Permissions & Verification
@@ -84,28 +91,46 @@ $$\text{Carrier Center} = \text{Nominal Center} + 28.615\text{ kHz}$$
 * **Physical Channel 7**: $177.0\text{ MHz} + 28.615\text{ kHz} = \mathbf{177028615\text{ Hz}}$
 * **Physical Channel 14**: $473.0\text{ MHz} + 28.615\text{ kHz} = \mathbf{473028615\text{ Hz}}$
 
-Omarchy TV automatically pre-calibrates every scan table with these exact pilot offsets.
+Omarchy TV automatically pre-calibrates every scan table with these exact pilot offsets. Do not “round” frequencies in `channels.conf` or `channels.json`.
 
 ---
 
-## 6. Diagnostic & Recovery Commands
+## 6. Where files live
+
+| What | Path |
+| --- | --- |
+| Channels, guide, now-playing, DVR index | `~/.config/omarchy/tv/` |
+| MPV channel table | `~/.config/mpv/channels.conf` |
+| Keep-forever recordings | `~/Videos/TV` (`$XDG_VIDEOS_DIR/TV`) |
+| Pause-live buffer (deleted after use) | `~/.cache/omarchy/tv/timeshift` |
+| MPV / daemon sockets | `$XDG_RUNTIME_DIR/omarchy-tv-*.sock` |
+
+If Recordings is empty after you hit Pause, that is expected: pause-live is not a library recording. Use **Record** (`r` on live TV) to write into `Videos/TV`.
+
+---
+
+## 7. Diagnostic & recovery commands
 
 ```bash
-# Check status of both tuners and running player
 omarchy-tv status
-
-# Run a fast diagnostic scan across VHF-High and UHF
 omarchy-tv scan
-
-# View all saved stations
 omarchy-tv list
-
-# Tune a channel directly from terminal
-omarchy-tv play "53.1 Daystar"
-
-# Stop active video playback
+omarchy-tv play "8.1 FOX"
+omarchy-tv pause
+omarchy-tv live
 omarchy-tv stop
-
-# Broadcast desktop command via Quickshell IPC
+omarchy-tv sync                 # now-playing still set after the window died
+omarchy-tv record status
+femon -H -a 0                   # live SNR / dBm on tuner 0
 omarchy-shell shell broadcast richardb.omarchy-tv next
 ```
+
+`omarchy-tv sync` (or reopen the flyout) clears a stale channel name after Super+W / compositor close.
+
+---
+
+## 8. Playback gotchas
+
+* **Black screen on a recording** — dump was empty (under 256 KB) or MPV was still in dvbin mode. Library/timeshift playback must be a file-only MPV instance.
+* **Seek never reaches live** — MPEG-TS often reports duration 0. The HUD should fire `omarchy-tv live` on EOF / `eof-reached`. Close TV and retune once if an old MPV process is still running.
+* **Pause does not resume** — Tuner 1 must be free so the 15-minute dump can start. Check `omarchy-tv status` for a stuck adapter 1.

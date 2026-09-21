@@ -1,105 +1,101 @@
-# 📺 Omarchy TV (`richardb.omarchy-tv`)
+# Omarchy TV (`richardb.omarchy-tv`)
 
-[![Tests](https://img.shields.io/badge/tests-12%20passed-success)](tests/)
+[![Tests](https://img.shields.io/badge/tests-84%20passed-success)](tests/)
 [![Platform](https://img.shields.io/badge/platform-Omarchy%20%7C%20Arch%20Linux-blue)](https://omarchy.org/)
 [![Compositor](https://img.shields.io/badge/compositor-Hyprland-lightblue)](https://hyprland.org/)
 [![UI Engine](https://img.shields.io/badge/ui-Quickshell%20(QtQuick%20%2F%20QML)-purple)](https://quickshell.outfoxxed.me/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-A modern, native Over-The-Air (OTA) digital television suite crafted specifically for **Omarchy** (Arch Linux + Hyprland + Quickshell).
+Over-The-Air digital television for **Omarchy** (Arch Linux + Hyprland + Quickshell + MPV). It is a status-bar plugin, a floating live player, and a dual-tuner recorder — not a MythTV backend and not a Kaffeine clone.
 
 ---
 
-## 🌟 Why Omarchy TV?
+## What it does
 
-Traditional Linux digital TV software (Kaffeine, MythTV, Tvheadend) was designed in the early 2000s with archaic X11 toolkits, confusing dialogs, and heavy legacy backends.
+Omarchy TV is a native ATSC 1.0 live-TV suite. Click the antenna on the Omarchy bar, scan your market, and watch in a pinned 16:9 Picture-in-Picture window.
 
-**Omarchy TV** brings digital broadcast television into the modern Wayland era:
+**Live TV.** Tuner 0 locks an ATSC frequency (exact `+28615` Hz pilot offset) and MPV plays the transport stream. The player HUD shows the station, current program, and a short control legend. `j` / `k` surf channels; closing the window (or **Close TV**) clears now-playing so the flyout returns to the channel list.
 
-* **Omarchy Shell Integration**: Clean antenna icon (`󰢹`) on your status bar with live state badges (`󰛳 63% Scanning` or active channel name).
-* **Live RF HUD & Animated Progress**: Real-time signal strength meter in dBm, physical frequency readout, and smooth easing progress bar inside the popout card.
-* **Dual-Tuner Intelligent Allocation**: Automatically manages dual tuners (e.g. Hauppauge WinTV-dualHD), allowing you to watch TV on Tuner 0 while Tuner 1 scans frequencies or records in the background.
-* **Exact ATSC Pilot Carrier Offsets**: Hardcodes exact +28.615 kHz carrier offsets (e.g., `177028615 Hz`), guaranteeing immediate carrier lock on modern demodulators.
-* **Picture-in-Picture (PiP) Window Rules**: Powered by `mpv` with hardware VA-API/NVDEC decoding, automatically pinned across all Hyprland workspaces in a floating 16:9 frame.
-* **Zero-Privilege Security**: Runs 100% unprivileged (`$USER`) using systemd user ACLs and secure runtime sockets in `$XDG_RUNTIME_DIR`.
-* **Quickshell IPC Bridge**: Fully controllable via keyboard shortcuts or CLI broadcast commands.
+**Guide.** The flyout Guide shows now and next for each station. The engine already keeps 6:00 PM–11:00 PM half-hour blocks for the major Cleveland networks so a wider, scrollable evening grid can replace the one-slot pager.
+
+**Record.** Tuner 1 dumps the live multiplex to `~/Videos/TV` while you keep watching on Tuner 0. Start and stop from the flyout, the HUD (`r` on live TV), or `omarchy-tv record`. Play a finished file from the Recordings library. When that file ends, playback returns to the last live station.
+
+**Pause live.** Pause freezes the picture and starts a 15-minute throwaway buffer on Tuner 1. Play continues from that moment instead of jumping to the live broadcast. The buffer lives in cache (`~/.cache/omarchy/tv/timeshift`), is not part of the recordings library, and is deleted when you go live, change channels, or close TV. Seek to the end of a recording or timeshift buffer also returns to the live tuner (`l` on the HUD, or the Live control).
+
+**Library cap.** Recordings are pruned oldest-first against an automatic budget (about 20 GB, smaller on tight disks), or a fixed size, or unlimited.
+
+Everything runs as `$USER`. No sudo, no extra daemon you have to babysit for basic watch/record, sockets only under `$XDG_RUNTIME_DIR`.
 
 ---
 
-## 🏗️ Architecture
+## Why this instead of MythTV / Kaffeine / Tvheadend
+
+- **Omarchy-native UI**: antenna widget, themed `KeyboardPanel`, no foreign toolkit dialogs.
+- **Dual-tuner leases**: watch on Tuner 0; scan, record, and pause-live dumps on Tuner 1. Frontends are released before MPV takes the device so you do not hit `EBUSY`.
+- **Exact ATSC pilots**: frequencies are `nominal + 28615` Hz, not round MHz centers.
+- **Honest OTA**: PSIP `access_controlled` bits are ignored; unencrypted ATSC streams play without a fake scramble padlock.
+- **PiP that belongs on Hyprland**: class `omarchy-tv`, floated, pinned, aspect locked.
+
+---
+
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                 Omarchy Bar Widget & Panel                  │
+│              Omarchy Bar Widget (KeyboardPanel)             │
 │       (~/.config/omarchy/plugins/richardb.omarchy-tv)       │
-│        Quickshell (QML) • Native Theme Colors & Glass Blur  │
+│   Channels · Guide · Recordings · now-playing / Close TV    │
 └──────────────────────────────┬──────────────────────────────┘
-                               │ IPC / FileView Reactive Pipeline
+                               │ FileView JSON + IpcHandler
 ┌──────────────────────────────▼──────────────────────────────┐
-│                    Omarchy TV Core Engine                    │
-│        (Python 3 • Linux DVB API • Multi-Tuner Allocator)    │
-├──────────────────────────────┬──────────────────────────────┤
-│    ATSC Hardware Scanner     │    Secure Runtime Sockets    │
-│  (Real-Time RF HUD & Sync)   │   ($XDG_RUNTIME_DIR, 0700)   │
-└──────────────┬───────────────┴──────────────┬───────────────┘
-               │                              │
-        ┌──────▼──────┐                ┌──────▼──────┐
-        │ /dev/dvb/*  │                │  MPV Engine │
-        │  (Hardware) │                │  (Wayland)  │
-        └─────────────┘                └─────────────┘
+│                    Omarchy TV Core (Python)                 │
+│  scanner · enrichment · guide · DVR · timeshift · tuners    │
+├──────────────┬───────────────────────┬──────────────────────┤
+│  /dev/dvb/*  │  ~/Videos/TV library  │  MPV + tv_hud.lua    │
+│  Tuner 0 live│  cache timeshift buf  │  PiP, JSON IPC       │
+└──────────────┴───────────────────────┴──────────────────────┘
 ```
 
 ---
 
-## 📂 Project Structure
+## Project layout
 
 ```
-~/Projects/personal/omarchy-tv/
-├── README.md                           # Master project guide
-├── DESIGN.md                           # Architectural design document
-├── HARDWARE_AND_TROUBLESHOOTING.md     # Tuners, RF signals, and ATSC guide
-├── LICENSE                             # MIT License
-├── .gitignore
-├── bin/
-│   └── omarchy-tv                      # Unified CLI entrypoint
-├── engine/
-│   ├── __init__.py
-│   ├── paths.py                        # Secure $XDG_RUNTIME_DIR socket resolution
-│   ├── tuner.py                        # Multi-tuner hardware allocator
-│   ├── scanner.py                      # ATSC scanner with live signal metering
-│   └── daemon.py                       # UNIX domain socket JSON-RPC server
-├── player/
-│   ├── __init__.py
-│   ├── controller.py                   # MPV controller via JSON IPC socket
-│   └── hyprland_rules.conf             # Hyprland window rules reference
-├── plugin/                             # Omarchy Shell Plugin (symlinked to ~/.config)
-│   ├── manifest.json                   # Quickshell plugin manifest (schemaVersion 1)
-│   ├── BarWidget.qml                   # Status bar widget and Live RF HUD popout
-│   └── Model.js                        # Theme colors, station cleaner, formatters
-└── tests/                              # Automated unit test suite
-    ├── test_frequencies.py             # ATSC frequencies & pilot carrier offsets
-    ├── test_paths.py                   # Socket security and fallback permissions
-    ├── test_scanner_parser.py          # ATSC virtual channel parser & serialization
-    └── test_tuner.py                   # Tuner discovery and adapter capability
+omarchy-tv/
+├── README.md
+├── DESIGN.md
+├── HARDWARE_AND_TROUBLESHOOTING.md
+├── AGENTS.md
+├── bin/omarchy-tv                 # CLI
+├── engine/                        # scan, tuners, EPG, DVR, timeshift, paths
+├── player/controller.py           # MPV launch, live / file / pause-live
+├── player/scripts/tv_hud.lua      # on-video HUD and player keys
+├── plugin/                        # Quickshell bar widget
+│   ├── BarWidget.qml
+│   ├── Model.js
+│   └── manifest.json
+├── skills/omarchy-tv/SKILL.md     # agent skill
+└── tests/
 ```
+
+State files live under `~/.config/omarchy/tv/` (`channels.json`, `guide.json`, `player_state.json`, `recordings.json`, …). The MPEG library is `~/Videos/TV` (or `$XDG_VIDEOS_DIR/TV`).
 
 ---
 
-## ⚡ Quickstart
+## Quickstart
 
-### 1. Link Plugin to Omarchy
+### 1. Link the plugin
+
 ```bash
-# Symlink plugin directory into Omarchy user plugins
 ln -sfn ~/Projects/personal/omarchy-tv/plugin ~/.config/omarchy/plugins/richardb.omarchy-tv
-
-# Add to your status bar
 omarchy bar put richardb.omarchy-tv --section right
 ```
 
-### 2. Configure Hyprland Window Rules
-Ensure the following rule is in your `~/.config/hypr/hyprland.lua`:
+### 2. Hyprland window rule
+
+In `~/.config/hypr/hyprland.lua`:
+
 ```lua
--- Omarchy TV (PiP / Floating Over-The-Air Player)
 o.window("omarchy-tv", {
   float = true,
   pin = true,
@@ -109,52 +105,83 @@ o.window("omarchy-tv", {
   move = { "(monitor_w-window_w-40)", "(monitor_h-window_h-40)" },
 })
 ```
-Reload Hyprland:
+
 ```bash
 hyprctl reload && hyprctl configerrors
 ```
 
-### 3. Launch & Scan
-1. Click the **TV icon** (`󰢹`) on your Omarchy top bar.
-2. Click **"Scan OTA Channels"**.
-3. Watch the **Live RF HUD** lock frequencies and discover local broadcast stations in real time!
+### 3. Scan and watch
+
+1. Click the TV icon on the bar.
+2. Run **Scan OTA Channels** (or `omarchy-tv scan`).
+3. Pick a station. The list hides while you watch; **Close TV** (or close the PiP) brings it back.
+
+Put `bin/` on your `PATH`, or invoke `~/Projects/personal/omarchy-tv/bin/omarchy-tv`.
 
 ---
 
-## 🖥️ Command-Line Interface (`omarchy-tv`)
-
-The `omarchy-tv` CLI is located at `bin/omarchy-tv`. You can add it to your `PATH` or invoke it directly:
+## Command-line interface
 
 ```bash
-# Check tuner availability and running player
-bin/omarchy-tv status
-
-# Run a fast ATSC broadcast scan (VHF-High + UHF: 30 frequencies)
-bin/omarchy-tv scan
-
-# Run a full scan across all 68 frequencies (including legacy VHF-Low & UHF)
-bin/omarchy-tv scan --full
-
-# List all discovered channels
-bin/omarchy-tv list
-
-# Tune into a channel
-bin/omarchy-tv play "53.1 Daystar"
-
-# Channel surfing controls
-bin/omarchy-tv next
-bin/omarchy-tv prev
-bin/omarchy-tv stop
+omarchy-tv status                          # tuners + player
+omarchy-tv scan                            # fast VHF-High + UHF
+omarchy-tv scan --full                     # all 68 frequencies
+omarchy-tv list                            # saved channels
+omarchy-tv guide                           # now/next EPG dump
+omarchy-tv play "8.1 FOX"
+omarchy-tv next | prev | stop
+omarchy-tv pause                           # freeze live / resume timeshift
+omarchy-tv live                            # leave a recording or timeshift
+omarchy-tv seek 10                         # relative seconds in a file
+omarchy-tv sync                            # drop stale now-playing if the window is gone
+omarchy-tv record start 8.1 1h
+omarchy-tv record stop
+omarchy-tv record list | status | play <file> | delete <file>
+omarchy-tv favorite toggle "8.1 FOX"
+omarchy-tv pref translators off
+omarchy-tv pref filter favorites
+omarchy-tv pref library-max auto|20|50|off
 ```
 
 ---
 
-## 🎮 Desktop Keybindings & Quickshell IPC
+## Player HUD keys
 
-Omarchy TV exposes an `IpcHandler` targeting `"richardb.omarchy-tv"`. You can bind any global shortcut in `~/.config/hypr/bindings.lua`:
+These chords are painted on the MPV HUD only. The shell plugin does not duplicate them.
+
+| Key | Live TV | Recording / timeshift |
+| --- | --- | --- |
+| `Space` | Pause live (start buffer) / Play from pause | Pause / resume |
+| `j` / `k` or ↓ / ↑ | Previous / next channel | Seek −10 / +10 s |
+| ← / → | — | Seek −10 / +10 s |
+| `l` | — | Return to live |
+| `r` | Start or stop a library recording | ignored |
+| `f` / double-click | Hyprland fullscreen toggle | same |
+| `c` | Cycle subtitles | same |
+| Wheel / middle-click | Volume / mute | same |
+
+Seeking past the end of a file, or hitting EOF, retunes the last live station.
+
+---
+
+## Shell plugin and IPC
+
+The bar widget is `richardb.omarchy-tv`. Flyout chrome: **Guide**, **Recordings**, All / Favorites, translator hide, star, **Pause**, **Record** / **Stop**, **Close TV**.
+
+```bash
+omarchy-shell shell broadcast richardb.omarchy-tv play "8.1 FOX"
+omarchy-shell shell broadcast richardb.omarchy-tv stop
+omarchy-shell shell broadcast richardb.omarchy-tv next
+omarchy-shell shell broadcast richardb.omarchy-tv prev
+omarchy-shell shell broadcast richardb.omarchy-tv live
+omarchy-shell shell broadcast richardb.omarchy-tv guide
+omarchy-shell shell broadcast richardb.omarchy-tv scan
+omarchy-shell shell broadcast richardb.omarchy-tv reloadChannels
+```
+
+Hyprland example:
 
 ```lua
--- Example: Channel surfing with media keys
 o.bind("XF86AudioNext", "exec", "omarchy-shell shell broadcast richardb.omarchy-tv next")
 o.bind("XF86AudioPrev", "exec", "omarchy-shell shell broadcast richardb.omarchy-tv prev")
 o.bind("SUPER, F12",   "exec", "omarchy-shell shell broadcast richardb.omarchy-tv stop")
@@ -162,38 +189,31 @@ o.bind("SUPER, F12",   "exec", "omarchy-shell shell broadcast richardb.omarchy-t
 
 ---
 
-## 🧪 Automated Testing
-
-Omarchy TV includes a comprehensive test suite using Python's standard `unittest` framework:
+## Tests
 
 ```bash
 cd ~/Projects/personal/omarchy-tv
 python3 -m unittest discover tests -v
 ```
 
-Output:
-```
-test_bands (test_frequencies.TestAtscFrequencies.test_bands) ... ok
-test_full_scan_count (test_frequencies.TestAtscFrequencies.test_full_scan_count) ... ok
-test_pilot_carrier_offsets (test_frequencies.TestAtscFrequencies.test_pilot_carrier_offsets) ... ok
-test_quick_scan_count (test_frequencies.TestAtscFrequencies.test_quick_scan_count) ... ok
-test_fallback_socket_permissions (test_paths.TestPathsSecurity.test_fallback_socket_permissions) ... ok
-test_socket_constants (test_paths.TestPathsSecurity.test_socket_constants) ... ok
-test_xdg_runtime_socket (test_paths.TestPathsSecurity.test_xdg_runtime_socket) ... ok
-test_parse_scan_output (test_scanner_parser.TestScannerParser.test_parse_scan_output) ... ok
-test_save_channels (test_scanner_parser.TestScannerParser.test_save_channels) ... ok
-test_write_scan_status_atomic (test_scanner_parser.TestScannerParser.test_write_scan_status_atomic) ... ok
-test_get_available_tuner (test_tuner.TestTuner.test_get_available_tuner) ... ok
-test_tuner_discovery (test_tuner.TestTuner.test_tuner_discovery) ... ok
-
-Ran 12 tests in 0.370s
-OK
-```
+Must pass 100% before a commit (`AGENTS.md`).
 
 ---
 
-## 📖 Additional Documentation
+## Planned
 
-* **[Architectural Design (`DESIGN.md`)](DESIGN.md)**: Deep dive into the architectural layers, multi-tuner concurrency model, and security boundary.
-* **[Hardware & Troubleshooting (`HARDWARE_AND_TROUBLESHOOTING.md`)](HARDWARE_AND_TROUBLESHOOTING.md)**: Complete guide on Hauppauge dualHD hardware, pilot carrier offsets, signal dBm interpretation, and the false "scrambled padlock" quirk.
-* **[License (`LICENSE`)](LICENSE)**: MIT License.
+Shipped behavior is listed above. Still to land in the flyout:
+
+- **Wider panels** sized from the display (channel list about a third of the screen, guide about half), instead of the 380×560 token cap used to match other right-side cards.
+- **Scrollable evening grid** using the engine’s 6:00 PM–11:00 PM program blocks (three to six half-hour columns by width).
+
+The PiP video window size is already correct.
+
+---
+
+## More documentation
+
+- **[DESIGN.md](DESIGN.md)** — layers, tuner leases, DVR vs timeshift, security.
+- **[HARDWARE_AND_TROUBLESHOOTING.md](HARDWARE_AND_TROUBLESHOOTING.md)** — Hauppauge dualHD, RF, EBUSY, paths.
+- **[AGENTS.md](AGENTS.md)** — invariants for anyone changing the code.
+- **[License](LICENSE)** — MIT.

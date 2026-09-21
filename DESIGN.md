@@ -1,81 +1,100 @@
-# Omarchy TV — Architectural Design & Philosophy
+# Omarchy TV — Architectural Design
 
-> "Digital television on the modern Linux desktop shouldn't feel like an archaeology exhibit from 2008."
-
----
-
-## 1. Thesis & Problem Space
-
-Traditional Linux digital TV software (Kaffeine, MythTV, Tvheadend) was designed in the early 2000s under very different desktop assumptions:
-- **X11 Toolkits & Archaic Modals**: Built around legacy Qt4/Qt5 or GTK2 widget dialogs that do not compose with modern Wayland compositors (Hyprland), lacking fluid scaling, hardware-accelerated animations, or theme inheritance.
-- **Cryptic Metadata Warnings**: Applications like Kaffeine strictly evaluate ATSC digital flags, erroneously flagging 100% legal, unencrypted Over-The-Air broadcasts with a **red encrypted padlock** icon because local broadcasters leave an archaic `access_controlled` bit enabled in their PSIP VCT tables.
-- **Monolithic Bloat**: MythTV requires an external MySQL database, separate backend/frontend daemons, and hundreds of configuration options just to watch a local news broadcast.
-- **Slow, Brute-Force Scanning**: Old scanners blindly brute-force 70+ frequencies without accounting for pilot carrier offsets, taking 20+ minutes and locking the UI thread.
-
-**Omarchy TV** rejects this entire paradigm. It approaches OTA television as a lightweight, first-class citizen of the modern Wayland desktop.
+> Digital television on the modern Linux desktop should feel like a first-class Wayland app, not a 2008 backend with a skin.
 
 ---
 
-## 2. Architectural Layers
+## 1. Thesis
 
-Omarchy TV is partitioned into four decoupled, asynchronously connected layers:
+Kaffeine, MythTV, and Tvheadend grew up on X11, modal dialogs, and always-on backends. MythTV wants a database just to watch the news. Kaffeine flags legal OTA streams as scrambled because PSIP left `access_controlled` set.
+
+Omarchy TV is a **thin local appliance**:
+
+- Quickshell for chrome (bar + flyout)
+- Python for DVB, scan, EPG, DVR, timeshift
+- MPV for decode, PiP, and the on-video HUD
+
+No MySQL. No root. No second “frontend” process. If the bar plugin and `omarchy-tv` CLI are installed, you can scan, watch, pause live, and record.
+
+---
+
+## 2. Layers
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                 Layer 1: Quickshell Surface                 │
-│   (~/.config/omarchy/plugins/richardb.omarchy-tv)           │
-│   • BarWidget.qml: Antenna icon, scanning radar pulse       │
-│   • Panel.qml: Glass-blurred PopupCard, Live RF HUD         │
-│   • Model.js: Formatters, channel cleaner, theme mapping    │
+│ Layer 1 — Quickshell (plugin/BarWidget.qml + Model.js)      │
+│   Antenna icon, KeyboardPanel flyout, FileView on JSON      │
+│   Does not paint key chords (HUD owns those)                │
 └──────────────────────────────┬──────────────────────────────┘
-                               │ IPC / FileView Reactive Pipeline
+                               │ IpcHandler + atomic JSON
 ┌──────────────────────────────▼──────────────────────────────┐
-│                  Layer 2: Core Python Engine                │
-│   • engine/tuner.py: Dynamic multi-tuner allocator          │
-│   • engine/scanner.py: ATSC scanner with +28.615 kHz offset │
-│   • engine/paths.py: $XDG_RUNTIME_DIR security isolation    │
-│   • engine/daemon.py: UNIX domain socket JSON-RPC server    │
-└──────────────┬──────────────────────────────┬───────────────┘
-               │                              │
-        ┌──────▼──────┐                ┌──────▼──────┐
-        │   Layer 3   │                │   Layer 4   │
-        │ Hardware /  │                │ Playback /  │
-        │ Linux DVB   │                │ MPV Wayland │
-        │ (/dev/dvb)  │                │ (PiP / Lua) │
-        └─────────────┘                └─────────────┘
+│ Layer 2 — Python engine                                     │
+│   tuner · scanner · enrichment · guide                      │
+│   dvr (Videos/TV library) · timeshift (cache buffer)        │
+│   paths ($XDG_RUNTIME_DIR sockets, XDG config/cache/videos) │
+└──────────────┬───────────────────────┬──────────────────────┘
+               │                       │
+        ┌──────▼──────┐         ┌──────▼──────┐
+        │ Layer 3     │         │ Layer 4     │
+        │ Linux DVB   │         │ MPV + lua   │
+        │ /dev/dvb    │         │ PiP / HUD   │
+        └─────────────┘         └─────────────┘
 ```
+
+There is no `Panel.qml`. The flyout **is** `BarWidget.qml`’s `KeyboardPanel`.
 
 ---
 
-## 3. Core Design Principles
+## 3. Design rules
 
-### A. Dual-Tuner Intelligent Allocation
-Hardware like the **Hauppauge WinTV-dualHD** exposes two independent tuner adapters (`/dev/dvb/adapter0` and `/dev/dvb/adapter1`).
-- Legacy apps blindly seize `adapter0`, colliding with background jobs or causing `Device or resource busy` errors.
-- Omarchy TV's `TunerManager` actively probes device availability via Linux `fuser` and frontend state.
-- **Concurrency Rule**: Tuner 0 is preferentially reserved for low-latency live viewing, while Tuner 1 is dynamically leased for background frequency scanning, EPG table refreshes, and scheduled DVR recordings.
+### A. Dual-tuner leases
 
-### B. Precision Carrier Tuning (+28.615 kHz Pilot Offset)
-In the ATSC A/53 terrestrial digital TV specification:
-- Nominal channel center frequencies (e.g. 177.0 MHz for Ch 7, 473.0 MHz for Ch 14) are not the actual digital carrier center.
-- The ATSC DTV pilot carrier is transmitted **310 kHz above the lower channel edge**, resulting in an exact **+28.615 kHz offset** (`+28615 Hz`).
-- Omarchy TV hardcodes the exact pilot frequencies (e.g. `177028615 Hz`, `473028615 Hz`). This allows the tuner's carrier recovery loop to achieve instant lock within 1.0–1.5 seconds per transponder instead of drifting and timing out.
+Hauppauge WinTV-dualHD is two adapters. `TunerManager.get_available_tuner()` prefers:
 
-### C. The Live RF HUD & Reactive State
-Instead of blocking the GUI or forcing the user to guess if a scan is frozen:
-1. The scanner yields atomic state updates for physical frequency, band, instantaneous signal dBm, and virtual stations.
-2. Updates are written atomically via POSIX `os.replace` to `~/.config/omarchy/tv/scan_status.json`.
-3. Quickshell's reactive `FileView` binds the JSON data directly into QML properties.
-4. The UI renders an **Animated Gradient Progress Bar** (`Easing.OutQuad`) paired with a live **RF Tuner Lock HUD** showing real-time dBm signal strength and discovered station badges.
+| Role | Adapter | Why |
+| --- | --- | --- |
+| Live watch | 0 | Low-latency dvbin in MPV |
+| Scan, EPG refresh, library record, pause-live dump | 1 | Must not steal the live frontend |
 
-### D. Zero-Privilege Security Boundary
-- **No Root, No Sudo**: The entire stack operates as unprivileged user `1000:1000`.
-- **Systemd Session ACLs**: Hardware access is granted via active seat permissions (`user:$USER:rw-` on `/dev/dvb/*`), requiring zero group modifications or setuid privileges.
-- **Isolated Sockets**: Sockets (`omarchy-tv-mpv.sock` and `omarchy-tv-daemon.sock`) are anchored in `$XDG_RUNTIME_DIR` (`/run/user/1000/`) with strict `0700` filesystem masks, immune to local user tampering.
-- **Injection-Proof Process Spawning**: All process executions in both Python and QML pass discrete argument arrays (`["omarchy-tv", "play", channel]`) with `shell=False`.
+Background work **must** drop `/dev/dvb/adapter*/frontend0` before MPV opens the same adapter (`EBUSY`).
 
-### E. Declarative Hyprland Integration
-Instead of forcing fullscreen or hardcoded X11 geometry, Omarchy TV leverages Omarchy’s native Hyprland Lua DSL:
+### B. ATSC +28.615 kHz
+
+Nominal centers (`177000000`) miss the A/53 pilot. Every table entry is `nominal + 28615`. Scan dwell is at least **1.2 s** so 8VSB can lock.
+
+### C. Two different “recordings”
+
+| | Library DVR | Pause-live (timeshift) |
+| --- | --- | --- |
+| Purpose | Keep a show | Freeze now, play from that moment |
+| Tuner | 1 | 1 (dump) while 0 stays on the frozen live picture until Play |
+| Path | `$XDG_VIDEOS_DIR/TV` (default `~/Videos/TV`) | `$XDG_CACHE_HOME/omarchy/tv/timeshift` |
+| Indexed in Recordings | Yes | Never |
+| Length | Until stop / duration arg | 15 minutes, then gone |
+| Discard | User delete / library cap | Go live, retune, or Close TV |
+
+`r` is library record. `Space` on live is pause-live. Mixing those is a product bug.
+
+Playback of either is **file-only MPV** (no `dvbin`). Live tune always tears down timeshift first.
+
+### D. Return to live
+
+A finished library recording, EOF on a timeshift file, or a seek that reaches the end should call `return_to_live()` and retune the last live station. MPEG-TS often reports `duration` 0, so the HUD also watches `eof-reached` / `end-file` and “seek did not advance.”
+
+### E. Reactive UI, atomic state
+
+Scanner, DVR, and player write JSON via `.tmp` + `os.replace`. Quickshell `FileView` binds those files. `player_state.json` is the now-playing contract; `omarchy-tv sync` / MPV shutdown / dead-pid reconcile clear it when the window is already gone.
+
+### F. Zero privilege
+
+User session ACLs on `/dev/dvb/*`. Sockets from `engine.paths.get_runtime_socket()` inside `$XDG_RUNTIME_DIR` (0700). Process argv arrays, never shell strings.
+
+### G. Theming and chrome
+
+QML uses `Color.*`, `Style.space()`, `Style.font.*`, `root.bar.*`. Plugin must not hardcode keybinding labels. Player keys live in `player/scripts/tv_hud.lua`.
+
+### H. Hyprland PiP
+
 ```lua
 o.window("omarchy-tv", {
   float = true,
@@ -86,7 +105,25 @@ o.window("omarchy-tv", {
   move = { "(monitor_w-window_w-40)", "(monitor_h-window_h-40)" },
 })
 ```
-This guarantees that whenever TV video is launched:
-- It floats in a true 16:9 aspect-ratio window.
-- It pins as a seamless Picture-in-Picture (PiP) window across all active Hyprland workspaces.
-- It snaps to the bottom-right corner of the active display without covering system widgets.
+
+Fullscreen is a compositor toggle (`hyprctl eval` on that class), not MPV’s own fullscreen, so geometry restores.
+
+---
+
+## 4. Flyout layout (current vs intended)
+
+**Current:** `KeyboardPanel` uses `fittedContentWidth(Style.space(380))` and a 560-tall cap so the card lines up with other right-side Omarchy panels. While live, the channel list is hidden; Guide is a now/next pager.
+
+**Intended:** size from the display — list about one third of the width (clamped), guide about half — with a horizontally scrollable evening grid (3–6 half-hour columns). `Model.js` already has `guideAllSlots` / `programBlocks`; `engine/guide.py` already attaches 6:00 PM–11:00 PM `programs`. The QML grid is not wired yet.
+
+---
+
+## 5. Library budget
+
+`DvrManager.enforce_library_budget` deletes oldest **finished** files until usage fits:
+
+- `pref library-max auto` — ~20 GB, reduced on small or full volumes
+- a numeric GB cap
+- `off` — no prune
+
+Timeshift files are not in this budget.
