@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "Richard Bacci",
   "license": "MIT",
-  "description": "Modern Over-The-Air TV tuner manager, channel guide, and player controls.",
+  "description": "OTA live TV: scan, watch, guide, record, and pause-live on a dual tuner.",
   "kinds": [
     "bar-widget"
   ],

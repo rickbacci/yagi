@@ -59,7 +59,7 @@ KNOWN_STATION_MAP: Dict[tuple, Dict[str, Any]] = {
 
     # RF 20 (509.028 MHz) - WOIO Telemundo & Repeaters
     (509028615, 3): {"major": 19, "minor": 5, "network": "Telemundo", "callsign": "WTCL", "name": "Telemundo 19"},
-    (509028615, 4): {"major": 19, "minor": 10, "network": "CBS", "callsign": "WOIO-DRT", "name": "CBS 19 (DRT)"},
+    (509028615, 4): {"major": 19, "minor": 10, "network": "CBS", "callsign": "WOIO-DRT", "name": "CBS 19 (DRT)", "translator": True},
     (509028615, 5): {"major": 19, "minor": 6, "network": "Rewind", "callsign": "WOIO-6", "name": "Rewind TV"},
 
     # RF 21 (515.028 MHz) - WQDI-LD
@@ -162,6 +162,7 @@ def enrich_channel(channel: Dict[str, Any]) -> Dict[str, Any]:
         res["network"] = lookup["network"]
         res["callsign"] = lookup["callsign"]
         res["display_name"] = lookup["name"]
+        res["is_translator"] = bool(lookup.get("translator"))
     else:
         # Fallback heuristic: check if raw_name contains a callsign or network
         res["callsign"] = raw_name.split()[0].replace("-HD", "").replace("-DT", "")
@@ -189,6 +190,11 @@ def enrich_channel(channel: Dict[str, Any]) -> Dict[str, Any]:
         res["minor"] = res.get("minor") or (sid if isinstance(sid, int) else 1)
         res["channel_number"] = f"{res['major']}.{res['minor']}"
         res["display_name"] = f"{res['channel_number']} {raw_name}"
+        res["is_translator"] = False
+
+    blob = f"{res.get('callsign', '')} {res.get('display_name', '')} {raw_name}".upper()
+    if "DRT" in blob or "TRANSLATOR" in blob:
+        res["is_translator"] = True
 
     # Retain the exact hardware tuning name (MPV channels.conf identifier)
     res["tune_name"] = res.get("raw_name") or res.get("name")

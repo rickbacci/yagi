@@ -35,6 +35,14 @@ class TestEnrichment(unittest.TestCase):
         woio_enriched = enrich_channel(woio_raw)
         self.assertEqual(woio_enriched["channel_number"], "19.1")
         self.assertEqual(woio_enriched["network"], "CBS")
+        self.assertFalse(woio_enriched.get("is_translator"))
+
+        # CBS 19.10 translator / DRT duplicate
+        drt_raw = {"name": "WOIO-HD", "raw_name": "WOIO-HD", "frequency": 509028615, "service_id": 4}
+        drt_enriched = enrich_channel(drt_raw)
+        self.assertEqual(drt_enriched["channel_number"], "19.10")
+        self.assertTrue(drt_enriched["is_translator"])
+        self.assertEqual(drt_enriched["callsign"], "WOIO-DRT")
 
         # CW 43.1 (WUAB)
         wuab_raw = {"name": "WUAB", "raw_name": "WUAB", "frequency": 195028615, "service_id": 4}
