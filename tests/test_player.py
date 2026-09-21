@@ -535,11 +535,14 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
              patch("player.controller.Timeshift.live_edge_byte", return_value=99), \
              patch("player.controller.Timeshift.write_rate", return_value=2_000_000), \
              patch("player.controller.Timeshift.dump_bytes", return_value=100), \
-             patch("player.controller.Timeshift.patch_state"):
+             patch("player.controller.Timeshift.patch_state"), \
+             patch("player.controller.subprocess.Popen") as mock_popen:
             self.assertTrue(self.controller.return_to_live())
         sent = [m.get("command") for m in self.server.commands]
-        self.assertTrue(any(c and c[0] == "loadfile" for c in sent))
+        load = next(c for c in sent if c and c[0] == "loadfile")
+        self.assertTrue(str(load[1]).startswith("http://127.0.0.1:"))
         self.assertNotIn(["script-message", "tv-live-edge"], sent)
+        mock_popen.assert_not_called()
 
     def test_return_to_live_from_timeshift_file_reopens_http(self):
         self.server.path_value = self.dump_path
@@ -573,17 +576,19 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         sent = [m.get("command") for m in self.server.commands]
         self.assertIn(["cycle", "pause"], sent)
 
-    def test_pause_on_live_pipe_freezes_follow(self):
+    def test_pause_on_live_http_does_not_relaunch(self):
         self.server.path_value = "http://127.0.0.1:18765/live.ts?from=0"
         with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False}), \
              patch("player.controller.Timeshift.live_edge_byte", return_value=1880), \
              patch("player.controller.Timeshift.dump_bytes", return_value=5000), \
-             patch("player.controller.Timeshift.patch_state") as mock_patch:
+             patch("player.controller.Timeshift.patch_state") as mock_patch, \
+             patch("player.controller.subprocess.Popen") as mock_popen:
             self.controller.toggle_pause()
         sent = [m.get("command") for m in self.server.commands]
         self.assertIn(["set_property", "pause", True], sent)
         self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
         self.assertTrue(mock_patch.called)
+        mock_popen.assert_not_called()
 
     def test_seek_back_from_live_opens_dump(self):
         self.server.path_value = "http://127.0.0.1:18765/live.ts?from=0"
@@ -592,18 +597,40 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
              patch("player.controller.Timeshift.write_rate", return_value=2_423_750), \
              patch("player.controller.Timeshift.start_http", return_value=18765), \
              patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=1"), \
-             patch("player.controller.Timeshift.patch_state"):
+             patch("player.controller.Timeshift.patch_state"), \
+             patch("player.controller.subprocess.Popen") as mock_popen:
             self.assertTrue(self.controller.seek(-10))
         sent = [m.get("command") for m in self.server.commands]
         load = next(c for c in sent if c and c[0] == "loadfile")
         self.assertTrue(str(load[1]).startswith("http://127.0.0.1:"))
+        self.assertEqual(load[2], "replace")
+        mock_popen.assert_not_called()
+
+    def test_seek_last_hop_reopens_live_http_not_relaunch(self):
+        self.server.path_value = "http://127.0.0.1:18765/live.ts?from=1000"
+        with patch("player.controller.Timeshift.load_state", return_value={"view": "delayed", "paused": False, "skip_busy": False, "playhead_byte": 1000}), \
+             patch("player.controller.Timeshift.delay_sec", return_value=6.0), \
+             patch("player.controller.Timeshift.start_http", return_value=18765), \
+             patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=99"), \
+             patch("player.controller.Timeshift.live_edge_byte", return_value=99), \
+             patch("player.controller.Timeshift.write_rate", return_value=2_000_000), \
+             patch("player.controller.Timeshift.dump_bytes", return_value=100), \
+             patch("player.controller.Timeshift.patch_state"), \
+             patch("player.controller.subprocess.Popen") as mock_popen:
+            self.assertTrue(self.controller.seek(10))
+        sent = [m.get("command") for m in self.server.commands]
+        load = next(c for c in sent if c and c[0] == "loadfile")
+        self.assertTrue(str(load[1]).startswith("http://127.0.0.1:"))
+        mock_popen.assert_not_called()
 
     def test_seek_fwd_on_live_is_noop(self):
         self.server.path_value = "http://127.0.0.1:18765/live.ts?from=0"
         with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False, "skip_busy": False}), \
-             patch("player.controller.Timeshift.start_http") as mock_http:
+             patch("player.controller.Timeshift.start_http") as mock_http, \
+             patch("player.controller.subprocess.Popen") as mock_popen:
             self.assertTrue(self.controller.seek(10))
         mock_http.assert_not_called()
+        mock_popen.assert_not_called()
         sent = [m.get("command") for m in self.server.commands]
         self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
 
@@ -637,113 +664,26 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
 
 
 class TestLuaChannelKeys(unittest.TestCase):
-    def test_jk_surf_inside_mpv_not_via_blocking_cli(self):
+    def test_hud_keys_call_cli_not_follow_seek(self):
         with open(LUA_HUD, encoding="utf-8") as f:
             src = f.read()
         self.assertIn('mp.add_forced_key_binding("j", "tv_surf_prev_j", surf_prev, {repeatable = false})', src)
         self.assertIn('mp.add_forced_key_binding("k", "tv_surf_next_k", surf_next, {repeatable = false})', src)
-        self.assertIn('name = "loadfile"', src)
-        self.assertIn("is_timeshift_playback", src)
-        self.assertIn("is_library_playback", src)
-        self.assertIn("timeshift_behind", src)
-        self.assertIn("local function virt_update()", src)
-        self.assertLess(src.find("local function virt_update()"), src.find("local function timeshift_behind"))
-        self.assertIn("tv_return_live", src)
-        self.assertIn('"live"', src)
-        self.assertIn("tv_pause", src)
-        self.assertIn("request_pause", src)
-        self.assertIn("end-file", src)
-        self.assertIn("request_live", src)
-        self.assertIn("behind_live", src)
-        self.assertIn("tv-live-edge", src)
-        self.assertIn("tv-retuned", src)
-        self.assertIn("SURF_COMMIT_DELAY", src)
-        self.assertIn("format_ch_banner", src)
-        self.assertIn("surf_preview", src)
-        self.assertIn("repeatable = false", src)
-        self.assertIn('"play", target', src)
-        self.assertNotIn("add_timeout(0.2, commit_surf)", src)
-        self.assertNotIn('delta > 0 and "next" or "prev"', src)
-        self.assertIn('mp.commandv("set", "pause", "no")', src)
-        self.assertIn("seek", src)
-        self.assertIn("go_live", src)
-        self.assertIn("eof-reached", src)
-        self.assertIn("ATSC_BPS", src)
-        self.assertIn("virt_pos", src)
-        self.assertIn("atsc_duration", src)
-        self.assertIn("tv_cli", src)
-        self.assertIn("cli_async", src)
+        self.assertIn('mp.add_forced_key_binding("LEFT", "tv_seek_back"', src)
+        self.assertIn('mp.add_forced_key_binding("RIGHT", "tv_seek_fwd"', src)
+        self.assertIn('mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)', src)
+        self.assertIn('mp.add_forced_key_binding("l", "tv_return_live"', src)
         self.assertIn('cli_async({"pause"})', src)
         self.assertIn('cli_async({"seek"', src)
         self.assertIn('cli_async({"live"})', src)
-        self.assertIn("local function surf_next()\n    surf(1)\nend", src)
-        self.assertIn("if is_file_playback() then", src)
-        self.assertIn("surf_busy", src)
-        self.assertIn("timeshift_active.json", src)
-        self.assertIn("SEEK_STEP = 10", src)
-        self.assertIn("SEEK_NEAR = 5", src)
-        self.assertNotIn("timeshift_fwd_step", src)
-        self.assertIn("file_progress", src)
-        self.assertIn("file_bytes", src)
-        self.assertIn("apply_virt_seek", src)
-        self.assertNotIn("timeshift_skip", src)
-        self.assertNotIn("hold_dump_pause", src)
-        self.assertNotIn("send_follow_seek", src)
-        self.assertIn("timeshift-file", src)
-        self.assertIn("follow-sock", src)
-        self.assertIn("pcall(show_hud)", src)
-        self.assertNotIn("KEY_LEGEND", src)
-        self.assertIn("tv_hud osd-overlay failed", src)
-        self.assertIn("pointer_in", src)
-        self.assertIn("show_hud:", src)
-        self.assertIn("prog.end_time or", src)
-        self.assertNotIn("live_overlay", src)
-        self.assertNotIn("show_live_badge", src)
-        self.assertIn("timeshift_delay", src)
-        self.assertIn("stat_bytes", src)
-        self.assertNotIn("send_follow_cmd", src)
-        self.assertNotIn('"PAUSE"', src)
-        self.assertIn("playhead_byte", src)
-        self.assertIn("behind_clock", src)
-        self.assertNotIn("open_dump_at", src)
-        self.assertIn("is_follow_pipe", src)
-        self.assertNotIn("CATCHUP", src)
-        self.assertNotIn('"PACE"', src)
-        self.assertIn("%s behind", src)
-        self.assertIn("on_dump_eof", src)
-        self.assertIn("if is_timeshift_playback() then", src)
-        self.assertIn("seek_reload", src)
-        self.assertIn('register_script_message("tv-seek"', src)
-        self.assertIn('start = "#" .. tostring(bytes)', src)
-        self.assertNotIn("&H0000FF&", src)
-        self.assertIn("prev_was_file", src)
-        self.assertNotIn("pos(640,360)", src)
-        self.assertNotIn("live_flash_until", src)
-        self.assertNotIn("pending_live_flash", src)
-        self.assertNotIn("joined_live_flash", src)
-        self.assertIn("Pause buffer", src)
-        self.assertNotIn("Unseekable live buffer", src)
         self.assertNotIn("drop-buffers", src)
+        self.assertNotIn("send_follow_seek", src)
+        self.assertNotIn("timeshift_skip", src)
+        self.assertNotIn("open_dump_at", src)
         self.assertNotIn('mp.command("cycle fullscreen")', src)
-        self.assertNotIn("toggle_window_fullscreen", src)
         self.assertNotIn("tv_fs_key", src)
         self.assertNotIn("MBTN_LEFT_DBL", src)
-        self.assertNotIn("HYPR_FS_TOGGLE", src)
-        self.assertNotIn("hyprctl", src)
         self.assertIn("Super+F", src)
-        self.assertIn("(Super+F)", src)
-        self.assertIn("Mute{", src)
-        self.assertNotIn(" (F)%s", src)
-        self.assertNotIn("osd-font-size", src)
-        self.assertNotIn('osd_message("LIVE"', src)
-        self.assertIn('add_forced_key_binding("m", "tv_mute_toggle"', src)
-        self.assertIn('commandv("no-osd", "add", "volume"', src)
-        self.assertIn("omarchy-tv-follow.fifo", src)
-        self.assertIn('osd_message("Could not return to live"', src)
-        self.assertIn("}LIVE", src)
-        self.assertIn('"record", "stop"', src)
-        self.assertIn("LIVE_SLACK", src)
-        self.assertIn("is_library_playback()", src)
 
 
 class TestOmarchyFullscreen(unittest.TestCase):

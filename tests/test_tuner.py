@@ -3,13 +3,20 @@ Unit tests for TunerManager and TunerAdapter.
 """
 
 import unittest
-from engine.tuner import TunerManager, TunerAdapter
+from engine.tuner import TunerManager
+
+
+def _has_atsc_tuner() -> bool:
+    try:
+        return any(t.supports_atsc for t in TunerManager.list_tuners())
+    except Exception:
+        return False
 
 
 class TestTuner(unittest.TestCase):
+    @unittest.skipUnless(_has_atsc_tuner(), "no ATSC adapter on this machine")
     def test_tuner_discovery(self):
         tuners = TunerManager.list_tuners()
-        # On this machine, there are 2 tuners (Hauppauge WinTV-dualHD)
         self.assertGreaterEqual(len(tuners), 1)
         for t in tuners:
             self.assertIn("ATSC", t.delivery_systems)

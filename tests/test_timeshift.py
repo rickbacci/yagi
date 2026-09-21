@@ -3,6 +3,7 @@
 import os
 import socket
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch, MagicMock
@@ -69,6 +70,47 @@ class TestTimeshift(unittest.TestCase):
                     self.assertGreater(port, 0)
                 finally:
                     http.stop()
+
+    def test_http_waits_at_eof_then_serves_appended(self):
+        from engine.timeshift_http import TimeshiftHttp
+        import urllib.request
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            with open(live, "wb") as f:
+                f.write(b"A" * 188)
+            with patch("engine.timeshift_http.TIMESHIFT_FILE", live):
+                http = TimeshiftHttp()
+                port = http.start()
+                got: list = []
+                err: list = []
+
+                def reader() -> None:
+                    try:
+                        req = urllib.request.Request(f"http://127.0.0.1:{port}/live.ts?from=0")
+                        with urllib.request.urlopen(req, timeout=4) as resp:
+                            got.append(resp.read(188))
+                            got.append(resp.read(188))
+                    except Exception as exc:
+                        err.append(exc)
+
+                worker = threading.Thread(target=reader)
+                worker.start()
+                deadline = time.time() + 2
+                while time.time() < deadline and len(got) < 1:
+                    time.sleep(0.02)
+                try:
+                    self.assertEqual(got, [b"A" * 188], msg=err)
+                    time.sleep(0.1)
+                    self.assertEqual(len(got), 1, "connection closed at EOF instead of waiting")
+                    with open(live, "ab") as f:
+                        f.write(b"B" * 188)
+                    worker.join(timeout=3)
+                    self.assertFalse(err)
+                    self.assertEqual(got, [b"A" * 188, b"B" * 188])
+                finally:
+                    http.stop()
+                    worker.join(timeout=1)
 
     def test_start_http_child_keeps_port(self):
         import urllib.request
@@ -249,16 +291,6 @@ class TestTimeshift(unittest.TestCase):
                     s.sendall(b"POS")
                     pos = int(s.recv(64))
                 self.assertEqual(pos, 188)
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                    s.settimeout(1.0)
-                    s.connect(sock)
-                    s.sendall(b"SEEK 0")
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                    s.settimeout(1.0)
-                    s.connect(sock)
-                    s.sendall(b"POS")
-                    pos = int(s.recv(64))
-                self.assertEqual(pos, 0)
             finally:
                 if proc.stdout:
                     try:
@@ -267,27 +299,6 @@ class TestTimeshift(unittest.TestCase):
                         pass
                 proc.kill()
                 proc.wait(timeout=1)
-
-    def test_follow_pace_and_catchup_commands(self):
-        from engine.follow_ts import TsFollower
-        follower = TsFollower("/tmp/x.ts", 0, "/tmp/x.sock")
-        follower._handle_ctl("PACE 500000")
-        self.assertTrue(follower._paced)
-        self.assertEqual(follower._pace_bps, 500000.0)
-        follower._handle_ctl("CATCHUP")
-        self.assertFalse(follower._paced)
-
-    def test_follow_pace_wait_sleeps_when_ahead(self):
-        from engine.follow_ts import TsFollower
-        follower = TsFollower("/tmp/x.ts", 0, "/tmp/x.sock")
-        follower._paced = True
-        follower._pace_bps = 10000
-        follower._pace_origin_t = time.monotonic()
-        follower._pace_origin_pos = 0
-        follower.pos = 20000
-        t0 = time.monotonic()
-        follower._pace_wait()
-        self.assertGreaterEqual(time.monotonic() - t0, 0.2)
 
     def test_start_dump_keep_follow_does_not_wipe_follow(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

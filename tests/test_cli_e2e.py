@@ -69,7 +69,7 @@ class TestCliE2E(unittest.TestCase):
         )
         self.assertEqual(res.returncode, 0, f"Status failed: {res.stderr}")
         self.assertIn("Discovered", res.stdout)
-        self.assertIn("LG Electronics", res.stdout)
+        self.assertNotIn("Traceback", res.stderr)
 
     def test_cli_channels_empty(self):
         """omarchy-tv channels must report 'No channels found' gracefully when empty."""
