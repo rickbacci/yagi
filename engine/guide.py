@@ -10,7 +10,11 @@ import re
 import time
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable, Tuple
-from engine.paths import GUIDE_JSON_PATH, CHANNELS_JSON_PATH
+from zoneinfo import ZoneInfo
+
+from engine.paths import GUIDE_JSON_PATH, GUIDE_HISTORY_PATH, CHANNELS_JSON_PATH
+
+_EASTERN = ZoneInfo("America/New_York")
 
 
 # High-quality broadcast schedule templates for North American terrestrial networks
@@ -327,6 +331,8 @@ def search_guide(
                 "start": prog.get("start") or "",
                 "end": prog.get("end") or "",
                 "synopsis": prog.get("synopsis") or "",
+                "usual": prog.get("usual") or "",
+                "also": prog.get("also") or "",
                 "duration_sec": int(prog.get("duration_sec") or 0),
                 "on_now": program_is_on(prog, now_minutes),
                 "before": _neighbor_program(programs[index - 1] if index else None),
@@ -484,6 +490,209 @@ def _read_channels_file(path: str) -> List[Dict[str, Any]]:
     return []
 
 
+_WEEKDAY_NAMES = (
+    "Mondays",
+    "Tuesdays",
+    "Wednesdays",
+    "Thursdays",
+    "Fridays",
+    "Saturdays",
+    "Sundays",
+)
+_HISTORY_RAW_SEC = 10 * 24 * 3600
+_HISTORY_USUAL_SEC = 120 * 24 * 3600
+
+
+def _fold_title(title: str) -> str:
+    return " ".join(str(title or "").casefold().split())
+
+
+def _program_when(prog: Dict[str, Any]) -> Optional[datetime]:
+    gps = prog.get("gps_start")
+    if gps is None or gps == "":
+        return None
+    try:
+        gps_i = int(gps)
+    except (TypeError, ValueError):
+        return None
+    from engine.psip import gps_to_datetime
+
+    return gps_to_datetime(gps_i)
+
+
+def _load_history(path: str) -> Dict[str, Any]:
+    if not os.path.exists(path):
+        return {"airings": [], "usual": []}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"airings": [], "usual": []}
+    if not isinstance(data, dict):
+        return {"airings": [], "usual": []}
+    airings = data.get("airings") if isinstance(data.get("airings"), list) else []
+    usual = data.get("usual") if isinstance(data.get("usual"), list) else []
+    return {"airings": airings, "usual": usual}
+
+
+def _save_history(payload: Dict[str, Any], path: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, path)
+
+
+def _usual_line(slot: Dict[str, Any]) -> str:
+    weeks = slot.get("weeks") or []
+    if len(weeks) < 2:
+        return ""
+    weekday = int(slot.get("weekday") or 0)
+    if weekday < 0 or weekday > 6:
+        return ""
+    clock = str(slot.get("clock") or "")
+    if not clock:
+        return ""
+    return f"Usually {_WEEKDAY_NAMES[weekday]} at {clock}"
+
+
+def remember_guide_history(
+    channels: Optional[Dict[str, Any]],
+    history_path: Optional[str] = None,
+    now: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Keep about 10 days of real airings, and the weekly slot after it repeats."""
+    path = history_path or GUIDE_HISTORY_PATH
+    now_ts = time.time() if now is None else float(now)
+    history = _load_history(path)
+    fresh: List[Dict[str, Any]] = []
+    for number, row in (channels or {}).items():
+        if not isinstance(row, dict):
+            continue
+        programs = [p for p in (row.get("programs") or []) if isinstance(p, dict)]
+        for index, prog in enumerate(programs):
+            when = _program_when(prog)
+            title = str(prog.get("title") or "").strip()
+            clock = str(prog.get("start") or "").strip()
+            if when is None or not title or not clock:
+                continue
+            before = programs[index - 1] if index else None
+            after = programs[index + 1] if index + 1 < len(programs) else None
+            fresh.append({
+                "channel": str(number),
+                "station": str(row.get("station") or row.get("callsign") or ""),
+                "title": title,
+                "start": int(when.timestamp()),
+                "weekday": when.weekday(),
+                "clock": clock,
+                "before": str((before or {}).get("title") or ""),
+                "after": str((after or {}).get("title") or ""),
+            })
+
+    seen = {
+        (str(item.get("channel")), _fold_title(str(item.get("title") or "")), int(item.get("start") or 0))
+        for item in history["airings"]
+        if isinstance(item, dict)
+    }
+    for item in fresh:
+        key = (item["channel"], _fold_title(item["title"]), item["start"])
+        if key in seen:
+            continue
+        history["airings"].append(item)
+        seen.add(key)
+
+    raw_cut = now_ts - _HISTORY_RAW_SEC
+    history["airings"] = [
+        item for item in history["airings"]
+        if isinstance(item, dict) and int(item.get("start") or 0) >= raw_cut
+    ]
+
+    slots: Dict[Tuple[str, str, int, str], Dict[str, Any]] = {}
+    kept_usual: List[Dict[str, Any]] = []
+    for slot in history["usual"]:
+        if not isinstance(slot, dict):
+            continue
+        key = (
+            str(slot.get("channel") or ""),
+            _fold_title(str(slot.get("title") or "")),
+            int(slot.get("weekday") or 0),
+            str(slot.get("clock") or ""),
+        )
+        slots[key] = slot
+        kept_usual.append(slot)
+    history["usual"] = kept_usual
+    for item in fresh:
+        when = datetime.fromtimestamp(item["start"], tz=_EASTERN)
+        iso = when.isocalendar()
+        week = f"{iso.year}-W{iso.week:02d}"
+        key = (item["channel"], _fold_title(item["title"]), item["weekday"], item["clock"])
+        slot = slots.get(key)
+        if slot is None:
+            slot = {
+                "channel": item["channel"],
+                "title": item["title"],
+                "weekday": item["weekday"],
+                "clock": item["clock"],
+                "weeks": [],
+                "last_start": item["start"],
+            }
+            history["usual"].append(slot)
+            slots[key] = slot
+        weeks = slot.setdefault("weeks", [])
+        if week not in weeks:
+            weeks.append(week)
+        slot["title"] = item["title"]
+        slot["last_start"] = max(int(slot.get("last_start") or 0), item["start"])
+
+    usual_cut = now_ts - _HISTORY_USUAL_SEC
+    history["usual"] = [
+        slot for slot in history["usual"]
+        if isinstance(slot, dict) and int(slot.get("last_start") or 0) >= usual_cut
+    ]
+    slots = {
+        (
+            str(slot.get("channel") or ""),
+            _fold_title(str(slot.get("title") or "")),
+            int(slot.get("weekday") or 0),
+            str(slot.get("clock") or ""),
+        ): slot
+        for slot in history["usual"]
+    }
+
+    for number, row in (channels or {}).items():
+        if not isinstance(row, dict):
+            continue
+        for prog in row.get("programs") or []:
+            if not isinstance(prog, dict):
+                continue
+            when = _program_when(prog)
+            clock = str(prog.get("start") or "").strip()
+            title = str(prog.get("title") or "").strip()
+            if when is None or not clock or not title:
+                continue
+            slot = slots.get((str(number), _fold_title(title), when.weekday(), clock))
+            line = _usual_line(slot) if slot else ""
+            if line:
+                prog["usual"] = line
+            others: List[str] = []
+            for air in history["airings"]:
+                if str(air.get("channel")) == str(number):
+                    continue
+                air_day = air.get("weekday")
+                if air_day is None or int(air_day) != when.weekday() or str(air.get("clock") or "") != clock:
+                    continue
+                label = f"{air.get('channel')} {air.get('title')}".strip()
+                if label and label not in others:
+                    others.append(label)
+                if len(others) == 2:
+                    break
+            if others:
+                prog["also"] = f"Also at {clock}: " + ", ".join(others)
+
+    _save_history({"airings": history["airings"], "usual": history["usual"]}, path)
+    return history
+
+
 def refresh_guide(
     channels: Optional[List[Dict[str, Any]]] = None,
     guide_path: Optional[str] = None,
@@ -519,6 +728,11 @@ def refresh_guide(
             skipped = True
         else:
             apply_program_events(merged, grabber() or {})
+    remember_guide_history(
+        merged,
+        history_path=os.path.join(os.path.dirname(target), "guide_history.json"),
+        now=time.time(),
+    )
     payload = {"updated_at": time.time(), "channels": merged, "source": "lineup"}
     _write_guide(payload, target)
     return {"skipped": skipped, "channels": merged}

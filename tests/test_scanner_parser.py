@@ -84,6 +84,21 @@ class TestScannerParser(unittest.TestCase):
             self.assertEqual(data["channels"][0]["name"], "53.1 Daystar")
             self.assertTrue(os.path.exists(test_mpv_path))
 
+    def test_empty_scan_does_not_replace_a_saved_lineup(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            test_json_path = os.path.join(tmp_dir, "channels.json")
+            test_mpv_path = os.path.join(tmp_dir, "channels.conf")
+            with open(test_json_path, "w", encoding="utf-8") as f:
+                f.write('{"total": 1, "channels": [{"name": "KEEP"}]}')
+            with open(test_mpv_path, "w", encoding="utf-8") as f:
+                f.write("KEEP:1:8VSB:1:1:1\n")
+            saved = AtscScanner.commit_discovered([], json_path=test_json_path, mpv_path=test_mpv_path)
+            self.assertFalse(saved)
+            with open(test_json_path, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["channels"][0]["name"], "KEEP")
+            with open(test_mpv_path, encoding="utf-8") as f:
+                self.assertIn("KEEP", f.read())
+
 
 if __name__ == "__main__":
     unittest.main()

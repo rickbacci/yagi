@@ -23,6 +23,7 @@ BarWidget {
       root.openIntoGuide = false
       root.libraryModalOpen = false
       root.cursorActive = false
+      root.channelListOpen = !root.flyoutStatusOn
       root.reloadChannelData()
       if (root.guideModalOpen)
         root.guideClockMin = Model.minutesNow()
@@ -55,7 +56,23 @@ BarWidget {
   property string libraryBudgetLabel: ""
   property var libraryMaxGb: "auto"
   property int recCursorIndex: 0
-  readonly property bool showChannelBrowser: root.activeChannelName === ""
+  readonly property bool tuner0Busy: root.activeChannelName !== "" && root.isLiveSession
+  readonly property bool tuner1Busy: root.isRecording || root.isScanning || root.guideRefreshing
+  readonly property bool bothTunersBusy: root.tuner0Busy && root.tuner1Busy
+  readonly property bool flyoutStatusOn: root.activeChannelName !== "" || root.isRecording || root.isScanning || root.guideRefreshing
+  property bool channelListOpen: true
+  readonly property string channelListLabel: {
+    if (!root.flyoutStatusOn) return "Channels"
+    var watch = !root.tuner0Busy
+    var record = !root.tuner1Busy
+    if (watch && record) return "Watch or record"
+    if (watch) return "Watch"
+    if (record) return "Record"
+    return "Channels"
+  }
+  onFlyoutStatusOnChanged: root.channelListOpen = !root.flyoutStatusOn
+  onBothTunersBusyChanged: if (root.bothTunersBusy) root.channelListOpen = false
+  readonly property bool showChannelBrowser: root.channelListOpen && !root.bothTunersBusy
   property int guideSlotOffset: 0
   property int guideClockMin: -1
   readonly property var guideAllSlots: Model.guideAllSlots(root.guideClockMin)
@@ -215,7 +232,16 @@ BarWidget {
       return
     }
     var ch = root.displayChannels[root.cursorIndex]
-    if (ch) root.selectChannel(ch.tune_name || ch.name)
+    if (ch) root.useListedChannel(ch.tune_name || ch.name)
+  }
+
+  function useListedChannel(chName) {
+    if (!chName) return
+    if (root.tuner0Busy && !root.tuner1Busy) {
+      root.toggleRecord(chName)
+      return
+    }
+    root.selectChannel(chName)
   }
 
   function cursorChannelIdent() {
@@ -316,6 +342,8 @@ BarWidget {
       start: block.start || "",
       end: block.end || "",
       synopsis: block.synopsis || "",
+      usual: block.usual || "",
+      also: block.also || "",
       duration_sec: Number(block.duration_sec) || 0,
       now: !!block.now,
       before: block.before || null,
@@ -548,13 +576,6 @@ BarWidget {
     tuneProc.running = true
   }
 
-  function pausePlayer() {
-    navProc.running = false
-    navProc.command = [root.binPath, "pause"]
-    navProc.running = true
-    root.close()
-  }
-
   function seekPlayer(seconds) {
     navProc.running = false
     navProc.command = [root.binPath, "seek", String(seconds)]
@@ -735,16 +756,61 @@ BarWidget {
 
   function recordingTitle(r) {
     if (!r) return "Recording"
+    var list = root.channelsData || []
+    var keys = [r.tune_name, r.station, r.name, r.channel_number]
+    var i
+    var k
+    for (i = 0; i < list.length; i++) {
+      var ch = list[i]
+      if (!ch) continue
+      for (k = 0; k < keys.length; k++) {
+        var key = keys[k]
+        if (!key) continue
+        if (ch.tune_name === key || ch.name === key || ch.channel_number === key) {
+          var title = Model.getDisplayTitle(ch)
+          if (title) return title
+        }
+      }
+    }
     var num = (r.channel_number || "").toString()
     var st = (r.station || r.name || "").toString()
     if (num && st) return num + " " + st
     return num || st || "Recording"
   }
 
-  readonly property string watchModeLabel: {
-    if (tuneProc.running && root.playerMode !== "recording")
-      return "TUNING"
-    return root.playerMode === "timeshift" ? "TIMESHIFT" : (root.isPlayback ? "PLAYBACK" : "LIVE")
+  function barWatchLabel() {
+    if (!root.activeChannelName || root.isLibraryPlayback) return ""
+    var list = root.channelsData || []
+    var i
+    for (i = 0; i < list.length; i++) {
+      var ch = list[i]
+      if (!ch) continue
+      if (ch.name === root.activeChannelName || ch.tune_name === root.activeChannelName) {
+        if (ch.channel_number) return String(ch.channel_number)
+        return Model.getChannelBadge(ch)
+      }
+    }
+    return ""
+  }
+
+  function barRecLabel() {
+    if (!root.isRecording) return ""
+    var r = root.activeRecordings && root.activeRecordings.length ? root.activeRecordings[0] : null
+    if (!r) return "REC"
+    var num = (r.channel_number || "").toString()
+    if (num) return "REC " + num
+    var st = (r.station || "").toString()
+    return st ? ("REC " + st) : "REC"
+  }
+
+  function barStatusText() {
+    if (root.isScanning) return "Scan " + root.scanPercent + "%"
+    var parts = []
+    var watch = root.barWatchLabel()
+    var rec = root.barRecLabel()
+    if (watch) parts.push(watch)
+    if (rec) parts.push(rec)
+    return parts.join(" · ")
   }
 
   function toggleFavorite(chName) {
@@ -763,23 +829,62 @@ BarWidget {
     Text {
       id: iconText
       textFormat: Text.PlainText
-      text: root.isScanning ? "󰛳" : (root.isRecording ? "󰑈" : "󰢹")
-      color: root.isRecording ? Color.urgent : (root.isScanning || root.activeChannelName !== "" ? Color.accent : root.bar.barForeground)
+      text: "󰢹"
+      color: root.bar.barForeground
       font.family: root.bar.fontFamily
       font.pixelSize: Style.font.body
       anchors.verticalCenter: parent.verticalCenter
     }
 
-    Text {
+    Row {
       id: label
-      visible: (root.isScanning || root.isRecording || root.activeChannelName !== "") && !root.bar.vertical
-      textFormat: Text.PlainText
-      text: root.isScanning ? (root.scanPercent + "% Scanning") : (root.isRecording ? ("REC " + (root.activeRecordings[0] ? (root.activeRecordings[0].station || root.activeRecordings[0].channel_number) : "")) : root.activeChannelName)
-      color: root.isRecording ? Color.urgent : (root.isScanning ? Color.accent : root.bar.barForeground)
-      font.family: root.bar.fontFamily
-      font.pixelSize: Style.font.bodySmall
-      font.bold: true
+      visible: root.barStatusText() !== "" && !root.bar.vertical
+      spacing: Style.space(4)
       anchors.verticalCenter: parent.verticalCenter
+
+      Text {
+        visible: !root.isScanning && root.barWatchLabel() !== ""
+        textFormat: Text.PlainText
+        text: root.barWatchLabel()
+        color: root.bar.barForeground
+        font.family: root.bar.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        visible: !root.isScanning && root.barWatchLabel() !== "" && root.barRecLabel() !== ""
+        textFormat: Text.PlainText
+        text: "·"
+        color: Color.accent
+        font.family: root.bar.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        visible: !root.isScanning && root.barRecLabel() !== ""
+        textFormat: Text.PlainText
+        text: root.barRecLabel()
+        color: Color.urgent
+        font.family: root.bar.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+        anchors.verticalCenter: parent.verticalCenter
+      }
+
+      Text {
+        visible: root.isScanning
+        textFormat: Text.PlainText
+        text: root.barStatusText()
+        color: Color.accent
+        font.family: root.bar.fontFamily
+        font.pixelSize: Style.font.bodySmall
+        font.bold: true
+        anchors.verticalCenter: parent.verticalCenter
+      }
     }
   }
 
@@ -1155,9 +1260,6 @@ BarWidget {
       onTextKey: function(t) {
         if (t === "g" || t === "G") root.toggleGuide()
         else if (t === "v" || t === "V") root.toggleLibrary()
-        else if (t === "x" || t === "X") {
-          if (root.activeChannelName !== "") root.stopPlayer()
-        }
         else if (t === "a" || t === "A") {
           root.setChannelFilter("all")
         }
@@ -1258,11 +1360,12 @@ BarWidget {
 
             Text {
               textFormat: Text.PlainText
-              text: root.isScanning
-                ? "Scanning Broadcast Frequencies..."
-                : (root.listedChannelCount > 0
-                    ? (root.listedChannelCount + " channels · " + (root.favoritesData ? root.favoritesData.length : 0) + " favorites")
-                    : "No channels scanned")
+              text: {
+                if (root.isScanning) return "Scanning Broadcast Frequencies..."
+                return root.listedChannelCount > 0
+                  ? (root.listedChannelCount + " channels · " + (root.favoritesData ? root.favoritesData.length : 0) + " favorites")
+                  : "No channels scanned"
+              }
               color: root.isScanning ? Color.accent : Qt.darker(root.bar.foreground, 1.4)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
@@ -1445,182 +1548,77 @@ BarWidget {
         }
       }
 
-      // Now Playing Info Card
       BorderSurface {
         id: nowPlayingCard
         visible: root.activeChannelName !== ""
         readonly property var activeProg: root.getActiveProgram()
+        readonly property string showLine: (activeProg && activeProg.title) ? activeProg.title : ""
         width: parent.width
-        implicitHeight: nowPlayingCol.implicitHeight + Style.space(20)
+        implicitHeight: watchRow.implicitHeight + Style.space(12)
         radius: Style.spacing.labelGap
         color: Style.selectedFillFor(root.bar.foreground, Color.accent)
         borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
 
-        Column {
-          id: nowPlayingCol
+        Item {
+          id: watchRow
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.top: parent.top
-          anchors.margins: Style.space(10)
-          spacing: Style.space(8)
+          anchors.margins: Style.space(6)
+          implicitHeight: Math.max(watchLine.implicitHeight, npCloseBtn.implicitHeight)
+          height: implicitHeight
 
-          Item {
-            width: parent.width
-            height: Math.max(npLiveReturn.implicitHeight, npModeLabel.implicitHeight)
+          Button {
+            id: npCloseBtn
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Close"
+            tooltipText: "Close TV"
+            foreground: root.bar.foreground
+            fontSize: Style.font.caption
+            onClicked: root.stopPlayer()
+          }
 
-            Button {
-              id: npLiveReturn
-              visible: root.isPlayback
-              anchors.left: parent.left
+          Row {
+            id: watchLine
+            anchors.left: parent.left
+            anchors.right: npCloseBtn.left
+            anchors.rightMargin: Style.space(8)
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(4)
+
+            Text {
+              id: watchChannel
+              textFormat: Text.PlainText
+              text: root.getActiveDisplayName()
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
               anchors.verticalCenter: parent.verticalCenter
-              text: "Live"
-              tooltipText: "Return to live TV"
-              foreground: root.bar.foreground
-              fontSize: Style.font.caption
-              onClicked: root.returnToLive()
             }
 
             Text {
-              id: npModeLabel
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
+              id: watchDot
+              visible: nowPlayingCard.showLine !== ""
               textFormat: Text.PlainText
-              text: root.watchModeLabel
+              text: "·"
               color: Color.accent
               font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-            }
-          }
-
-          Text {
-            textFormat: Text.PlainText
-            text: root.getActiveDisplayName()
-            color: root.bar.foreground
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.subtitle
-            font.bold: true
-            elide: Text.ElideRight
-            width: parent.width
-          }
-
-          Text {
-            visible: nowPlayingCard.activeProg !== null && nowPlayingCard.activeProg.title !== undefined
-            textFormat: Text.PlainText
-            text: nowPlayingCard.activeProg ? ("󰥔 " + nowPlayingCard.activeProg.title + (nowPlayingCard.activeProg.start_time ? (" (" + nowPlayingCard.activeProg.start_time + " - " + nowPlayingCard.activeProg.end_time + ")") : "")) : ""
-            color: Color.accent
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-            elide: Text.ElideRight
-            width: parent.width
-          }
-
-          Text {
-            visible: nowPlayingCard.activeProg !== null && nowPlayingCard.activeProg.synopsis !== undefined
-            textFormat: Text.PlainText
-            text: nowPlayingCard.activeProg ? nowPlayingCard.activeProg.synopsis : ""
-            color: Qt.darker(root.bar.foreground, 1.4)
-            font.family: root.bar.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-            width: parent.width
-            maximumLineCount: 2
-            elide: Text.ElideRight
-          }
-
-          Item {
-            width: parent.width
-            height: Math.max(npLiveRow.implicitHeight, npSeekRow.implicitHeight, npCloseBtn.implicitHeight)
-
-            Row {
-              id: npLiveRow
-              visible: root.isLiveSession
-              anchors.horizontalCenter: parent.horizontalCenter
+              font.pixelSize: Style.font.bodySmall
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(6)
-
-              Button {
-                iconText: "󰒮"
-                tooltipText: "Seek back 15 seconds"
-                foreground: root.bar.foreground
-                horizontalPadding: Style.spacing.controlPaddingX
-                verticalPadding: Style.spacing.controlPaddingY
-                onClicked: root.seekPlayer(-15)
-              }
-
-              Button {
-                id: npPauseBtn
-                iconText: "󰏤"
-                text: "Pause"
-                tooltipText: "Pause live TV"
-                foreground: root.bar.foreground
-                onClicked: root.pausePlayer()
-              }
-
-              Button {
-                iconText: "󰒭"
-                tooltipText: "Seek forward 15 seconds"
-                foreground: root.bar.foreground
-                horizontalPadding: Style.spacing.controlPaddingX
-                verticalPadding: Style.spacing.controlPaddingY
-                onClicked: root.seekPlayer(15)
-              }
-
-              Button {
-                visible: !root.isChannelRecording(root.activeChannelName)
-                iconText: "󰑈"
-                text: "Record"
-                tooltipText: "Record this channel"
-                foreground: root.bar.foreground
-                onClicked: root.toggleRecord(root.activeChannelName)
-              }
             }
 
-            Row {
-              id: npSeekRow
-              visible: root.isLibraryPlayback
-              anchors.horizontalCenter: parent.horizontalCenter
+            Text {
+              visible: nowPlayingCard.showLine !== ""
+              width: Math.max(0, watchLine.width - watchChannel.width - watchDot.width - watchLine.spacing * 2)
+              textFormat: Text.PlainText
+              text: nowPlayingCard.showLine
+              color: Color.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              elide: Text.ElideRight
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(6)
-
-              Button {
-                iconText: "󰒮"
-                tooltipText: "Seek back 15 seconds"
-                foreground: root.bar.foreground
-                horizontalPadding: Style.spacing.controlPaddingX
-                verticalPadding: Style.spacing.controlPaddingY
-                onClicked: root.seekPlayer(-15)
-              }
-
-              Button {
-                iconText: "󰏤"
-                text: "Pause"
-                tooltipText: "Pause or resume"
-                foreground: root.bar.foreground
-                onClicked: root.pausePlayer()
-              }
-
-              Button {
-                iconText: "󰒭"
-                tooltipText: "Seek forward 15 seconds"
-                foreground: root.bar.foreground
-                horizontalPadding: Style.spacing.controlPaddingX
-                verticalPadding: Style.spacing.controlPaddingY
-                onClicked: root.seekPlayer(15)
-              }
-            }
-
-            Button {
-              id: npCloseBtn
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              iconText: "󰅖"
-              tooltipText: "Close TV"
-              foreground: root.bar.foreground
-              horizontalPadding: Style.spacing.controlPaddingX
-              verticalPadding: Style.spacing.controlPaddingY
-              onClicked: root.stopPlayer()
             }
           }
         }
@@ -1631,77 +1629,137 @@ BarWidget {
 
         BorderSurface {
           required property var modelData
-          required property int index
           width: parent.width
-          implicitHeight: recCardCol.implicitHeight + Style.space(20)
+          implicitHeight: recRow.implicitHeight + Style.space(12)
           radius: Style.spacing.labelGap
           color: Style.selectedFillFor(root.bar.foreground, Color.urgent)
           borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.urgent)
 
-          Column {
-            id: recCardCol
+          Item {
+            id: recRow
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
-            anchors.margins: Style.space(10)
-            spacing: Style.space(8)
+            anchors.margins: Style.space(6)
+            implicitHeight: Math.max(recLine.implicitHeight, recStopBtn.implicitHeight)
+            height: implicitHeight
 
-            Item {
-              width: parent.width
-              height: recModeLabel.implicitHeight
+            Button {
+              id: recStopBtn
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              text: "Stop"
+              tooltipText: "Stop this recording"
+              foreground: Color.urgent
+              fontSize: Style.font.caption
+              onClicked: root.toggleRecord(root.recordingIdent(modelData))
+            }
+
+            Row {
+              id: recLine
+              anchors.left: parent.left
+              anchors.right: recStopBtn.left
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(4)
 
               Text {
-                id: recModeLabel
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
+                id: recChannel
                 textFormat: Text.PlainText
-                text: "REC"
+                text: root.recordingTitle(modelData)
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                id: recDot
+                visible: !!(modelData && modelData.program_title)
+                textFormat: Text.PlainText
+                text: "·"
+                color: Color.accent
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                visible: !!(modelData && modelData.program_title)
+                width: Math.max(0, recLine.width - recChannel.width - recDot.width - recLine.spacing * 2)
+                textFormat: Text.PlainText
+                text: modelData && modelData.program_title ? modelData.program_title : ""
                 color: Color.urgent
                 font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-            }
-
-            Text {
-              textFormat: Text.PlainText
-              text: root.recordingTitle(modelData)
-              color: root.bar.foreground
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.subtitle
-              font.bold: true
-              elide: Text.ElideRight
-              width: parent.width
-            }
-
-            Text {
-              visible: !!(modelData && modelData.program_title)
-              textFormat: Text.PlainText
-              text: modelData && modelData.program_title ? ("󰑊 " + modelData.program_title) : ""
-              color: Color.urgent
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              font.bold: true
-              elide: Text.ElideRight
-              width: parent.width
-            }
-
-            Item {
-              width: parent.width
-              height: recStopBtn.implicitHeight
-
-              Button {
-                id: recStopBtn
-                anchors.horizontalCenter: parent.horizontalCenter
+                font.pixelSize: Style.font.bodySmall
+                elide: Text.ElideRight
                 anchors.verticalCenter: parent.verticalCenter
-                iconText: "󰓛"
-                text: "Stop " + ((modelData && (modelData.channel_number || modelData.station)) || "REC")
-                tooltipText: "Stop this recording"
-                foreground: Color.urgent
-                onClicked: root.toggleRecord(root.recordingIdent(modelData))
               }
             }
           }
+        }
+      }
+
+      BorderSurface {
+        id: guideUpdateCard
+        visible: root.guideRefreshing
+        width: parent.width
+        implicitHeight: guideUpdateRow.implicitHeight + Style.space(12)
+        radius: Style.spacing.labelGap
+        color: Style.selectedFillFor(root.bar.foreground, Color.accent)
+        borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
+
+        Item {
+          id: guideUpdateRow
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.margins: Style.space(6)
+          implicitHeight: guideUpdateLine.implicitHeight
+          height: implicitHeight
+
+          Text {
+            id: guideUpdateLine
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: "Updating the Guide"
+            color: Color.accent
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: true
+            elide: Text.ElideRight
+          }
+        }
+      }
+
+      Item {
+        visible: !root.bothTunersBusy
+        width: parent.width
+        height: Math.max(Style.space(32), channelListToggle.implicitHeight)
+
+        Text {
+          anchors.left: parent.left
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: root.channelListLabel
+          color: root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.bold: true
+        }
+
+        Button {
+          id: channelListToggle
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          text: root.channelListOpen ? "Hide" : "Show"
+          tooltipText: root.channelListOpen ? "Hide the channel list" : "Show the channel list"
+          foreground: root.bar.foreground
+          fontSize: Style.font.caption
+          onClicked: root.channelListOpen = !root.channelListOpen
         }
       }
 
@@ -1809,7 +1867,12 @@ BarWidget {
         id: channelScrollContainer
         visible: root.showChannelBrowser && root.displayChannels.length > 0
         width: parent.width
-        height: Math.min(Math.max(Style.space(260), Math.round((popup.availableCardHeight || Style.space(520)) * 0.50)), channelListView.implicitHeight)
+        height: {
+          var cap = Math.max(Style.space(260), Math.round((popup.availableCardHeight || Style.space(520)) * 0.50))
+          var content = channelListView.implicitHeight
+          if (content > 0 && content < cap) return content
+          return cap
+        }
         clip: true
 
         Flickable {
@@ -1854,7 +1917,7 @@ BarWidget {
                     root.cursorActive = true
                     root.cursorIndex = chItem.index
                   }
-                  onClicked: root.selectChannel(chItem.modelData.tune_name || chItem.modelData.name)
+                  onClicked: root.useListedChannel(chItem.modelData.tune_name || chItem.modelData.name)
                   onWheel: function(wheel) { wheel.accepted = false }
                 }
 
@@ -2279,6 +2342,17 @@ BarWidget {
 
             Text {
               width: parent.width
+              visible: !!(root.guideDetail && root.guideDetail.usual)
+              textFormat: Text.PlainText
+              text: root.guideDetail ? (root.guideDetail.usual || "") : ""
+              color: Color.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+            }
+
+            Text {
+              width: parent.width
               visible: !!(root.guideDetail && root.guideDetail.before && root.guideDetail.before.title)
               textFormat: Text.PlainText
               text: {
@@ -2307,6 +2381,17 @@ BarWidget {
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
+            }
+
+            Text {
+              width: parent.width
+              visible: !!(root.guideDetail && root.guideDetail.also)
+              textFormat: Text.PlainText
+              text: root.guideDetail ? (root.guideDetail.also || "") : ""
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
             }
 
             Text {
@@ -2688,6 +2773,17 @@ BarWidget {
                     textFormat: Text.PlainText
                     text: (modelData.start && modelData.end) ? (modelData.start + " – " + modelData.end) : (modelData.start || "")
                     color: Qt.darker(root.bar.foreground, 1.5)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                    visible: text !== ""
+                  }
+
+                  Text {
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: modelData.usual || ""
+                    color: Color.accent
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.caption
                     elide: Text.ElideRight

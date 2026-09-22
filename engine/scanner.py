@@ -251,8 +251,8 @@ class AtscScanner:
             if parsed_channels:
                 discovered_channels = parsed_channels
 
-            # Save to user configs
-            self.save_channels(discovered_channels)
+            # An empty scan must not erase a lineup already saved.
+            self.commit_discovered(discovered_channels)
 
             ev_done = {
                 "status": "complete",
@@ -390,6 +390,14 @@ class AtscScanner:
                 sync_guide_from_channels(enriched_channels)
             except Exception:
                 pass
+
+    @classmethod
+    def commit_discovered(cls, channels: List[Dict[str, Any]], json_path: Optional[str] = None, mpv_path: Optional[str] = None) -> bool:
+        """Write a scan result. An empty result leaves the saved lineup alone."""
+        if not channels:
+            return False
+        cls.save_channels(channels, json_path=json_path, mpv_path=mpv_path)
+        return True
 
 
 if __name__ == "__main__":

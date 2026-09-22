@@ -21,12 +21,19 @@ OTA TV for Omarchy (Hyprland + Quickshell + Python + MPV). Current idea: `DESIGN
 10. Library recordings: `$XDG_VIDEOS_DIR/TV`. Pause-live dump: `$XDG_CACHE_HOME/omarchy/tv/timeshift/`. Not the same tree. PiP is never `dvb://`. Close TV wipes the dump.
 11. Skip seconds, overlay pixels, cache minutes are preferences until this hardware and this mpv prove them. Do not freeze them here.
 
+## Settled
+The picture overlay is settled (`player/scripts/tv_hud.lua`, `render_hud`). Leave that look alone. If work wants to change it, stop, say why the look has to change, and wait.
+
+Dark top bar. Station color on the left edge. Channel number, network, station name, the show on now and its time. Right side: LIVE, PLAY, or how far behind. Under that, REC or Muted. A progress line on the bottom edge of this bar only while paused or behind live. Bottom bar is one control line: Prev, Next, Pause or Play, Record or Stop, Live, Mute, and Vol plus the number. Behind live or a library file, that line adds Back 10s and Ahead 10s. Vol stays the number while muted. The word Muted stays on the top bar.
+
+A fix that does not change that look can land. Say so when it touches the overlay. Do not restyle, move, add, or drop a word, color, or bar to make another feature fit.
+
 ## Working style
 One task. If they batch asks, name the current task, park the rest on the todo list, finish that task before switching.
 
 Talk first. Recommendation with pluses and minuses second. Numbered plan third. Code after they choose. Do not commit unless asked.
 
-Obey **Hard constraints**. DESIGN / skill / README / HUD are the current idea, not a veto. If the goal needs a path they don’t describe, advise that path, discuss, then proceed after we understand each other. Update them after it works. Do not stop to rewrite docs in order to think.
+Obey **Hard constraints** and **Settled**. DESIGN / skill / README are the current idea, not a veto. The picture overlay look is. If the goal needs a path they don’t describe, advise that path, discuss, then proceed after we understand each other. Update them after it works. Do not stop to rewrite docs in order to think.
 
 Read this machine’s mpv / Quickshell / Hyprland / DVB docs, not a remembered wiki.
 

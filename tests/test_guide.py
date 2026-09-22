@@ -327,6 +327,84 @@ class TestGuide(unittest.TestCase):
         self.assertEqual(merged["8.1"]["programs"], [])
         self.assertEqual(merged["8.1"]["source"], "psip")
 
+    def test_two_weeks_says_when_a_show_usually_airs(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from engine.psip import GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
+        from engine.guide import remember_guide_history
+
+        eastern = ZoneInfo("America/New_York")
+
+        def gps(when):
+            return int(when.timestamp()) - GPS_UNIX_OFFSET + GPS_LEAP_SECONDS
+
+        def football(when):
+            return {
+                "station": "WEWSHD",
+                "programs": [
+                    {"title": "Kickoff", "start": "8:00 PM", "gps_start": gps(when.replace(minute=0))},
+                    {
+                        "title": "Monday Night Football",
+                        "start": "8:15 PM",
+                        "end": "11:15 PM",
+                        "gps_start": gps(when),
+                    },
+                    {
+                        "title": "News 5",
+                        "start": "11:15 PM",
+                        "gps_start": gps(when.replace(hour=23, minute=15)),
+                    },
+                ],
+            }
+
+        first = datetime(2026, 9, 14, 20, 15, tzinfo=eastern)
+        second = datetime(2026, 9, 21, 20, 15, tzinfo=eastern)
+        stale = datetime(2026, 9, 1, 20, 15, tzinfo=eastern)
+        now = datetime(2026, 9, 21, 21, 0, tzinfo=eastern).timestamp()
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, "guide_history.json")
+            once = {"5.1": football(first)}
+            remember_guide_history(once, path, now=now)
+            self.assertEqual(once["5.1"]["programs"][1].get("usual", ""), "")
+
+            again = {
+                "5.1": football(second),
+                "19.1": {
+                    "station": "WOIO",
+                    "programs": [{
+                        "title": "Evening News",
+                        "start": "8:15 PM",
+                        "gps_start": gps(second),
+                    }],
+                },
+            }
+            history = remember_guide_history(again, path, now=now)
+            show = again["5.1"]["programs"][1]
+            self.assertEqual(show["usual"], "Usually Mondays at 8:15 PM")
+            self.assertIn("19.1 Evening News", show["also"])
+            slot = next(item for item in history["usual"] if item["title"] == "Monday Night Football")
+            self.assertEqual(len(slot["weeks"]), 2)
+
+            remembered = remember_guide_history({"5.1": football(second)}, path, now=now)
+            slot = next(item for item in remembered["usual"] if item["title"] == "Monday Night Football")
+            self.assertEqual(len(slot["weeks"]), 2)
+            football_airings = [
+                item for item in remembered["airings"] if item["title"] == "Monday Night Football"
+            ]
+            self.assertEqual(len(football_airings), 2)
+
+            aged = remember_guide_history(
+                {"5.1": football(stale) | {"programs": [{
+                    "title": "Ancient Show",
+                    "start": "8:15 PM",
+                    "gps_start": gps(stale),
+                }]}},
+                path,
+                now=now,
+            )
+            self.assertNotIn("Ancient Show", [item["title"] for item in aged["airings"]])
+
 
 if __name__ == "__main__":
     unittest.main()

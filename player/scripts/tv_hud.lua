@@ -751,7 +751,7 @@ local function render_hud()
     end
 
     local vol = math.floor(mp.get_property_number("volume", 100) or 100)
-    local vol_label = is_muted and "Muted" or ("Vol " .. tostring(vol))
+    local vol_label = "Vol " .. tostring(vol)
     local action = paused and "Play (Space)" or "Pause (Space)"
     local record = (is_recording or any_rec) and "Stop (r)" or "Record (r)"
     local hints

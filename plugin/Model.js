@@ -224,6 +224,8 @@ function programBlocks(item, slots) {
       empty: !p,
       now: now && !!p,
       synopsis: p ? (p.synopsis || "") : "",
+      usual: p ? (p.usual || "") : "",
+      also: p ? (p.also || "") : "",
       duration_sec: p ? (Number(p.duration_sec) || 0) : 0
     })
     i += p ? span : 1
@@ -341,6 +343,8 @@ function searchGuide(guideData, query, nowMin) {
         start: prog.start || "",
         end: prog.end || "",
         synopsis: prog.synopsis || "",
+        usual: prog.usual || "",
+        also: prog.also || "",
         duration_sec: Number(prog.duration_sec) || 0,
         now: showIsOn(prog, now),
         empty: false,
@@ -358,6 +362,8 @@ function searchGuide(guideData, query, nowMin) {
         start: block.start,
         end: block.end,
         on_now: block.now,
+        usual: block.usual,
+        also: block.also,
         before: block.before,
         after: block.after,
         block: block

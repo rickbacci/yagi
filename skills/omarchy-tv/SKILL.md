@@ -27,9 +27,11 @@ omarchy-tv pref filter all|favorites | pref translators off | pref library-max a
 omarchy-shell shell broadcast richardb.omarchy-tv play "8.1 FOX"   # also: stop next prev live guide reloadChannels
 ```
 
-`record` is a keepable file. `pause` is throwaway `live.ts`. The Guide schedule is only the broadcast (ATSC EIT on Tuner 1). Search matches titles already in `guide.json`. No downloaded listings. After QML: `omarchy restart shell`. After HUD lua: Close TV and retune.
+`record` is a keepable file. `pause` is throwaway `live.ts`. The Guide schedule is only the broadcast (ATSC EIT on Tuner 1). Search matches titles already in `guide.json`. A refresh keeps about 10 days of airings so a show that repeats can say which day and time it usually airs. No downloaded listings. After QML: `omarchy restart shell`. After HUD lua: Close TV and retune.
 
 ## HUD (PiP only — not the plugin, not Super+K)
+
+The picture overlay look is settled. `AGENTS.md` **Settled**. Do not restyle it. If a task needs the look to change, stop and bring the reason first.
 
 Space pause (dump fills) / play still behind · `l` live (same window) · j/k or ↓/↑ banner then tune · ←/→ skip HTTP playhead or recording (10s, 5s near live; last hop is live) · r record · Super+F fullscreen (unpins first) · Super+LMB move · c captions · m / middle-click mute this window · wheel volume.
 
