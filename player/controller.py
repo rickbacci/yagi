@@ -499,6 +499,7 @@ class MpvController:
         keep_window = self.is_running() and self.playback_mode() == "live"
         if not Timeshift.acquire_tune_lock():
             return True
+        opened = False
         try:
             self.channels = self._load_channels()
             matched = match_channel(channel_name, self.channels)
@@ -507,16 +508,30 @@ class MpvController:
             Timeshift.begin_tune(target_name, station)
 
             if keep_window:
+                self.send_command(["script-message", "tv-blank"])
+                if Timeshift.note_channel(target_name):
+                    update_player_state(
+                        True,
+                        channel=target_name,
+                        station=station,
+                        pid=_stated_player_pid(),
+                        mode="live",
+                    )
+                    self.send_command(["script-message", "tv-retuned"])
                 dump_path = Timeshift.retune_keep_window(target_name)
             else:
                 dump_path = Timeshift.start_dump(target_name)
             if not dump_path:
+                if keep_window:
+                    self.send_command(["script-message", "tv-unblank"])
                 Timeshift.fail_tune(target_name, station)
                 return False
             Timeshift.finish_tune()
 
             if keep_window:
-                self.open_timeshift_dump(0, paused=False)
+                self.send_command(["script-message", "tv-retuned"])
+                self.open_timeshift_dump(Timeshift.play_from_byte(), paused=False)
+                opened = True
                 update_player_state(
                     True,
                     channel=target_name,
@@ -536,6 +551,8 @@ class MpvController:
             return ok
         finally:
             Timeshift.release_tune_lock()
+            if keep_window and not opened:
+                self.send_command(["script-message", "tv-unblank"])
 
     def play_file(self, file_path: str) -> bool:
         """Plays a local recording in the TV player window, not the live DVB tuner."""
@@ -653,7 +670,8 @@ class MpvController:
             "--sub-create-cc-track=yes",
             "--slang=eng",
             "--subs-fallback=yes",
-            "--demuxer-lavf-o=scan_all_pmts=1,fflags=+genpts+discardcorrupt",
+            "--demuxer-lavf-analyzeduration=2",
+            "--demuxer-lavf-o=fflags=+genpts+discardcorrupt",
             "--cache=yes",
         ]
         stdin = subprocess.DEVNULL
@@ -662,7 +680,8 @@ class MpvController:
         if live_dump:
             if Timeshift.start_http() <= 0:
                 return False
-            play_url = Timeshift.http_url(Timeshift.live_edge_byte())
+            opened = Timeshift.picture_open_byte()
+            play_url = Timeshift.http_url(opened)
             script_opts.append(f"tv_hud-timeshift-file={file_path}")
             if channel:
                 script_opts.append("tv_hud-tune=" + channel.replace(",", " "))
@@ -706,11 +725,12 @@ class MpvController:
                 mode=play_mode,
             )
             if live_dump:
+                self._select_dump_program()
                 self.send_command(["set_property", "pause", False])
                 Timeshift.patch_state(
                     view="live",
                     paused=False,
-                    playhead_byte=Timeshift.live_edge_byte(),
+                    playhead_byte=opened,
                     playhead_t=0,
                     mux_bps=0,
                 )
@@ -829,12 +849,30 @@ class MpvController:
         res = self.send_command(["get_property", "eof-reached"])
         return bool(res.get("data")) if res and res.get("error") == "success" else False
 
+    def _load_dump(self, url: str) -> None:
+        """Open the dump. A full-mux file still has every station, so name the program."""
+        state = Timeshift.load_state()
+        if state.get("full_mux"):
+            sid = Timeshift.service_id(str(state.get("tune_name") or state.get("channel") or ""))
+            if sid > 0:
+                self.send_command(["loadfile", url, "replace", "-1", f"program={sid}"])
+                return
+        self.send_command(["loadfile", url, "replace"])
+
+    def _select_dump_program(self) -> None:
+        state = Timeshift.load_state()
+        if not state.get("full_mux"):
+            return
+        sid = Timeshift.service_id(str(state.get("tune_name") or state.get("channel") or ""))
+        if sid > 0:
+            self.send_command(["set_property", "program", sid])
+
     def open_timeshift_dump(self, byte: int, paused: bool) -> bool:
         """Reopen the dump HTTP view at a playhead. Same PiP — not a new window."""
         Timeshift.start_http()
         byte = align_ts(byte)
         url = Timeshift.http_url(byte)
-        self.send_command(["loadfile", url, "replace"])
+        self._load_dump(url)
         self.send_command(["set_property", "pause", paused])
         rate = Timeshift.write_rate()
         remain = 0.0 if rate <= 0 else max(0.0, (Timeshift.dump_bytes() - byte) / rate)

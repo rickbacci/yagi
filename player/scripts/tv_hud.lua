@@ -544,9 +544,9 @@ local function get_active_info()
     local path = mp.get_property("path") or ""
     local tune_name = nil
     if is_timeshift_playback() then
-        tune_name = opted_tune()
+        tune_name = tostring(cached_timeshift.tune_name or cached_timeshift.channel or "")
         if tune_name == "" then
-            tune_name = tostring(cached_timeshift.tune_name or cached_timeshift.channel or "")
+            tune_name = opted_tune()
         end
         if tune_name == "" then
             local f = io.open(PLAYER_STATE_PATH, "r")
@@ -616,6 +616,10 @@ local function get_network_color(net)
     end
     return "&HFA89B4&"
 end
+
+local blanking = false
+local blank_saw_load = false
+local blank_at = 0
 
 local function render_hud()
     local ch, prog = get_active_info()
@@ -694,6 +698,9 @@ local function render_hud()
     end
 
     local ass = ""
+    if blanking then
+        ass = ass .. box(0, 0, 1280, 720, "&H000000&", "00")
+    end
     ass = ass .. box(0, 0, 1280, 96, "&H12141C&", "18")
     ass = ass .. box(0, 0, 8, 96, net_col, "00")
     ass = ass .. string.format(
@@ -795,7 +802,7 @@ local function show_hud()
             hide_timer:kill()
             hide_timer = nil
         end
-        if not picture_ready() then
+        if blanking or not picture_ready() then
             return
         end
         if mp.get_property_bool("pause", false) then
@@ -938,7 +945,28 @@ end)
 mp.register_script_message("tv-live-edge", function()
     cli_async({"live"})
 end)
+local function cover_picture()
+    blanking = true
+    blank_saw_load = false
+    blank_at = mp.get_time()
+end
+
+local function uncover_picture()
+    blanking = false
+    blank_saw_load = false
+    blank_at = 0
+    show_hud()
+end
+
+mp.register_script_message("tv-blank", function()
+    cover_picture()
+    show_hud()
+end)
+mp.register_script_message("tv-unblank", function()
+    uncover_picture()
+end)
 mp.register_script_message("tv-retuned", function()
+    cover_picture()
     reload_data()
     reset_virt()
     pcall(function()
@@ -978,6 +1006,10 @@ mp.register_event("file-loaded", function()
     else
         prev_was_file = false
     end
+    if blanking then
+        blank_saw_load = true
+        pcall(function() mp.set_property("vid", "auto") end)
+    end
     show_hud()
     sync_player_state()
     end)
@@ -1003,6 +1035,12 @@ local function on_dump_eof()
     end
 end
 
+mp.register_event("playback-restart", function()
+    if blanking and blank_saw_load then
+        uncover_picture()
+    end
+end)
+
 mp.register_event("end-file", function(event)
     if event.reason ~= "eof" then return end
     on_dump_eof()
@@ -1013,6 +1051,8 @@ mp.observe_property("eof-reached", "bool", function(_, eof)
     on_dump_eof()
 end)
 
+local banner_tune = ""
+
 mp.add_periodic_timer(0.4, function()
     if is_library_playback() then
         virt_update()
@@ -1022,6 +1062,20 @@ mp.add_periodic_timer(0.4, function()
         end
     elseif is_timeshift_playback() then
         virt_update()
+    end
+    if blanking and blank_at > 0 and (mp.get_time() - blank_at) > 12 then
+        uncover_picture()
+        return
+    end
+    if is_timeshift_playback() then
+        reload_data()
+        local live_name = tostring(cached_timeshift.tune_name or cached_timeshift.channel or "")
+        if live_name ~= "" and live_name ~= banner_tune then
+            banner_tune = live_name
+            show_hud()
+            sync_player_state()
+            return
+        end
     end
     if hud_visible then pcall(render_hud) end
 end)
@@ -1123,4 +1177,5 @@ mp.observe_property("video-params/w", "number", function(_, w)
 end)
 
 reload_data()
+banner_tune = tostring(cached_timeshift.tune_name or cached_timeshift.channel or "")
 pcall(show_hud)

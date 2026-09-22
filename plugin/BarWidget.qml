@@ -26,7 +26,6 @@ BarWidget {
     if (root.popupOpen) {
       root.libraryModalOpen = false
       root.cursorActive = false
-      root.channelListOpen = !root.flyoutStatusOn
       root.reloadChannelData()
       root.guideClockMin = Model.minutesNow()
       if (!tuneProc.running)
@@ -60,19 +59,7 @@ BarWidget {
   readonly property bool tuner1Busy: root.isRecording || root.isScanning || root.guideRefreshing
   readonly property bool bothTunersBusy: root.tuner0Busy && root.tuner1Busy
   readonly property bool flyoutStatusOn: root.activeChannelName !== "" || root.isRecording || root.isScanning || root.guideRefreshing
-  property bool channelListOpen: true
-  readonly property string channelListLabel: {
-    if (!root.flyoutStatusOn) return "Channels"
-    var watch = !root.tuner0Busy
-    var record = !root.tuner1Busy
-    if (watch && record) return "Watch or record"
-    if (watch) return "Watch"
-    if (record) return "Record"
-    return "Channels"
-  }
-  onFlyoutStatusOnChanged: root.channelListOpen = !root.flyoutStatusOn
-  onBothTunersBusyChanged: if (root.bothTunersBusy) root.channelListOpen = false
-  readonly property bool showChannelBrowser: root.channelListOpen && !root.bothTunersBusy
+  readonly property bool showChannelBrowser: !root.bothTunersBusy
   property int guideClockMin: -1
   property string channelFilter: "favorites" // favorites | watchable | all | hidden
   property var hiddenData: []
@@ -352,10 +339,6 @@ BarWidget {
 
   function useListedChannel(chName) {
     if (!chName) return
-    if (root.tuner0Busy && !root.tuner1Busy) {
-      root.recordListedShow(chName)
-      return
-    }
     root.selectChannel(chName)
   }
 
@@ -512,6 +495,7 @@ BarWidget {
     if (root.channelFilter === "hidden") {
       return list.filter(function(ch) { return root.channelIsHidden(ch) })
     }
+    if (root.channelFilter === "all") return list
     list = list.filter(function(ch) { return !root.channelIsHidden(ch) })
     if (root.channelFilter === "favorites") {
       list = list.filter(function(ch) { return root.channelIsFavorite(ch) })
@@ -635,10 +619,6 @@ BarWidget {
       var raw = (jsonText || "").trim()
       if (!raw) return
       var p = JSON.parse(raw)
-      if (p.channel_filter === "favorites" || p.channel_filter === "all" || p.channel_filter === "watchable" || p.channel_filter === "hidden") {
-        root.channelFilter = p.channel_filter
-        root.filterInitialized = true
-      }
       if (p.library_max_gb !== undefined) root.libraryMaxGb = p.library_max_gb
     } catch (e) {
     }
@@ -2196,36 +2176,8 @@ BarWidget {
         }
       }
 
-      Item {
-        visible: !root.bothTunersBusy
-        width: parent.width
-        height: Math.max(Style.space(32), channelListToggle.implicitHeight)
-
-        Text {
-          anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
-          textFormat: Text.PlainText
-          text: root.channelListLabel
-          color: root.bar.foreground
-          font.family: root.bar.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          font.bold: true
-        }
-
-        Button {
-          id: channelListToggle
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          text: root.channelListOpen ? "Hide" : "Show"
-          tooltipText: root.channelListOpen ? "Hide the channel list" : "Show the channel list"
-          foreground: root.bar.foreground
-          fontSize: Style.font.caption
-          onClicked: root.channelListOpen = !root.channelListOpen
-        }
-      }
-
       Row {
-        visible: root.showChannelBrowser
+        visible: !root.bothTunersBusy
         width: parent.width
         spacing: Style.space(6)
 
@@ -2252,8 +2204,8 @@ BarWidget {
           }
 
           Button {
-            text: "All (" + (root.watchableChannels ? root.watchableChannels.length : 0) + ")"
-            tooltipText: "Same stations, with Hide"
+            text: "All (" + (root.channelsData ? root.channelsData.length : 0) + ")"
+            tooltipText: "Every scanned station"
             selected: root.channelFilter === "all"
             fontSize: Style.font.caption
             foreground: root.bar.foreground
@@ -2410,12 +2362,12 @@ BarWidget {
                   anchors.right: parent.right
                   anchors.rightMargin: Style.space(4)
                   anchors.verticalCenter: parent.verticalCenter
-                  text: root.channelFilter === "hidden" ? "Show" : "Hide"
-                  tooltipText: root.channelFilter === "hidden" ? "Put this station back" : "Set this station aside"
+                  text: (root.channelFilter === "hidden" || root.channelIsHidden(chItem.modelData)) ? "Show" : "Hide"
+                  tooltipText: (root.channelFilter === "hidden" || root.channelIsHidden(chItem.modelData)) ? "Put this station back" : "Set this station aside"
                   fontSize: Style.font.caption
                   foreground: root.bar.foreground
                   onClicked: {
-                    if (root.channelFilter === "hidden") root.showListed(chItem.modelData)
+                    if (root.channelFilter === "hidden" || root.channelIsHidden(chItem.modelData)) root.showListed(chItem.modelData)
                     else root.hideListed(chItem.modelData)
                   }
                 }

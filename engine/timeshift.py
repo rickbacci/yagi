@@ -17,6 +17,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -43,7 +44,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 MIN_PLAYABLE_BYTES = 256 * 1024
 # ATSC lock plus PAT/PMT can exceed a few seconds. Do not kill a dump that is
 # still writing just because this floor is not hit yet.
-DUMP_WAIT_SECS = 20.0
+DUMP_WAIT_SECS = 20
+REOPEN_WATCH_SEC = 6.0
 DUMP_GROWING_BYTES = 32 * 1024
 
 
@@ -143,6 +145,28 @@ class Timeshift:
         if size <= TS_PACKET:
             return 0
         return align_ts(size - TS_PACKET)
+
+    @classmethod
+    def play_from_byte(cls) -> int:
+        """Where the picture should open after a zap. 0 is the start of live.ts."""
+        try:
+            return align_ts(int(cls.load_state().get("play_from") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    @classmethod
+    def picture_open_byte(cls) -> int:
+        """Start where about a second of this open is already in the file.
+
+        A fresh dump is still short, so that place is the start. A long file
+        opens a couple of megabytes back from the live edge.
+        """
+        mark = cls.play_from_byte()
+        size = cls.dump_bytes()
+        back = 2 * 1024 * 1024
+        if size <= mark + back:
+            return mark
+        return align_ts(size - back)
 
     @classmethod
     def _http_port_up(cls, port: int) -> bool:
@@ -725,25 +749,83 @@ class Timeshift:
             time.sleep(0.03)
 
     @classmethod
-    def _conf_needs_full_mux(cls, tune_name: str) -> bool:
-        video, audio = cls._conf_pids(tune_name)
-        return video <= 0 or audio <= 0
-
-    @classmethod
-    def _conf_pids(cls, tune_name: str) -> tuple:
-        name = (tune_name or "").strip()
+    def _conf_rows(cls) -> list:
+        rows = []
         try:
             with open(MPV_CHANNELS_CONF, encoding="utf-8") as f:
                 for line in f:
                     parts = line.strip().split(":")
-                    if len(parts) >= 6 and parts[0] == name:
-                        return int(parts[3] or 0), int(parts[4] or 0)
-        except (OSError, ValueError):
+                    if len(parts) < 6 or not parts[0]:
+                        continue
+                    try:
+                        rows.append({
+                            "name": parts[0],
+                            "freq": int(parts[1]),
+                            "video": int(parts[3] or 0),
+                            "audio": int(parts[4] or 0),
+                            "sid": int(parts[5] or 0),
+                        })
+                    except ValueError:
+                        continue
+        except OSError:
             pass
+        return rows
+
+    @classmethod
+    def _conf_needs_full_mux(cls, tune_name: str) -> bool:
+        """A missing video id, or one another service on this tower already uses.
+
+        The scanner copies an earlier service's video id onto a later one.
+        The lowest service id keeps that id. The copy is played from the
+        whole tower by its own service id. The callsign and the channel
+        number are one service.
+        """
+        video, audio = cls._conf_pids(tune_name)
+        if video <= 0 or audio <= 0:
+            return True
+        return cls._video_pid_is_copied(tune_name)
+
+    @classmethod
+    def _video_pid_is_copied(cls, tune_name: str) -> bool:
+        name = (tune_name or "").strip()
+        rows = cls._conf_rows()
+        mine = next((row for row in rows if row["name"] == name), None)
+        if not mine or mine["video"] <= 0 or mine["sid"] <= 0:
+            return False
+        owners = [
+            row["sid"] for row in rows
+            if row["freq"] == mine["freq"] and row["video"] == mine["video"] and row["sid"] > 0
+        ]
+        if not owners:
+            return False
+        return mine["sid"] != min(owners)
+
+    @classmethod
+    def _conf_freq(cls, tune_name: str) -> int:
+        name = (tune_name or "").strip()
+        for row in cls._conf_rows():
+            if row["name"] == name:
+                return row["freq"]
+        return 0
+
+    @classmethod
+    def _conf_pids(cls, tune_name: str) -> tuple:
+        name = (tune_name or "").strip()
+        for row in cls._conf_rows():
+            if row["name"] == name:
+                return row["video"], row["audio"]
         return 0, 0
 
     @classmethod
-    def _remember_pids(cls, dump_path: str) -> bool:
+    def service_id(cls, tune_name: str) -> int:
+        name = (tune_name or "").strip()
+        for row in cls._conf_rows():
+            if row["name"] == name:
+                return row["sid"]
+        return 0
+
+    @classmethod
+    def _remember_pids(cls, dump_path: str, frequency: Optional[int] = None) -> bool:
         """Learn video and audio IDs from a full-mux dump and save them."""
         try:
             with open(dump_path, "rb") as f:
@@ -790,28 +872,50 @@ class Timeshift:
                 learned[sid] = (video, audio)
         if not learned:
             return False
-        cls._write_learned_pids(learned)
+        cls._write_learned_pids(learned, frequency)
         return True
 
     @classmethod
-    def _write_learned_pids(cls, learned: Dict[int, tuple]) -> None:
+    def _write_learned_pids(cls, learned: Dict[int, tuple], frequency: Optional[int] = None) -> None:
         try:
             with open(MPV_CHANNELS_CONF, encoding="utf-8") as f:
                 lines = f.read().splitlines()
         except OSError:
             lines = []
+        lowest = {}
+        for line in lines:
+            parts = line.split(":")
+            if len(parts) < 6:
+                continue
+            try:
+                freq = int(parts[1])
+                video = int(parts[3] or 0)
+                sid = int(parts[5] or 0)
+            except ValueError:
+                continue
+            if video <= 0 or sid <= 0:
+                continue
+            key = (freq, video)
+            if key not in lowest or sid < lowest[key]:
+                lowest[key] = sid
         changed = False
         out = []
         for line in lines:
             parts = line.split(":")
             if len(parts) >= 6:
                 try:
+                    freq = int(parts[1])
+                    old_video = int(parts[3] or 0)
+                    old_audio = int(parts[4] or 0)
                     sid = int(parts[5])
                 except ValueError:
+                    freq = old_video = old_audio = 0
                     sid = -1
-                if sid in learned:
+                on_tower = frequency is None or freq == frequency
+                copied = old_video > 0 and sid > 0 and sid != lowest.get((freq, old_video))
+                if on_tower and sid in learned and (old_video <= 0 or old_audio <= 0 or copied):
                     video, audio = learned[sid]
-                    if int(parts[3] or 0) <= 0 or int(parts[4] or 0) <= 0:
+                    if old_video != video or old_audio != audio:
                         parts[3] = str(video)
                         parts[4] = str(audio)
                         line = ":".join(parts)
@@ -840,8 +944,21 @@ class Timeshift:
                 continue
             if sid not in learned:
                 continue
+            try:
+                ch_freq = int(ch.get("frequency"))
+            except (TypeError, ValueError):
+                ch_freq = None
+            if frequency is not None and ch_freq != frequency:
+                continue
             video, audio = learned[sid]
-            if int(ch.get("video_pid") or 0) <= 0 or int(ch.get("audio_pid") or 0) <= 0:
+            old_video = int(ch.get("video_pid") or 0)
+            old_audio = int(ch.get("audio_pid") or 0)
+            copied = (
+                ch_freq is not None
+                and old_video > 0
+                and sid != lowest.get((ch_freq, old_video))
+            )
+            if old_video <= 0 or old_audio <= 0 or copied:
                 ch["video_pid"] = video
                 ch["audio_pid"] = audio
                 touched = True
@@ -869,21 +986,155 @@ class Timeshift:
         if not cls._wait_dump_playable(proc, dest, log_path):
             cls._kill_pid(proc.pid)
             return None
-        if not needs_full or not cls._remember_pids(dest):
-            return proc
-        cls._kill_pid(proc.pid)
+        if needs_full:
+            cls._learn_pids_later(dest, cls._conf_freq(name) or None)
+        return proc
+
+    @classmethod
+    def _learn_pids_later(cls, dump_path: str, frequency: Optional[int] = None) -> None:
+        """A whole-tower dump is playable now. Learn the real ids off the zap."""
+        def run() -> None:
+            cls._remember_pids(dump_path, frequency)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    @classmethod
+    def _retire_dump_file(cls) -> None:
+        """Move live.ts aside and delete it off the zap. Rename is the fast part."""
+        if not os.path.isfile(TIMESHIFT_FILE):
+            return
+        retired = f"{TIMESHIFT_FILE}.old.{os.getpid()}.{int(time.time())}"
         try:
-            if os.path.isfile(dest):
-                os.remove(dest)
+            os.replace(TIMESHIFT_FILE, retired)
         except OSError:
-            pass
-        proc = cls._spawn_dump(name, adapter_id, dest, sock, log_name=log_name)
-        if proc is None:
+            return
+
+        def drop(path: str) -> None:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+        threading.Thread(target=drop, args=(retired,), daemon=True).start()
+
+    @classmethod
+    def _dump_command(cls, command: list, timeout: float = 35.0) -> Optional[dict]:
+        state = cls.load_state()
+        sock = str(state.get("socket") or TIMESHIFT_SOCKET_PATH)
+        if not os.path.exists(sock):
             return None
-        if cls._wait_dump_playable(proc, dest, log_path):
-            return proc
-        cls._kill_pid(proc.pid)
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(timeout)
+                s.connect(sock)
+                s.sendall((json.dumps({"command": command}) + "\n").encode("utf-8"))
+                buf = ""
+                deadline = time.time() + timeout
+                while time.time() < deadline:
+                    try:
+                        chunk = s.recv(4096)
+                    except socket.timeout:
+                        return None
+                    if not chunk:
+                        break
+                    buf += chunk.decode("utf-8", "replace")
+                    while "\n" in buf:
+                        line, buf = buf.split("\n", 1)
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            parsed = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if parsed.get("event"):
+                            continue
+                        return parsed
+        except (OSError, TimeoutError):
+            return None
         return None
+
+    @classmethod
+    def _mark_after_reopen(cls, pid: int, size_before: int) -> Optional[int]:
+        """The new stream can shrink the file a few seconds after the command.
+
+        Keep following that shrink. A mark taken before it never grows back.
+        """
+        low = size_before
+        watch_until = time.time() + REOPEN_WATCH_SEC
+        while time.time() < watch_until:
+            if not cls._pid_alive(pid):
+                return None
+            size = cls.dump_bytes()
+            if size + TS_PACKET < size_before:
+                low = size
+                break
+            time.sleep(0.05)
+        if not cls._wait_grew(pid, TIMESHIFT_FILE, low):
+            size = cls.dump_bytes()
+            if size + TS_PACKET >= low:
+                return None
+            low = size
+            if not cls._wait_grew(pid, TIMESHIFT_FILE, low):
+                return None
+        return align_ts(low)
+
+    @classmethod
+    def _wait_grew(cls, pid: int, dest: str, mark: int) -> bool:
+        need = align_ts(mark) + MIN_PLAYABLE_BYTES
+        deadline = time.time() + DUMP_WAIT_SECS
+        while time.time() < deadline:
+            if not cls._pid_alive(pid):
+                return False
+            try:
+                size = os.path.getsize(dest) if os.path.isfile(dest) else 0
+            except OSError:
+                size = 0
+            if size >= need:
+                return True
+            time.sleep(0.05)
+        return False
+
+    @classmethod
+    def _retune_running_dump(cls, name: str) -> bool:
+        """Point the live dump at another station without a new mpv.
+
+        Setting dvbin-prog closes the stream. This mpv locks again for every
+        station, including a subchannel on the same tower.
+        """
+        state = cls.load_state()
+        pid = int(state.get("pid") or 0)
+        if not cls._pid_alive(pid):
+            return False
+        origin = str(state.get("switching_from") or "")
+        current = origin or str(state.get("tune_name") or state.get("channel") or "")
+        if not origin and current == name:
+            return False
+        # A filtered dump has no video PID for a 0:0 row. That one still restarts.
+        if cls._conf_needs_full_mux(name) and not state.get("full_mux"):
+            return False
+        size_before = cls.dump_bytes()
+        cls.patch_state(channel=name, tune_name=name)
+        reply = cls._dump_command(["set_property", "dvbin-prog", name])
+        if not reply or reply.get("error") != "success":
+            return False
+        # This mpv closes the stream and locks again. The file usually shrinks.
+        # The mark has to be that new start, not the size from before the close.
+        mark = cls._mark_after_reopen(pid, size_before)
+        if mark is None:
+            return False
+        cls.patch_state(
+            channel=name,
+            tune_name=name,
+            running=True,
+            play_from=mark,
+            view="live",
+            paused=False,
+            playhead_byte=mark,
+            playhead_t=0,
+            switching_from="",
+        )
+        return True
 
     @classmethod
     def _spawn_dump(
@@ -915,8 +1166,8 @@ class Timeshift:
             "--idle=no",
             f"--log-file={os.path.join(TIMESHIFT_DIR, log_name)}",
         ]
-        # A 0:0 lineup filters only the program tables, so the file never
-        # becomes a picture. The whole mux still has the video.
+        # A 0:0 row, or a video id copied from another service, has no
+        # picture of its own. The whole tower still does.
         if cls._conf_needs_full_mux(name):
             cmd.append("--dvbin-full-transponder=yes")
         cmd.append(f"dvb://{name}")
@@ -1009,11 +1260,7 @@ class Timeshift:
             follow_pid = int(state.get("follow_pid") or 0)
             follow_socket = str(state.get("follow_socket") or FOLLOW_SOCKET_PATH)
             cls.stop_dump(keep_follow=True)
-            try:
-                if os.path.isfile(TIMESHIFT_FILE):
-                    os.remove(TIMESHIFT_FILE)
-            except OSError:
-                pass
+            cls._retire_dump_file()
             cls.ensure_dir()
         else:
             cls.wipe()
@@ -1050,6 +1297,8 @@ class Timeshift:
             "paused": False,
             "playhead_byte": 0,
             "playhead_t": 0,
+            "play_from": 0,
+            "full_mux": cls._conf_needs_full_mux(name),
             "updated_at": time.time(),
         }
         if keep_follow and follow_pid:
@@ -1059,6 +1308,34 @@ class Timeshift:
         return TIMESHIFT_FILE
 
     @classmethod
+    def note_channel(cls, tune_name: str) -> bool:
+        """Write the clicked station before the lock, so the banner can show it.
+
+        Same station, a dead dump, or a whole-tower target on a filtered dump stays quiet.
+        """
+        name = (tune_name or "").strip()
+        if not name:
+            return False
+        state = cls.load_state()
+        pid = int(state.get("pid") or 0)
+        if not cls._pid_alive(pid):
+            return False
+        current = str(state.get("tune_name") or state.get("channel") or "")
+        if current == name:
+            return False
+        if cls._conf_needs_full_mux(name) and not state.get("full_mux"):
+            return False
+        cls.patch_state(channel=name, tune_name=name, switching_from=current)
+        return True
+
+    @classmethod
     def retune_keep_window(cls, tune_name: str) -> Optional[str]:
-        """New dump on tuner 0. Caller loadfiles from=0 in the same PiP."""
-        return cls.start_dump(tune_name, adapter_id=LIVE_ADAPTER, keep_follow=True)
+        """Reuse the tuner 0 dump. This mpv locks again for every station.
+
+        The picture opens at play_from. Picking the same station again still
+        starts a fresh dump.
+        """
+        name = (tune_name or "").strip()
+        if name and cls._retune_running_dump(name):
+            return TIMESHIFT_FILE
+        return cls.start_dump(name, adapter_id=LIVE_ADAPTER, keep_follow=True)

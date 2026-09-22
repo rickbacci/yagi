@@ -302,7 +302,8 @@ class TestMpvPlayerController(unittest.TestCase):
         mock_popen.return_value = MagicMock(pid=9)
 
         with patch("player.controller.Timeshift.patch_state"), \
-             patch("player.controller.update_player_state"):
+             patch("player.controller.update_player_state"), \
+             patch("player.controller.Timeshift.picture_open_byte", return_value=0):
             self.controller.launch(channel_name="53.1 Daystar", adapter_id=None)
 
         mock_dump.assert_called_once()
@@ -315,6 +316,11 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertFalse(any(str(arg).startswith("--dvbin-") for arg in cmd))
         self.assertTrue(str(cmd[-1]).startswith("http://127.0.0.1:"))
         self.assertIn("--demuxer-lavf-format=mpegts", cmd)
+        joined = " ".join(str(a) for a in cmd)
+        self.assertIn("--demuxer-lavf-analyzeduration=2", cmd)
+        self.assertNotIn("demuxer-lavf-probesize", joined)
+        self.assertNotIn("scan_all_pmts=1", joined)
+        _url.assert_called_with(0)
         self.assertIn("--cache-pause=no", cmd)
         self.assertIn("--ytdl=no", cmd)
         self.assertIn("--mute=yes", cmd)
@@ -520,11 +526,14 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self._tune_status_patcher.start()
         self._reap_patcher = patch.object(MpvController, "_reap_stale_window")
         self._reap_patcher.start()
+        self._note_patcher = patch("player.controller.Timeshift.note_channel", return_value=False)
+        self._note_patcher.start()
         self.server = FakeMpvIpc(self.controller.socket_path, path_value=self.dump_path)
         self.server.start()
 
     def tearDown(self):
         self.server.stop()
+        self._note_patcher.stop()
         self._reap_patcher.stop()
         self._tune_status_patcher.stop()
         self._lock_patcher.stop()
@@ -779,6 +788,11 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn('mp.add_forced_key_binding("RIGHT", "tv_seek_fwd"', src)
         self.assertIn('mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)', src)
         self.assertIn('mp.add_forced_key_binding("l", "tv_return_live"', src)
+        timer = src[src.index("mp.add_periodic_timer"):src.index("mp.add_periodic_timer") + 900]
+        self.assertIn("reload_data()", timer)
+        self.assertIn("banner_tune", timer)
+        self.assertIn('mp.register_script_message("tv-blank"', src)
+        self.assertIn("blanking", src)
         self.assertIn('cli_async({"pause"})', src)
         self.assertIn('cli_async({"seek"', src)
         self.assertIn('cli_async({"live"})', src)
@@ -894,7 +908,8 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("text: \"Stop\"", src)
         self.assertNotIn("text: \"Pause\"", src)
         self.assertIn("bothTunersBusy", src)
-        self.assertIn("channelListOpen", src)
+        self.assertIn("readonly property bool showChannelBrowser: !root.bothTunersBusy", src)
+        self.assertNotIn("Hide the channel list", src)
         self.assertIn("id: guideUpdateCard", src)
         self.assertIn("visible: root.guideRefreshing", src)
         self.assertIn("text: \"Updating the Guide\"", src)
@@ -907,6 +922,9 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("record\", \"later\"", src)
         self.assertIn("record\", \"due\"", src)
         self.assertIn("useListedChannel", src)
+        listed = src[src.index("function useListedChannel"):src.index("function startRecord")]
+        self.assertIn("selectChannel", listed)
+        self.assertNotIn("recordListedShow", listed)
         self.assertIn("function recordListedShow", src)
         self.assertIn("function toggleRecord", src)
         self.assertIn("function startRecord", src)
@@ -929,6 +947,8 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertNotIn("function guideBodyHeight", src)
         self.assertIn("property string channelFilter: \"favorites\"", src)
         self.assertIn("text: \"Watchable", src)
+        self.assertIn("text: \"All (\" + (root.channelsData ? root.channelsData.length : 0)", src)
+        self.assertNotIn("Same stations, with Hide", src)
         self.assertIn("? \"Show\" : \"Hide\"", src)
         self.assertIn("hidden.json", src)
         self.assertNotIn("text: \"Dupes", src)
