@@ -14,7 +14,7 @@ Project `~/Projects/personal/omarchy-tv`. CLI `omarchy-tv` (`PATH` or `bin/`). P
 **Live:** Tuner 0 dumps `~/.cache/omarchy/tv/timeshift/live.ts`. A sidecar HTTP server on `127.0.0.1` serves it (`path` is `http://127.0.0.1:…/live.ts?from=`). Playing the growing file directly hits `keep-open` EOF.
 **Delayed / skip / live:** `loadfile` that URL at a new `from=` byte in the same window. Do not SEEK a pipe. Channel change still fills a new dump, then `pip-relaunch`. Library files live in `~/Videos/TV` and are not the pause dump. Never `dvb://` in the PiP. Never `drop-buffers`.
 
-Tuner 0 live dump; Tuner 1 scan / record. A recording holds Tuner 1. `j`/`k` move the banner immediately; tune once after keys idle. HUD `play` must not quit this mpv. Close TV wipes the dump and the HTTP sidecar. One `omarchy-tv` window.
+Tuner 0 live dump; Tuner 1 scan / record. A recording holds Tuner 1. `j`/`k` move the banner immediately; tune once after keys idle. HUD `play` must not quit this mpv. Close TV wipes the dump, the sidecar, and any sidecar it lost track of. Match `engine.timeshift_http`. A path match also kills the picture (`--log-file=.../hud.log`). One `omarchy-tv` window.
 
 ## CLI
 
