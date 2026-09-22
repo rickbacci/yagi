@@ -25,6 +25,7 @@ from engine.paths import (
     TIMESHIFT_DIR,
 )
 from engine.dvr import MIN_PLAYABLE_BYTES
+from engine.hidden import is_hidden_channel, load_hidden
 from engine.timeshift import (
     LIVE_SLACK,
     Timeshift,
@@ -308,14 +309,15 @@ def surfable_channels(
     favorites: Optional[List[Any]] = None,
     show_translators: bool = False,
     channel_filter: str = "favorites",
+    hidden: Optional[List[Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Channels next/prev may land on — the same list the flyout is showing."""
+    """Channels next/prev may land on. Hidden stations stay off every surf list."""
     want_favs = str(channel_filter or "favorites").strip().lower() in ("favorites", "favs", "fav")
     pool: List[Dict[str, Any]] = []
     for ch in channels or []:
-        if want_favs and not is_favorite_channel(ch, favorites):
+        if is_hidden_channel(ch, hidden):
             continue
-        if not show_translators and is_translator_channel(ch):
+        if want_favs and not is_favorite_channel(ch, favorites):
             continue
         pool.append(ch)
     return pool
@@ -802,8 +804,8 @@ class MpvController:
         pool = surfable_channels(
             self.channels,
             favorites=load_favorites_list(),
-            show_translators=bool(prefs.get("show_translators")),
             channel_filter=str(prefs.get("channel_filter") or "favorites"),
+            hidden=load_hidden(),
         )
         if not pool:
             return

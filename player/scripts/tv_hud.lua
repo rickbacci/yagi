@@ -48,6 +48,7 @@ local GUIDE_PATH = xdg_config .. "/omarchy/tv/guide.json"
 local RECORDINGS_PATH = xdg_config .. "/omarchy/tv/recordings_active.json"
 local PLAYER_STATE_PATH = xdg_config .. "/omarchy/tv/player_state.json"
 local FAVORITES_PATH = xdg_config .. "/omarchy/tv/favorites.json"
+local HIDDEN_PATH = xdg_config .. "/omarchy/tv/hidden.json"
 local UI_PREFS_PATH = xdg_config .. "/omarchy/tv/ui_prefs.json"
 local TIMESHIFT_ACTIVE_PATH = xdg_config .. "/omarchy/tv/timeshift_active.json"
 local xdg_cache = os.getenv("XDG_CACHE_HOME")
@@ -60,6 +61,7 @@ local cached_channels = {}
 local cached_guide = {}
 local cached_recordings = {}
 local cached_favorites = {}
+local cached_hidden = {}
 local cached_prefs = {}
 local cached_timeshift = {}
 
@@ -105,6 +107,16 @@ local function reload_data()
         local data = utils.parse_json(content)
         if type(data) == "table" then
             cached_favorites = data
+        end
+    end
+
+    local f_hid = io.open(HIDDEN_PATH, "r")
+    if f_hid then
+        local content = f_hid:read("*all")
+        f_hid:close()
+        local data = utils.parse_json(content)
+        if type(data) == "table" then
+            cached_hidden = data
         end
     end
 
@@ -756,9 +768,9 @@ local function render_hud()
     local record = (is_recording or any_rec) and "Stop (r)" or "Record (r)"
     local hints
     if is_library or is_ts or delayed then
-        hints = string.format("Prev (j)    Next (k)    Back 10s (←)    %s    Ahead 10s (→)    Live (l)    Mute (m)    %s", action, vol_label)
+        hints = string.format("Back 10s (←)    %s    Ahead 10s (→)    Live (l)    Mute (m)    %s", action, vol_label)
     else
-        hints = string.format("Prev (j)    Next (k)    %s    %s    Live (l)    Mute (m)    %s", action, record, vol_label)
+        hints = string.format("%s    %s    Live (l)    Mute (m)    %s", action, record, vol_label)
     end
     ass = ass .. box(0, 676, 1280, 44, "&H12141C&", "18")
     ass = ass .. string.format(
@@ -823,13 +835,6 @@ end
 
 -- Channel surfing stays inside MPV. Spawning omarchy-tv here deadlocks:
 -- Lua blocks on the subprocess, which waits on this same IPC socket.
-local function is_translator(ch)
-    if not ch then return false end
-    if ch.is_translator == true or ch.translator == true then return true end
-    local blob = string.upper((ch.callsign or "") .. " " .. (ch.display_name or "") .. " " .. (ch.name or ""))
-    return blob:find("DRT", 1, true) ~= nil or blob:find("TRANSLATOR", 1, true) ~= nil
-end
-
 local function is_favorite(ch)
     if not ch or not cached_favorites then return false end
     local favs = {}
@@ -846,15 +851,24 @@ local function is_favorite(ch)
     return false
 end
 
+local function is_hidden(ch)
+    if not ch or not cached_hidden then return false end
+    local num = tostring(ch.channel_number or "")
+    if num == "" then return false end
+    for _, item in ipairs(cached_hidden) do
+        if tostring(item) == num then return true end
+    end
+    return false
+end
+
 local function surf_pool()
     local filter = tostring((cached_prefs and cached_prefs.channel_filter) or "favorites")
     local want_favs = filter == "favorites" or filter == "favs" or filter == "fav"
-    local show_dupes = cached_prefs and cached_prefs.show_translators == true
     local pool = {}
     for _, ch in ipairs(cached_channels) do
-        if want_favs and not is_favorite(ch) then
+        if is_hidden(ch) then
             -- skip
-        elseif (not show_dupes) and is_translator(ch) then
+        elseif want_favs and not is_favorite(ch) then
             -- skip
         else
             pool[#pool + 1] = ch
@@ -949,6 +963,13 @@ local function surf(delta)
             f_fav:close()
             local data = utils.parse_json(content)
             if type(data) == "table" then cached_favorites = data end
+        end
+        local f_hid = io.open(HIDDEN_PATH, "r")
+        if f_hid then
+            local content = f_hid:read("*all")
+            f_hid:close()
+            local data = utils.parse_json(content)
+            if type(data) == "table" then cached_hidden = data end
         end
         local f_prefs = io.open(UI_PREFS_PATH, "r")
         if f_prefs then
@@ -1129,10 +1150,6 @@ mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)
 mp.add_forced_key_binding("l", "tv_return_live", function()
     cli_async({"live"})
 end)
-mp.add_forced_key_binding("UP", "tv_surf_next", surf_next, {repeatable = false})
-mp.add_forced_key_binding("k", "tv_surf_next_k", surf_next, {repeatable = false})
-mp.add_forced_key_binding("DOWN", "tv_surf_prev", surf_prev, {repeatable = false})
-mp.add_forced_key_binding("j", "tv_surf_prev_j", surf_prev, {repeatable = false})
 mp.add_forced_key_binding("WHEEL_UP", "tv_vol_up", vol_up)
 mp.add_forced_key_binding("WHEEL_DOWN", "tv_vol_down", vol_down)
 

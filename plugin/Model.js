@@ -363,7 +363,7 @@ function searchGuide(guideData, query, nowMin) {
         before: _neighborShow(i > 0 ? programs[i - 1] : null),
         after: _neighborShow(i + 1 < programs.length ? programs[i + 1] : null)
       }
-      hits.push({
+        hits.push({
         channel_number: String(num),
         callsign: row.callsign || row.station || "",
         tune_name: row.tune_name || "",
@@ -373,6 +373,8 @@ function searchGuide(guideData, query, nowMin) {
         title: title,
         start: block.start,
         end: block.end,
+        gps_start: Number(prog.gps_start) || 0,
+        duration_sec: block.duration_sec,
         on_now: block.now,
         usual: block.usual,
         also: block.also,
@@ -389,6 +391,34 @@ function searchGuide(guideData, query, nowMin) {
     return (parseFloat(a.channel_number) || 999) - (parseFloat(b.channel_number) || 999)
   })
   return hits
+}
+
+function programUnix(prog) {
+  var gps = Number(prog && prog.gps_start) || 0
+  if (gps <= 0) return 0
+  return gps + 315964800 - 18
+}
+
+function guideHourBlocks(channels, nowUnix) {
+  var now = Number(nowUnix) || (Date.now() / 1000)
+  var last = now
+  var list = channels || []
+  var i, j, programs, unix
+  for (i = 0; i < list.length; i++) {
+    programs = (list[i] && list[i].programs) || []
+    for (j = 0; j < programs.length; j++) {
+      unix = programUnix(programs[j])
+      if (unix > last) last = unix
+    }
+  }
+  var step = 3 * 3600
+  var start = now - (now % step)
+  var blocks = []
+  var end = Math.max(last, start + step)
+  var t
+  for (t = start; t < end; t += step) blocks.push(t)
+  if (!blocks.length) blocks.push(start)
+  return blocks
 }
 
 function formatGuideUpdated(updatedAt) {

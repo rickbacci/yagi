@@ -13,6 +13,7 @@ BarWidget {
   onPopupOpenChanged: {
     if (!root.popupOpen) {
       root.clearGuideDetail()
+      root.guideStripOpen = false
       return
     }
     if (root.popupOpen) {
@@ -48,6 +49,7 @@ BarWidget {
   property var activeRecordings: []
   readonly property bool isRecording: root.activeRecordings && root.activeRecordings.length > 0
   property bool guideModalOpen: false
+  property bool guideStripOpen: false
   property bool openIntoGuide: false
   property bool libraryModalOpen: false
   property var recordingsData: []
@@ -91,7 +93,8 @@ BarWidget {
   onGuideVisibleSlotsChanged: {
     root.guideSlotOffset = Math.max(0, Math.min(root.guideSlotMax, root.guideSlotOffset))
   }
-  property string channelFilter: "favorites" // "all" | "favorites"
+  property string channelFilter: "favorites" // favorites | watchable | all | hidden
+  property var hiddenData: []
   property string playerMode: "live"
   property string lastLiveChannel: ""
   readonly property bool isLibraryPlayback: root.playerMode === "recording"
@@ -104,6 +107,89 @@ BarWidget {
   readonly property bool guideDetailOpen: !!(root.guideDetail && (root.guideDetail.playIdent || root.guideDetail.title))
   property bool guideRefreshing: false
   property string guideNote: ""
+  readonly property var guideBlocks: {
+    var _tick = root.guideClockMin
+    return Model.guideHourBlocks(root.guideList, Math.floor(Date.now() / 1000))
+  }
+  property int guideBlockIndex: 0
+  readonly property int guideNameCol: Style.space(168)
+  readonly property int guideHourCol: {
+    var w = guideStripCol.width
+    if (!(w > 0)) w = Style.space(840)
+    var later = laterBtn.width > 0 ? laterBtn.width : Style.space(72)
+    var gaps = Style.space(6) * 4
+    return Math.max(Style.space(120), Math.floor((w - root.guideNameCol - later - gaps) / 3))
+  }
+  readonly property var guideHourLabels: {
+    var blocks = root.guideBlocks || []
+    var start = Number(blocks[root.guideBlockIndex] || 0)
+    if (start <= 0) return ["", "", ""]
+    return [
+      root.clockLabel(start),
+      root.clockLabel(start + 3600),
+      root.clockLabel(start + 7200)
+    ]
+  }
+  readonly property var guideStripRows: {
+    var blocks = root.guideBlocks || []
+    var start = Number(blocks[root.guideBlockIndex] || 0)
+    if (start <= 0) return []
+    var nowSec = Math.floor(Date.now() / 1000)
+    var list = root.guideList || []
+    var out = []
+    var i, j, h, programs, prog, unix, dur, hourStart, cells, cover
+    for (i = 0; i < list.length; i++) {
+      programs = list[i].programs || []
+      cells = []
+      for (h = 0; h < 3; h++) {
+        hourStart = start + h * 3600
+        cover = null
+        for (j = 0; j < programs.length; j++) {
+          prog = programs[j]
+          unix = Model.programUnix(prog)
+          dur = Number(prog.duration_sec) || 0
+          if (unix <= 0 || dur <= 0) continue
+          if (unix < hourStart + 3600 && (unix + dur) > hourStart) {
+            if (!cover || unix >= cover.unix) cover = { prog: prog, unix: unix, dur: dur }
+          }
+        }
+        if (!cover) {
+          cells.push({ title: "" })
+        } else {
+          cells.push({
+            tune_name: list[i].tune_name || "",
+            display_name: list[i].display_name || list[i].tune_name || "",
+            title: cover.prog.title || "",
+            start: cover.prog.start || "",
+            end: cover.prog.end || "",
+            gps_start: Number(cover.prog.gps_start) || 0,
+            duration_sec: cover.dur,
+            unix: cover.unix,
+            on_now: cover.unix <= nowSec && (cover.unix + cover.dur) > nowSec
+          })
+        }
+      }
+      out.push({
+        tune_name: list[i].tune_name || "",
+        display_name: list[i].display_name || list[i].tune_name || "",
+        network: list[i].network || "",
+        cells: cells
+      })
+    }
+    return out
+  }
+  property var scheduleItems: []
+  readonly property string scheduleLine: {
+    var items = root.scheduleItems || []
+    if (!items.length) return ""
+    if (items.length === 1) {
+      var one = items[0]
+      var who = one.display_name || one.tune_name || ""
+      var when = one.clock || ""
+      return who + (one.title ? " · " + one.title : "") + (when ? " · " + when : "")
+    }
+    return items.length + " scheduled"
+  }
   property string guideSearchText: ""
   property string guideKind: "all"
   property real guideUpdatedAt: 0
@@ -136,6 +222,11 @@ BarWidget {
 
   function flyoutContentWidth() {
     var avail = popup.availableCardWidth
+    if (root.guideStripOpen) {
+      if (!(avail > 0)) return popup.fittedContentWidth(Style.space(840))
+      var wide = Math.round(avail * 0.55)
+      return popup.fittedContentWidth(Math.max(Style.space(720), Math.min(Style.space(960), wide)))
+    }
     if (!(avail > 0)) return popup.fittedContentWidth(Style.space(440))
     var share = Math.round(avail * 0.30)
     return popup.fittedContentWidth(Math.max(Style.space(340), Math.min(Style.space(460), share)))
@@ -168,21 +259,101 @@ BarWidget {
     root.guideSlotOffset = Math.max(0, Math.min(root.guideSlotMax, idx))
   }
 
+  function clockLabel(unixSec) {
+    var when = new Date(Number(unixSec) * 1000)
+    var h24 = when.getHours()
+    var h = h24 % 12
+    if (h === 0) h = 12
+    var min = when.getMinutes()
+    return h + ":" + (min < 10 ? "0" : "") + min + " " + (h24 >= 12 ? "PM" : "AM")
+  }
+
+  function shiftGuideBlock(delta) {
+    var n = (root.guideBlocks || []).length
+    if (n <= 0) return
+    root.guideBlockIndex = Math.max(0, Math.min(n - 1, root.guideBlockIndex + delta))
+  }
+
+  function snapGuideBlock() {
+    var blocks = root.guideBlocks || []
+    var now = Math.floor(Date.now() / 1000)
+    var idx = 0
+    var i
+    for (i = 0; i < blocks.length; i++) {
+      if (Number(blocks[i]) <= now) idx = i
+    }
+    root.guideBlockIndex = idx
+  }
+
+  function applySchedule(raw) {
+    try {
+      var data = JSON.parse(raw || "{}")
+      var items = data.items || data
+      root.scheduleItems = (items && items.length) ? items : []
+    } catch (e) {
+      root.scheduleItems = []
+    }
+  }
+
+  function scheduleLater(show) {
+    if (!show || !show.tune_name || !show.gps_start) return
+    var dur = Math.max(60, Number(show.duration_sec) || 1800)
+    schedProc.running = false
+    schedProc.command = [
+      root.binPath, "record", "later", show.tune_name, String(dur),
+      "--title", show.title || "Scheduled",
+      "--gps", String(show.gps_start),
+      "--clock", show.start || "",
+      "--end-clock", show.end || "",
+      "--display-name", show.display_name || show.tune_name
+    ]
+    schedProc.running = true
+  }
+
+  function removeScheduled(itemId) {
+    if (!itemId) return
+    schedProc.running = false
+    schedProc.command = [root.binPath, "record", "unlater", itemId]
+    schedProc.running = true
+  }
+
+  function useStripShow(show) {
+    if (!show || !show.tune_name) return
+    var start = Model.programUnix(show)
+    var dur = Number(show.duration_sec) || 0
+    var now = Math.floor(Date.now() / 1000)
+    if (start > 0 && dur > 0 && (start + dur) <= now) return
+    var onNow = (start > 0 && dur > 0) ? (start <= now) : !!show.on_now
+    if (onNow) {
+      if (root.tuner1Busy) return
+      var left = Model.recordDurationArg(show, root.guideClockMin)
+      dvrProc.running = false
+      var cmd = [root.binPath, "record", "start", show.tune_name]
+      if (left) cmd.push(left)
+      if (show.title) {
+        cmd.push("--title")
+        cmd.push(show.title)
+      }
+      dvrProc.command = cmd
+      dvrProc.running = true
+      return
+    }
+    root.scheduleLater(show)
+  }
+
   function toggleGuide() {
-    root.clearGuideDetail()
-    guideSearchField.text = ""
-    root.guideSearchText = ""
-    if (root.guideModalOpen) {
-      root.guideModalOpen = false
+    if (root.guideStripOpen) {
+      root.guideStripOpen = false
       root.cursorActive = false
       return
     }
     root.libraryModalOpen = false
-    root.guideCursorIndex = 0
-    root.cursorActive = false
+    root.guideModalOpen = false
+    root.guideSearchText = ""
+    guideStripSearch.text = ""
     root.guideClockMin = Model.minutesNow()
-    root.guideModalOpen = true
-    root.snapGuideToNow()
+    root.snapGuideBlock()
+    root.guideStripOpen = true
   }
 
   function toggleLibrary() {
@@ -192,6 +363,7 @@ BarWidget {
       return
     }
     root.guideModalOpen = false
+    root.guideStripOpen = false
     root.clearGuideDetail()
     root.recCursorIndex = 0
     root.cursorActive = false
@@ -504,7 +676,7 @@ BarWidget {
 
   readonly property var guideList: {
     var list = []
-    var chs = root.displayChannels || []
+    var chs = root.guideSourceChannels || []
     if (chs.length > 0) {
       for (var i = 0; i < chs.length; i++) {
         var ch = chs[i]
@@ -549,28 +721,49 @@ BarWidget {
     return n
   }
 
-  readonly property int listedChannelCount: {
-    var n = 0
-    var chs = root.channelsData || []
-    for (var i = 0; i < chs.length; i++) {
-      if (!root.showTranslators && Model.isTranslator(chs[i])) continue
-      n++
+  function channelIsHidden(ch) {
+    if (!ch) return false
+    var num = String(ch.channel_number || "")
+    var items = root.hiddenData || []
+    var i
+    for (i = 0; i < items.length; i++) {
+      if (String(items[i]) === num) return true
     }
-    return n
+    return false
+  }
+
+  function channelIsFavorite(ch) {
+    if (!ch || !root.favoritesData) return false
+    return root.favoritesData.indexOf(ch.name) !== -1 || (ch.tune_name && root.favoritesData.indexOf(ch.tune_name) !== -1)
+  }
+
+  readonly property int listedChannelCount: (root.channelsData || []).length
+
+  readonly property int favoriteVisibleCount: {
+    return (root.watchableChannels || []).filter(function(ch) { return root.channelIsFavorite(ch) }).length
+  }
+
+  readonly property var watchableChannels: {
+    return (root.channelsData || []).filter(function(ch) { return !root.channelIsHidden(ch) })
   }
 
   readonly property var displayChannels: {
     var list = root.channelsData || []
-    if (root.channelFilter === "favorites") {
-      list = list.filter(function(ch) {
-        if (!root.favoritesData) return false
-        return root.favoritesData.indexOf(ch.name) !== -1 || (ch.tune_name && root.favoritesData.indexOf(ch.tune_name) !== -1)
-      })
+    if (root.channelFilter === "hidden") {
+      return list.filter(function(ch) { return root.channelIsHidden(ch) })
     }
-    if (!root.showTranslators) {
-      list = list.filter(function(ch) { return !Model.isTranslator(ch) })
+    list = list.filter(function(ch) { return !root.channelIsHidden(ch) })
+    if (root.channelFilter === "favorites") {
+      list = list.filter(function(ch) { return root.channelIsFavorite(ch) })
     }
     return list
+  }
+
+  readonly property var guideSourceChannels: {
+    if (root.channelFilter === "favorites") {
+      return (root.watchableChannels || []).filter(function(ch) { return root.channelIsFavorite(ch) })
+    }
+    return root.watchableChannels || []
   }
 
   onDisplayChannelsChanged: {
@@ -661,6 +854,7 @@ BarWidget {
     channelsFile.reload()
     guideFile.reload()
     favoritesFile.reload()
+    hiddenFile.reload()
     uiPrefsFile.reload()
     recordingsFile.reload()
     recIndexProc.running = false
@@ -675,7 +869,7 @@ BarWidget {
       var p = JSON.parse(raw)
       if (p.show_translators === true) root.showTranslators = true
       if (p.show_translators === false) root.showTranslators = false
-      if (p.channel_filter === "favorites" || p.channel_filter === "all") {
+      if (p.channel_filter === "favorites" || p.channel_filter === "all" || p.channel_filter === "watchable" || p.channel_filter === "hidden") {
         root.channelFilter = p.channel_filter
         root.filterInitialized = true
       }
@@ -755,6 +949,33 @@ BarWidget {
     } catch (e) {
       root.favoritesData = []
     }
+  }
+
+  function applyHidden(jsonText) {
+    try {
+      var data = JSON.parse(jsonText || "[]")
+      root.hiddenData = (data && data.length !== undefined) ? data : []
+    } catch (e) {
+      root.hiddenData = []
+    }
+    if (root.channelFilter === "hidden" && !(root.hiddenData && root.hiddenData.length))
+      root.channelFilter = "watchable"
+  }
+
+  function hideListed(ch) {
+    var num = ch ? String(ch.channel_number || "") : ""
+    if (!num) return
+    hiddenProc.running = false
+    hiddenProc.command = [root.binPath, "hidden", "hide", num]
+    hiddenProc.running = true
+  }
+
+  function showListed(ch) {
+    var num = ch ? String(ch.channel_number || "") : ""
+    if (!num) return
+    hiddenProc.running = false
+    hiddenProc.command = [root.binPath, "hidden", "show", num]
+    hiddenProc.running = true
   }
 
   function isFavorite(chName) {
@@ -1012,11 +1233,12 @@ BarWidget {
 
     function guide(): void {
       root.clearGuideDetail()
-      root.openIntoGuide = true
+      root.guideModalOpen = false
+      root.libraryModalOpen = false
       root.guideClockMin = Model.minutesNow()
+      root.snapGuideBlock()
+      root.guideStripOpen = true
       root.popupOpen = true
-      root.guideModalOpen = true
-      root.snapGuideToNow()
     }
   }
 
@@ -1037,6 +1259,15 @@ BarWidget {
     watchChanges: true
     printErrors: false
     onLoaded: root.applyFavorites(text())
+    onFileChanged: reload()
+  }
+
+  FileView {
+    id: hiddenFile
+    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/hidden.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applyHidden(text())
     onFileChanged: reload()
   }
 
@@ -1149,6 +1380,39 @@ BarWidget {
   }
 
   FileView {
+    id: scheduleFile
+    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/schedule.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applySchedule(text())
+    onFileChanged: reload()
+  }
+
+  Timer {
+    interval: 30000
+    running: true
+    repeat: true
+    onTriggered: dueProc.running = true
+  }
+
+  Process {
+    id: dueProc
+    command: [root.binPath, "record", "due"]
+    onExited: function(code) {
+      scheduleFile.reload()
+      recordingsActiveFile.reload()
+    }
+  }
+
+  Process {
+    id: schedProc
+    command: []
+    onExited: function(code) {
+      scheduleFile.reload()
+    }
+  }
+
+  FileView {
     id: tuneStatusFile
     path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/tune_status.json"
     watchChanges: true
@@ -1205,6 +1469,22 @@ BarWidget {
     command: []
     onExited: function(code) {
       favoritesFile.reload()
+    }
+  }
+
+  Process {
+    id: hiddenProc
+    command: []
+    onExited: function(code) {
+      hiddenFile.reload()
+    }
+  }
+
+  Process {
+    id: hiddenSeedProc
+    command: [root.binPath, "hidden", "list"]
+    onExited: function(code) {
+      hiddenFile.reload()
     }
   }
 
@@ -1303,6 +1583,7 @@ BarWidget {
     Qt.callLater(function() {
       channelsFile.reload()
       guideFile.reload()
+      hiddenSeedProc.running = true
       uiPrefsFile.reload()
       scanStatusFile.reload()
       recordingsActiveFile.reload()
@@ -1339,14 +1620,19 @@ BarWidget {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: guideSearchField.activeFocus
+      blocked: guideSearchField.activeFocus || guideStripSearch.activeFocus
       onCloseRequested: {
         if (root.guideDetailOpen) root.clearGuideDetail()
         else if (root.guideModalOpen) root.guideModalOpen = false
+        else if (root.guideStripOpen) root.guideStripOpen = false
         else if (root.libraryModalOpen) root.libraryModalOpen = false
         else root.close()
       }
       onMoveRequested: function(dx, dy) {
+        if (dx !== 0 && root.guideStripOpen) {
+          root.shiftGuideBlock(dx)
+          return
+        }
         if (dx !== 0 && root.guideModalOpen) {
           root.shiftGuideSlot(dx)
           return
@@ -1376,7 +1662,6 @@ BarWidget {
           var ident = root.activeChannelName || root.cursorChannelIdent()
           if (ident) root.toggleRecord(ident)
         }
-        else if (t === "d" || t === "D") root.setShowTranslators(!root.showTranslators)
       }
 
       Column {
@@ -1439,7 +1724,7 @@ BarWidget {
               iconText: "󰥔"
               text: "Guide"
               tooltipText: "Program guide"
-              selected: root.guideModalOpen
+              selected: root.guideStripOpen
               foreground: root.bar.foreground
               onClicked: root.toggleGuide()
             }
@@ -1865,6 +2150,302 @@ BarWidget {
         }
       }
 
+      BorderSurface {
+        id: scheduleCard
+        visible: root.scheduleLine !== ""
+        width: parent.width
+        implicitHeight: scheduleRow.implicitHeight + Style.space(12)
+        radius: Style.spacing.labelGap
+        color: Style.selectedFillFor(root.bar.foreground, Color.accent)
+        borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
+
+        Item {
+          id: scheduleRow
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.margins: Style.space(6)
+          implicitHeight: scheduleLineText.implicitHeight
+          height: implicitHeight
+
+          MouseArea {
+            anchors.fill: parent
+            onClicked: {
+              root.guideStripOpen = true
+              root.snapGuideBlock()
+            }
+          }
+
+          Text {
+            id: scheduleLineText
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: root.scheduleLine
+            color: Color.accent
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: true
+            elide: Text.ElideRight
+          }
+        }
+      }
+
+      Column {
+        id: guideStripCol
+        visible: root.guideStripOpen
+        width: parent.width
+        spacing: Style.space(6)
+
+        TextField {
+          id: guideStripSearch
+          width: parent.width
+          placeholderText: "Search titles"
+          font.family: root.bar.fontFamily
+          onTextChanged: root.guideSearchText = text
+        }
+
+        Item {
+          id: guideBlockNav
+          visible: !root.guideSearchActive && root.guideStripRows.length > 0
+          width: parent.width
+          height: Math.max(earlierBtn.implicitHeight, laterBtn.implicitHeight)
+
+          Button {
+            id: earlierBtn
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Earlier"
+            enabled: root.guideBlockIndex > 0
+            fontSize: Style.font.caption
+            foreground: root.bar.foreground
+            onClicked: root.shiftGuideBlock(-1)
+          }
+
+          Item {
+            id: hourHead
+            anchors.left: parent.left
+            anchors.leftMargin: root.guideNameCol + Style.space(6)
+            anchors.right: laterBtn.left
+            anchors.rightMargin: Style.space(6)
+            anchors.verticalCenter: parent.verticalCenter
+            height: parent.height
+
+            Repeater {
+              model: root.guideHourLabels
+              delegate: Text {
+                required property string modelData
+                required property int index
+                x: index * (root.guideHourCol + Style.space(6))
+                y: Math.max(0, (hourHead.height - implicitHeight) / 2)
+                width: root.guideHourCol
+                textFormat: Text.PlainText
+                text: modelData
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                horizontalAlignment: Text.AlignHCenter
+                elide: Text.ElideRight
+              }
+            }
+          }
+
+          Button {
+            id: laterBtn
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Later"
+            enabled: root.guideBlockIndex < (root.guideBlocks.length - 1)
+            fontSize: Style.font.caption
+            foreground: root.bar.foreground
+            onClicked: root.shiftGuideBlock(1)
+          }
+        }
+
+        Text {
+          visible: root.guideStripOpen && !root.guideSearchActive && root.guideStripRows.length === 0
+          width: parent.width
+          textFormat: Text.PlainText
+          text: "Nothing listed in these hours."
+          color: Qt.darker(root.bar.foreground, 1.4)
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+        }
+
+        Flickable {
+          id: stripFlick
+          width: parent.width
+          height: Math.min(stripShowsCol.implicitHeight, Style.space(280))
+          contentWidth: width
+          contentHeight: stripShowsCol.implicitHeight
+          clip: true
+          visible: !root.guideSearchActive && root.guideStripRows.length > 0
+          flickableDirection: Flickable.VerticalFlick
+          boundsBehavior: Flickable.StopAtBounds
+
+          Column {
+            id: stripShowsCol
+            width: stripFlick.width
+            spacing: Style.space(4)
+
+            Repeater {
+              model: root.guideStripRows
+              delegate: Item {
+                id: stripRow
+                required property var modelData
+                required property int index
+                width: stripShowsCol.width
+                implicitHeight: Math.max(stripName.implicitHeight + Style.space(10), Style.space(32))
+                height: implicitHeight
+
+                Rectangle {
+                  anchors.left: parent.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
+                  width: Style.space(3)
+                  color: Model.networkColor(modelData.network, Color.accent)
+                }
+
+                Text {
+                  id: stripName
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: root.guideNameCol - Style.space(8)
+                  textFormat: Text.PlainText
+                  text: modelData.display_name || modelData.tune_name || ""
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                  elide: Text.ElideRight
+                }
+
+                Repeater {
+                  model: modelData.cells
+                  delegate: Item {
+                    required property var modelData
+                    required property int index
+                    x: root.guideNameCol + Style.space(6) + index * (root.guideHourCol + Style.space(6))
+                    width: root.guideHourCol
+                    height: stripRow.height
+
+                    MouseArea {
+                      anchors.fill: parent
+                      enabled: (modelData.title || "") !== ""
+                      hoverEnabled: enabled
+                      cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                      onClicked: root.useStripShow(modelData)
+                    }
+
+                    Text {
+                      anchors.left: parent.left
+                      anchors.right: parent.right
+                      anchors.verticalCenter: parent.verticalCenter
+                      textFormat: Text.PlainText
+                      text: modelData.title || ""
+                      color: root.bar.foreground
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        Flickable {
+          id: stripSearchFlick
+          width: parent.width
+          height: Math.min(stripSearchCol.implicitHeight, Style.space(220))
+          contentWidth: width
+          contentHeight: stripSearchCol.implicitHeight
+          clip: true
+          visible: root.guideSearchActive && root.guideSearchHits.length > 0
+          flickableDirection: Flickable.VerticalFlick
+          boundsBehavior: Flickable.StopAtBounds
+
+          Column {
+            id: stripSearchCol
+            width: stripSearchFlick.width
+
+            Repeater {
+              model: root.guideSearchHits
+              delegate: Item {
+                required property var modelData
+                required property int index
+                width: stripSearchCol.width
+                implicitHeight: stripSearchLine.implicitHeight + Style.space(8)
+
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.useStripShow(modelData)
+                }
+
+                Text {
+                  id: stripSearchLine
+                  width: parent.width
+                  textFormat: Text.PlainText
+                  text: (modelData.display_name || modelData.tune_name || modelData.channel_number || "")
+                        + "  " + (modelData.title || "")
+                        + (modelData.start ? "  " + modelData.start : "")
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  elide: Text.ElideRight
+                }
+              }
+            }
+          }
+        }
+
+        Text {
+          visible: root.scheduleItems.length > 0
+          textFormat: Text.PlainText
+          text: "Waiting to record"
+          color: root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
+
+        Repeater {
+          model: root.scheduleItems
+          delegate: Row {
+            required property var modelData
+            width: guideStripCol.width
+            spacing: Style.space(6)
+
+            Text {
+              width: Math.max(0, parent.width - stripRemove.width - parent.spacing)
+              textFormat: Text.PlainText
+              text: (modelData.display_name || modelData.tune_name || "")
+                    + " · " + (modelData.title || "")
+                    + (modelData.clock ? " · " + modelData.clock : "")
+              color: Color.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Button {
+              id: stripRemove
+              text: "Remove"
+              fontSize: Style.font.caption
+              foreground: root.bar.foreground
+              onClicked: root.removeScheduled(modelData.id)
+            }
+          }
+        }
+      }
+
       Item {
         visible: !root.bothTunersBusy
         width: parent.width
@@ -1903,16 +2484,7 @@ BarWidget {
           spacing: Style.space(4)
 
           Button {
-            text: "All (" + root.listedChannelCount + ")"
-            tooltipText: "All channels"
-            selected: root.channelFilter === "all"
-            fontSize: Style.font.caption
-            foreground: root.bar.foreground
-            onClicked: root.setChannelFilter("all")
-          }
-
-          Button {
-            text: "Favs (" + (root.favoritesData ? root.favoritesData.length : 0) + ")"
+            text: "Favs (" + root.favoriteVisibleCount + ")"
             tooltipText: "Favorite channels"
             selected: root.channelFilter === "favorites"
             fontSize: Style.font.caption
@@ -1921,13 +2493,31 @@ BarWidget {
           }
 
           Button {
-            visible: root.translatorCount > 0
-            text: "Dupes (" + root.translatorCount + ")"
-            tooltipText: "Show translator duplicates"
-            active: root.showTranslators
+            text: "Watchable (" + (root.watchableChannels ? root.watchableChannels.length : 0) + ")"
+            tooltipText: "Stations worth watching"
+            selected: root.channelFilter === "watchable"
             fontSize: Style.font.caption
             foreground: root.bar.foreground
-            onClicked: root.setShowTranslators(!root.showTranslators)
+            onClicked: root.setChannelFilter("watchable")
+          }
+
+          Button {
+            text: "All (" + (root.watchableChannels ? root.watchableChannels.length : 0) + ")"
+            tooltipText: "Same stations, with Hide"
+            selected: root.channelFilter === "all"
+            fontSize: Style.font.caption
+            foreground: root.bar.foreground
+            onClicked: root.setChannelFilter("all")
+          }
+
+          Button {
+            visible: root.hiddenData && root.hiddenData.length > 0
+            text: "Hidden (" + root.hiddenData.length + ")"
+            tooltipText: "Stations set aside"
+            selected: root.channelFilter === "hidden"
+            fontSize: Style.font.caption
+            foreground: root.bar.foreground
+            onClicked: root.setChannelFilter("hidden")
           }
         }
       }
@@ -2001,7 +2591,8 @@ BarWidget {
         implicitHeight: height
         height: {
           if (!visible) return 0
-          var room = root.roomFor(remoteChrome.implicitHeight + mainCol.spacing)
+          var extra = (guideStripCol.visible ? guideStripCol.implicitHeight : 0)
+          var room = root.roomFor(remoteChrome.implicitHeight + mainCol.spacing + extra)
           var content = channelListView.implicitHeight
           if (content > 0) return Math.min(content, room)
           return Math.min(Style.space(160), room)
@@ -2063,10 +2654,26 @@ BarWidget {
                   onWheel: function(wheel) { wheel.accepted = false }
                 }
 
+                Button {
+                  id: hideBtn
+                  visible: root.channelFilter === "all" || root.channelFilter === "hidden"
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(4)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.channelFilter === "hidden" ? "Show" : "Hide"
+                  tooltipText: root.channelFilter === "hidden" ? "Put this station back" : "Set this station aside"
+                  fontSize: Style.font.caption
+                  foreground: root.bar.foreground
+                  onClicked: {
+                    if (root.channelFilter === "hidden") root.showListed(chItem.modelData)
+                    else root.hideListed(chItem.modelData)
+                  }
+                }
+
                 PanelActionButton {
                   id: favBtn
-                  anchors.right: parent.right
-                  anchors.rightMargin: Style.space(6)
+                  anchors.right: hideBtn.visible ? hideBtn.left : parent.right
+                  anchors.rightMargin: hideBtn.visible ? Style.space(4) : Style.space(6)
                   anchors.verticalCenter: parent.verticalCenter
                   size: Style.space(20)
                   fontSize: Style.font.bodySmall

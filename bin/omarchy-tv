@@ -7,6 +7,7 @@ import os
 import sys
 import argparse
 import json
+import time
 
 # Ensure project root is in sys.path (resolving symlinks)
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -206,8 +207,12 @@ def cmd_pref(args):
             prefs["channel_filter"] = "favorites"
         elif value in ("all",):
             prefs["channel_filter"] = "all"
+        elif value in ("watchable", "watch"):
+            prefs["channel_filter"] = "watchable"
+        elif value in ("hidden",):
+            prefs["channel_filter"] = "hidden"
         else:
-            print("Use: omarchy-tv pref filter all|favorites")
+            print("Use: omarchy-tv pref filter favorites|watchable|all|hidden")
             return
         save_ui_prefs(prefs)
         print(f"Channel list filter is {prefs['channel_filter']}.")
@@ -281,6 +286,33 @@ def cmd_favorite(args):
             favs.append(target)
             save_favorites(favs)
             print(f"★ Added '{target}' to favorites.")
+
+
+def cmd_hidden(args):
+    from engine.hidden import hide_channel, load_hidden, show_channel
+
+    action = args.action or "list"
+    if action == "hide":
+        if not args.channel:
+            print("Name the channel number. Example: omarchy-tv hidden hide 19.1")
+            sys.exit(1)
+        items = hide_channel(args.channel)
+        print(f"Hid {args.channel}. {len(items)} hidden.")
+        return
+    if action == "show":
+        if not args.channel:
+            print("Name the channel number. Example: omarchy-tv hidden show 19.10")
+            sys.exit(1)
+        items = show_channel(args.channel)
+        print(f"Showing {args.channel}. {len(items)} hidden.")
+        return
+    items = load_hidden()
+    if not items:
+        print("Nothing is hidden.")
+        return
+    print(f"Hidden channels ({len(items)}):")
+    for num in items:
+        print(f"  {num}")
 
 
 def cmd_play(args):
@@ -447,6 +479,55 @@ def cmd_record(args):
             sys.exit(1)
         print(f"󰑈 Playing {os.path.basename(file_path)}")
 
+    elif action == "later":
+        from engine.schedule import add_later
+        if not args.target:
+            print("Error: Name the station. Example: omarchy-tv record later WEWSHD 3600s --title \"News 5\" --gps 1 --clock \"11:00 PM\"")
+            sys.exit(1)
+        try:
+            item = add_later(
+                args.target,
+                getattr(args, "title", "") or "",
+                getattr(args, "gps", 0),
+                parse_duration_str(args.duration) or 0,
+                clock=getattr(args, "clock", "") or "",
+                end_clock=getattr(args, "end_clock", "") or "",
+                display_name=getattr(args, "display_name", "") or "",
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
+        print(f"Scheduled {item['title']} on {item['display_name']} at {item['clock'] or item['start_unix']}.")
+
+    elif action == "unlater":
+        from engine.schedule import remove_later
+        if not args.target or not remove_later(args.target):
+            print("That show is not waiting to record.")
+            sys.exit(1)
+        print("Removed from the waiting list.")
+
+    elif action == "due":
+        from engine.dvr import DvrManager
+        from engine.schedule import drop_item, due_items
+        ready = due_items()
+        if not ready:
+            return
+        for item in ready:
+            now = time.time()
+            remaining = int(item.get("start_unix") or 0) + int(item.get("duration_sec") or 0) - int(now)
+            remaining = max(60, remaining)
+            try:
+                DvrManager.start_recording(
+                    item.get("tune_name") or "",
+                    duration=remaining,
+                    program_title=item.get("title") or "",
+                )
+            except Exception as exc:
+                print(f"Waiting. {item.get('title') or 'That show'} did not start: {exc}")
+                continue
+            drop_item(str(item.get("id") or ""))
+            print(f"Recording {item.get('title')} ({remaining // 60}m).")
+
     elif action == "list":
         recordings = DvrManager.refresh_library_index()
         if not recordings:
@@ -500,6 +581,11 @@ def main():
     p_fav.add_argument("channel", nargs="?", help="Channel name to favorite")
     p_fav.set_defaults(func=cmd_favorite)
 
+    p_hid = subparsers.add_parser("hidden", help="Stations set aside from Watchable and Favorites")
+    p_hid.add_argument("action", nargs="?", choices=["list", "hide", "show"], default="list")
+    p_hid.add_argument("channel", nargs="?", help="Channel number, such as 19.1")
+    p_hid.set_defaults(func=cmd_hidden)
+
     p_pref = subparsers.add_parser("pref", help="UI preferences")
     p_pref.add_argument("key", help="Preference key (translators, filter, library-max)")
     p_pref.add_argument("value", nargs="?", default="toggle", help="on, off, or toggle")
@@ -545,10 +631,14 @@ def main():
 
     # record / dvr
     p_rec = subparsers.add_parser("record", aliases=["dvr", "rec"], help="DVR recording control")
-    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play"], default="list", help="Record action")
+    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due"], default="list", help="Record action")
     p_rec.add_argument("target", nargs="?", help="Channel to record or file to delete")
     p_rec.add_argument("duration", nargs="?", help="Optional duration limit (e.g. 30m, 1h, 300s)")
     p_rec.add_argument("--title", default="", help="Program name for the file and the list")
+    p_rec.add_argument("--gps", type=int, default=0, help="Broadcast start time")
+    p_rec.add_argument("--clock", default="", help="Start clock label")
+    p_rec.add_argument("--end-clock", dest="end_clock", default="", help="End clock label")
+    p_rec.add_argument("--display-name", dest="display_name", default="", help="Station line")
     p_rec.set_defaults(func=cmd_record)
 
     # daemon
