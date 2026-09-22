@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "richardb.omarchy-tv",
+  "name": "Omarchy TV",
+  "version": "0.1.0",
+  "author": "Richard Bacci",
+  "license": "MIT",
+  "description": "OTA live TV: scan, watch, guide, record, and pause-live on a dual tuner.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "plugin/BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "TV",
+    "description": "Scan, watch, guide, and record OTA ATSC on a dual tuner.",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
