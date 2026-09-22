@@ -14,9 +14,11 @@ loginctl show-session $(loginctl | awk '/seat0/{print $1}') -p Active
 femon -H -a 0
 ```
 
-## RF
+## Signal
 
-HUD dBm from the demod: about −15 to −50 strong, −50 to −70 good, −70 to −85 fair (weather hits), below −85 no lock. Height and line-of-sight matter. VHF-High (7–13) wants longer elements; UHF (14–36) is most modern stations. Inside ~15 miles, an amp can overload the LGDT3306A.
+While a tune is running, the flyout watch row shows SNR in dB. This demod reports that number in tenths: 223 is 22.3 dB. ATSC 8VSB wants about 15 dB. The strength percent is the same reading, scaled. The picture overlay does not show it.
+
+Height and line-of-sight matter. VHF-High (7–13) wants longer elements. UHF (14–36) is most modern stations. Inside about 15 miles, an amp can overload the LGDT3306A.
 
 ## Why other apps show scrambled
 
@@ -36,6 +38,4 @@ ATSC A/53: DTV pilot is 310 kHz above the lower band edge, i.e. nominal center *
 | Pause dump | `~/.cache/omarchy/tv/timeshift/live.ts` |
 | Sockets | `$XDG_RUNTIME_DIR/omarchy-tv-*.sock` |
 
-Pause does not appear in Recordings. Use Record (`r`) for `Videos/TV`.
-
-Player/HUD misses for agents: `skills/omarchy-tv/failures.md`.
+Pause does not appear in Recordings. Use Record (`r`) for `Videos/TV`. The pause file grows until Close TV (`WHATS_LEFT.md`).

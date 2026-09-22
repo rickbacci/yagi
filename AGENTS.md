@@ -18,8 +18,7 @@ OTA TV for Omarchy (Hyprland + Quickshell + Python + MPV). Current idea: `DESIGN
 7. Hyprland class `omarchy-tv`: float, pin, 16:9, bottom-right, height `monitor/3`. Same chrome as `pip.lua`, not the `pip` tag or 600×338. Move uses the size expressions, not `window_w`. Pin is static; Super+F is `omarchy-tv fullscreen` (unpin first). No HUD `f`. No mpv `--window-dragging`; move is Super+LMB.
 8. Release DVB frontends before a new dump (`EBUSY`).
 9. Scan dwell ≥ 1.2 s.
-10. Library recordings: `$XDG_VIDEOS_DIR/TV`. Pause-live dump: `$XDG_CACHE_HOME/omarchy/tv/timeshift/`. Not the same tree. PiP is never `dvb://`. Close TV wipes the dump.
-11. Skip seconds, overlay pixels, cache minutes are preferences until this hardware and this mpv prove them. Do not freeze them here.
+10. Library recordings: `$XDG_VIDEOS_DIR/TV`. Pause-live dump: `$XDG_CACHE_HOME/omarchy/tv/timeshift/`. Not the same tree. PiP is never `dvb://`. Close TV wipes the dump, the sidecar, and any sidecar it lost track of.
 
 ## Settled
 The picture overlay is settled (`player/scripts/tv_hud.lua`, `render_hud`). Leave that look alone. If work wants to change it, stop, say why the look has to change, and wait.
@@ -28,12 +27,16 @@ Dark top bar. Station color on the left edge. Channel number, network, station n
 
 A fix that does not change that look can land. Say so when it touches the overlay. Do not restyle, move, add, or drop a word, color, or bar to make another feature fit.
 
+The flyout is settled too (`plugin/BarWidget.qml`). Same rule: stop, say why the look has to change, and wait.
+
+Header: antenna icon, Omarchy TV, the channel count and how many favorites, then Recordings and Guide. Under that, one line for what tuner 0 is doing: channel, show, Close. A recording is the same kind of line, with Stop. A Guide update uses that second line, “Updating the Guide,” and leaves when it finishes. A scan keeps its progress card. The channel list sits behind Show / Hide. It opens on favorites, with translator duplicates off. Each station is one line: number, name, the show on now, and a star. A thin network-color edge sits on the left. The channel flyout and Recordings stay only as wide as one line needs. The Guide uses the width the screen gives it.
+
 ## Working style
 One task. If they batch asks, name the current task, park the rest on the todo list, finish that task before switching.
 
 Talk first. Recommendation with pluses and minuses second. Numbered plan third. Code after they choose. Do not commit unless asked.
 
-Obey **Hard constraints** and **Settled**. DESIGN / skill / README are the current idea, not a veto. The picture overlay look is. If the goal needs a path they don’t describe, advise that path, discuss, then proceed after we understand each other. Update them after it works. Do not stop to rewrite docs in order to think.
+Obey **Hard constraints** and **Settled**. DESIGN / skill / README are the current idea, not a veto. The picture overlay and the flyout are. If the goal needs a path they don’t describe, advise that path, discuss, then proceed after we understand each other. Update them after it works. Do not stop to rewrite docs in order to think.
 
 Read this machine’s mpv / Quickshell / Hyprland / DVB docs, not a remembered wiki.
 

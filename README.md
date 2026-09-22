@@ -9,13 +9,13 @@ Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each st
 
 Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `omarchy-tv`.
 
-Architecture: `DESIGN.md`. Tuner/RF: `HARDWARE_AND_TROUBLESHOOTING.md`.
+Architecture: `DESIGN.md`. Tuner/RF: `HARDWARE_AND_TROUBLESHOOTING.md`. Open piece: `WHATS_LEFT.md`.
 
 ```
 omarchy-tv/
 ├── bin/omarchy-tv
 ├── engine/  player/  plugin/  tests/
-├── AGENTS.md  DESIGN.md  HARDWARE_AND_TROUBLESHOOTING.md
+├── AGENTS.md  DESIGN.md  HARDWARE_AND_TROUBLESHOOTING.md  WHATS_LEFT.md
 └── skills/omarchy-tv/SKILL.md
 ```
 
