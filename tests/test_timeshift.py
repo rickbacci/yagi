@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import socket
+import subprocess
 import tempfile
 import threading
 import time
@@ -11,6 +12,57 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 from engine.timeshift import ATSC_BPS, LIVE_SLACK, SEEK_NEAR, SEEK_STEP, Timeshift, align_ts, is_timeshift_path
+
+
+def _reap_http_under(directory: str) -> None:
+    """Kill a sidecar this test started. Leave a server on the real dump path."""
+    root = os.path.realpath(directory)
+    try:
+        out = subprocess.check_output(
+            ["pgrep", "-a", "-f", "engine.timeshift_http"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return
+    for line in out.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) < 2 or "pgrep" in parts[1]:
+            continue
+        if root not in parts[1]:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid <= 1 or pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+        deadline = time.time() + 0.6
+        while time.time() < deadline:
+            try:
+                got, _ = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                break
+            if got == pid:
+                break
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+            time.sleep(0.02)
+        else:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
 
 
 class TestTimeshift(unittest.TestCase):
@@ -158,6 +210,7 @@ class TestTimeshift(unittest.TestCase):
                         self.assertEqual(resp.read(188), b"A" * 188)
                 finally:
                     Timeshift.stop_http()
+                    _reap_http_under(tmp_dir)
                 self.assertFalse(Timeshift._pid_alive(int(data.get("http_pid") or 0)))
 
     def test_delay_sec_paused_is_wall_clock_not_atsc(self):
@@ -335,12 +388,16 @@ class TestTimeshift(unittest.TestCase):
                  patch.object(Timeshift, "_reap_orphan_dumps"), \
                  patch.object(Timeshift, "_reap_orphan_http"), \
                  patch.object(Timeshift, "_remove_files"):
-                Timeshift.start_http()
-                pid = int(Timeshift.load_state().get("http_pid") or 0)
-                self.assertTrue(Timeshift._pid_alive(pid))
-                Timeshift.wipe()
-                self.assertFalse(Timeshift._pid_alive(pid))
-                self.assertNotIn("http_port", Timeshift.load_state())
+                try:
+                    Timeshift.start_http()
+                    pid = int(Timeshift.load_state().get("http_pid") or 0)
+                    self.assertTrue(Timeshift._pid_alive(pid))
+                    Timeshift.wipe()
+                    self.assertFalse(Timeshift._pid_alive(pid))
+                    self.assertNotIn("http_port", Timeshift.load_state())
+                finally:
+                    Timeshift.stop_http()
+                    _reap_http_under(tmp_dir)
 
     def test_start_http_ignores_stale_port(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -358,6 +415,30 @@ class TestTimeshift(unittest.TestCase):
                     self.assertNotEqual(port, 1)
                 finally:
                     Timeshift.stop_http()
+                    _reap_http_under(tmp_dir)
+
+    def test_same_dump_ignores_a_temp_sidecar(self):
+        from engine.timeshift_http import same_dump
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            real = os.path.join(tmp_dir, "installed", "live.ts")
+            os.makedirs(os.path.dirname(real))
+            self.assertTrue(same_dump(live, live))
+            self.assertFalse(same_dump(live, real))
+            self.assertFalse(same_dump("", real))
+
+    def test_pause_cap_thread_checks_the_sidecar_file(self):
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+            "engine",
+            "timeshift_http.py",
+        )
+        with open(path, encoding="utf-8") as f:
+            src = f.read()
+        start = src.index("def _watch_pause_cap")
+        chunk = src[start:start + 600]
+        self.assertIn("same_dump", chunk)
+        self.assertLess(chunk.index("same_dump"), chunk.index("hold_dump_if_full"))
 
     def test_start_dump_writes_state_and_waits_for_bytes(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -26,6 +26,20 @@ def align_ts(n: int) -> int:
     return n - (n % TS_PACKET)
 
 
+def same_dump(sidecar_file: str, dump_file: str) -> bool:
+    """True when this sidecar is serving the dump Timeshift is writing.
+
+    A test passes a temp file on the command line. The pause cap must not
+    follow that process onto the installed live.ts.
+    """
+    if not sidecar_file or not dump_file:
+        return False
+    try:
+        return os.path.realpath(sidecar_file) == os.path.realpath(dump_file)
+    except OSError:
+        return False
+
+
 def _file_size() -> int:
     try:
         return int(os.path.getsize(TIMESHIFT_FILE))
@@ -168,7 +182,10 @@ def main(argv: Optional[list] = None) -> None:
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
     def _watch_pause_cap() -> None:
+        from engine.timeshift import TIMESHIFT_FILE as dump_file
         from engine.timeshift import Timeshift
+        if not same_dump(TIMESHIFT_FILE, dump_file):
+            return
         while not getattr(httpd, "shutting_down", False):
             try:
                 Timeshift.hold_dump_if_full()

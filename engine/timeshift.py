@@ -172,6 +172,7 @@ class Timeshift:
         )
         if proc.stdout is None:
             cls._kill_pid(proc.pid)
+            cls._finish_http_popen(proc, keep=False)
             return 0
         line = proc.stdout.readline()
         try:
@@ -184,9 +185,24 @@ class Timeshift:
             port = int(line.strip())
         except (TypeError, ValueError):
             cls._kill_pid(proc.pid)
+            cls._finish_http_popen(proc, keep=False)
             return 0
         cls.patch_state(http_port=port, http_pid=proc.pid)
+        cls._finish_http_popen(proc, keep=True)
         return port
+
+    @classmethod
+    def _finish_http_popen(cls, proc: subprocess.Popen, keep: bool) -> None:
+        """The sidecar outlives this call. Popen.__del__ warns if returncode is unset."""
+        if proc.returncode is not None:
+            return
+        if keep:
+            proc.returncode = 0
+            return
+        try:
+            proc.wait(timeout=1)
+        except (subprocess.TimeoutExpired, ChildProcessError):
+            proc.returncode = 0
 
     @classmethod
     def stop_http(cls) -> None:
