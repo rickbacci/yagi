@@ -167,6 +167,16 @@ def main(argv: Optional[list] = None) -> None:
         httpd.shutting_down = True  # type: ignore[attr-defined]
         threading.Thread(target=httpd.shutdown, daemon=True).start()
 
+    def _watch_pause_cap() -> None:
+        from engine.timeshift import Timeshift
+        while not getattr(httpd, "shutting_down", False):
+            try:
+                Timeshift.hold_dump_if_full()
+            except Exception:
+                pass
+            time.sleep(2.0)
+
+    threading.Thread(target=_watch_pause_cap, name="tv-pause-cap", daemon=True).start()
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     sys.stdout.write(f"{port}\n")

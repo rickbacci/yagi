@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import socket
 import tempfile
 import threading
@@ -179,6 +180,96 @@ class TestTimeshift(unittest.TestCase):
                 delay = Timeshift.delay_sec()
             self.assertGreater(delay, 45.0)
             self.assertLess(delay, 50.0)
+
+    def test_hold_dump_stops_an_hour_past_the_playhead(self):
+        self.assertEqual(Timeshift.pause_cap_bytes(), int(ATSC_BPS / 8.0 * 3600))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state_path = os.path.join(tmp_dir, "timeshift_active.json")
+            playhead = 1880
+            cap = 1880
+            with open(live, "wb") as f:
+                f.write(b"x" * (playhead + cap))
+            sock = os.path.join(tmp_dir, "missing.sock")
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state_path), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
+                 patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
+                 patch.object(Timeshift, "pause_cap_bytes", return_value=cap), \
+                 patch.object(Timeshift, "_pid_alive", return_value=True), \
+                 patch("os.kill") as kill:
+                Timeshift.patch_state(
+                    running=True,
+                    paused=True,
+                    pid=4242,
+                    playhead_byte=playhead,
+                    playhead_t=time.time() - 10,
+                    view="live",
+                    tune_name="WEWSHD",
+                    http_pid=7,
+                    http_port=9,
+                )
+                self.assertTrue(Timeshift.hold_dump_if_full())
+                state = Timeshift.load_state()
+                self.assertTrue(state.get("dump_held"))
+                self.assertEqual(state.get("pid"), 0)
+                self.assertEqual(state.get("playhead_byte"), playhead)
+                self.assertTrue(state.get("paused"))
+                self.assertEqual(state.get("tune_name"), "WEWSHD")
+                self.assertEqual(state.get("http_pid"), 7)
+            kill.assert_called_with(4242, signal.SIGTERM)
+            self.assertTrue(os.path.isfile(live))
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state_path), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
+                self.assertFalse(Timeshift.hold_dump_if_full())
+                delay = Timeshift.delay_sec()
+            self.assertAlmostEqual(delay, cap / (ATSC_BPS / 8.0), delta=0.01)
+
+    def test_hold_dump_leaves_live_playback_writing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state_path = os.path.join(tmp_dir, "timeshift_active.json")
+            with open(live, "wb") as f:
+                f.write(b"x" * 188000)
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state_path), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
+                 patch.object(Timeshift, "pause_cap_bytes", return_value=1880), \
+                 patch.object(Timeshift, "_pid_alive", return_value=True), \
+                 patch("os.kill") as kill:
+                Timeshift.patch_state(
+                    running=True,
+                    paused=False,
+                    view="live",
+                    pid=4242,
+                    playhead_byte=0,
+                )
+                self.assertFalse(Timeshift.hold_dump_if_full())
+            kill.assert_not_called()
+
+    def test_hold_dump_leaves_a_shorter_pause_writing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state_path = os.path.join(tmp_dir, "timeshift_active.json")
+            with open(live, "wb") as f:
+                f.write(b"x" * 18800)
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state_path), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
+                 patch.object(Timeshift, "_pid_alive", return_value=True), \
+                 patch("os.kill") as kill:
+                Timeshift.patch_state(
+                    running=True,
+                    paused=True,
+                    pid=4242,
+                    playhead_byte=0,
+                    playhead_t=time.time(),
+                    view="live",
+                )
+                self.assertFalse(Timeshift.hold_dump_if_full())
+            kill.assert_not_called()
+            self.assertFalse(Timeshift.load_state().get("dump_held"))
 
     def test_delay_sec_live_unpaused_is_zero(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -721,6 +721,7 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("Super+F", src)
         self.assertIn("function program_on_now", src)
         self.assertIn("function picture_ready", src)
+        self.assertIn("dump_held", src)
         self.assertIn('mp.get_opt("tune")', src)
         self.assertIn("video-params/w", src)
         self.assertIn('mp.observe_property("video-params/w"', src)

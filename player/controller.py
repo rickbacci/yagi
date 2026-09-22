@@ -375,6 +375,7 @@ class MpvController:
         if Timeshift.tune_lock_held():
             return True
         if self.is_running():
+            Timeshift.hold_dump_if_full()
             return True
         Timeshift.wipe()
         update_player_state(False)

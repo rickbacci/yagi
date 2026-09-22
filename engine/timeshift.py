@@ -47,6 +47,7 @@ DUMP_GROWING_BYTES = 32 * 1024
 
 TS_PACKET = 188
 ATSC_BPS = 19_390_000
+PAUSE_CAP_SEC = 3600
 SEEK_STEP = 10.0
 SEEK_NEAR = 5.0
 LIVE_SLACK = 2.5
@@ -226,8 +227,57 @@ class Timeshift:
         return ATSC_BPS / 8.0
 
     @classmethod
+    def pause_cap_bytes(cls) -> int:
+        """One hour of ATSC air. The pause file may grow this far past the playhead."""
+        return int(ATSC_BPS / 8.0 * PAUSE_CAP_SEC)
+
+    @classmethod
+    def hold_dump_if_full(cls) -> bool:
+        """Stop the tuner dump once it is an hour ahead of the playhead.
+
+        The file, the picture, and the playhead stay. A later Live still jumps
+        to the write head that remains.
+        """
+        state = cls.load_state()
+        if not state or state.get("dump_held"):
+            return False
+        # Live playback reads the write head. playhead_byte stays put, so the
+        # file size alone is not "an hour ahead."
+        if str(state.get("view") or "live") == "live" and not bool(state.get("paused")):
+            return False
+        pid = int(state.get("pid") or 0)
+        if not cls._pid_alive(pid):
+            return False
+        if cls.dump_bytes() - cls.playhead_now() < cls.pause_cap_bytes():
+            return False
+        sock = str(state.get("socket") or TIMESHIFT_SOCKET_PATH)
+        if os.path.exists(sock):
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.3)
+                    s.connect(sock)
+                    s.sendall(b'{"command": ["quit"]}\n')
+            except OSError:
+                pass
+        if cls._pid_alive(pid):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        if os.path.exists(sock):
+            try:
+                os.unlink(sock)
+            except OSError:
+                pass
+        cls.patch_state(pid=0, dump_held=True)
+        return True
+
+    @classmethod
     def delay_sec(cls) -> float:
         state = cls.load_state()
+        if bool(state.get("dump_held")) and bool(state.get("paused")):
+            playhead = int(state.get("playhead_byte") or 0)
+            return max(0.0, (cls.dump_bytes() - playhead) / (ATSC_BPS / 8.0))
         if str(state.get("view") or "live") == "live" and not bool(state.get("paused")):
             return 0.0
         if bool(state.get("paused")):

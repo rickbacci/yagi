@@ -9,7 +9,7 @@ Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each st
 
 Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `omarchy-tv`.
 
-Architecture: `DESIGN.md`. Tuner/RF: `HARDWARE_AND_TROUBLESHOOTING.md`. Open piece: `WHATS_LEFT.md`.
+Architecture: `DESIGN.md`. Tuner/RF: `HARDWARE_AND_TROUBLESHOOTING.md`. `WHATS_LEFT.md`.
 
 ```
 omarchy-tv/
@@ -65,13 +65,13 @@ omarchy-tv pref filter favorites|watchable|all|hidden | pref library-max auto|20
 omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
 ```
 
-`pause` is throwaway `live.ts`. `record` is a keepable file. `live` `loadfile`s the dump write head, or retunes after a recording.
+`pause` is throwaway `live.ts`. The writer stops when that file is an hour of air ahead of the playhead. `record` is a keepable file. `live` `loadfile`s the dump write head, or retunes after a recording.
 
 ## HUD (pointer in the PiP — not the plugin, not Super+K)
 
 | Key | Live TV | Recording |
 | --- | --- | --- |
-| Space | Pause (dump fills); play stays behind until `l` | Pause / resume |
+| Space | Pause (writer stops an hour ahead); play stays behind until `l` | Pause / resume |
 | ← / → | Skip HTTP playhead (last hop is live, same window) | Skip; last hop retunes live |
 | l | Live write head (same window) | Return to live (new dump) |
 | r | Library record | ignored |

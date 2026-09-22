@@ -38,4 +38,4 @@ ATSC A/53: DTV pilot is 310 kHz above the lower band edge, i.e. nominal center *
 | Pause dump | `~/.cache/omarchy/tv/timeshift/live.ts` |
 | Sockets | `$XDG_RUNTIME_DIR/omarchy-tv-*.sock` |
 
-Pause does not appear in Recordings. Use Record (`r`) for `Videos/TV`. The pause file grows until Close TV (`WHATS_LEFT.md`).
+Pause does not appear in Recordings. Use Record (`r`) for `Videos/TV`. The pause writer stops when the file is an hour of air ahead of the playhead. Close TV still deletes it.

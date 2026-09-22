@@ -28,13 +28,13 @@ omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
 omarchy-shell shell broadcast richardb.omarchy-tv play "8.1 FOX"   # also: stop next prev live guide reloadChannels
 ```
 
-`record` is a keepable file. `pause` is throwaway `live.ts`, and that file grows until Close TV (`WHATS_LEFT.md`). A station with no video or audio ID is dumped as the whole channel group once, the IDs are saved, and the next dump is just that station. The Guide schedule is only the broadcast (ATSC EIT on Tuner 1). The Guide button opens a strip in the flyout: search, one row per station, three hours across, Earlier and Later, and shows waiting to record (`record later`, `record due`, `schedule.json`). The flyout widens only while that strip is open. Recordings stays the saved files. No downloaded listings. After QML: `omarchy restart shell`. After HUD lua: Close TV and retune.
+`record` is a keepable file. `pause` is throwaway `live.ts`. The writer stops when that file is an hour of air ahead of the playhead. Close TV still deletes it. A station with no video or audio ID is dumped as the whole channel group once, the IDs are saved, and the next dump is just that station. The Guide schedule is only the broadcast (ATSC EIT on Tuner 1). The Guide button opens a strip in the flyout: search, one row per station, three hours across, Earlier and Later, and shows waiting to record (`record later`, `record due`, `schedule.json`). The flyout widens only while that strip is open. Recordings stays the saved files. No downloaded listings. After QML: `omarchy restart shell`. After HUD lua: Close TV and retune.
 
 ## HUD (PiP only — not the plugin, not Super+K)
 
 The picture overlay and the flyout are settled. `AGENTS.md` **Settled**. Do not restyle either. If a task needs the look to change, stop and bring the reason first.
 
-Space pause (dump fills) / play still behind · `l` live (same window) · ←/→ skip HTTP playhead or recording (10s, 5s near live; last hop is live) · r record · Super+F fullscreen (unpins first) · Super+LMB move · c captions · m / middle-click mute this window · wheel volume. Channel changes are the flyout list. The picture has no Prev or Next. Until the first frame, the top bar and the bottom line stay up and the middle stays empty. After a frame, those bars hide on their own.
+Space pause (dump fills until it is an hour ahead, then the writer stops) / play still behind · `l` live (same window) · ←/→ skip HTTP playhead or recording (10s, 5s near live; last hop is live) · r record · Super+F fullscreen (unpins first) · Super+LMB move · c captions · m / middle-click mute this window · wheel volume. Channel changes are the flyout list. The picture has no Prev or Next. Until the first frame, the top bar and the bottom line stay up and the middle stays empty. After a frame, those bars hide on their own.
 
 ## Paths
 

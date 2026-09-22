@@ -349,6 +349,13 @@ local function timeshift_delay()
         playhead_byte = nil
         return 0
     end
+    local f_ts = io.open(TIMESHIFT_ACTIVE_PATH, "r")
+    if f_ts then
+        local content = f_ts:read("*all")
+        f_ts:close()
+        local data = utils.parse_json(content)
+        if type(data) == "table" then cached_timeshift = data end
+    end
     local view = tostring(cached_timeshift.view or "live")
     local paused = cached_timeshift.paused == true
     if view == "live" and not paused then
@@ -356,6 +363,12 @@ local function timeshift_delay()
         return 0
     end
     if paused then
+        if cached_timeshift.dump_held == true then
+            local size = file_bytes()
+            local pos = tonumber(cached_timeshift.playhead_byte) or 0
+            behind_clock = math.max(0, (size - pos) / (ATSC_BPS / 8))
+            return behind_clock
+        end
         local t0 = tonumber(cached_timeshift.playhead_t) or 0
         if t0 > 0 then
             behind_clock = math.max(0, os.time() - t0)
@@ -972,6 +985,10 @@ end)
 local function on_dump_eof()
     if is_library_playback() then
         cli_async({"live"})
+        return
+    end
+    reload_data()
+    if cached_timeshift.dump_held == true then
         return
     end
     if is_timeshift_playback() and not is_follow_pipe() then
