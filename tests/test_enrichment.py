@@ -16,6 +16,14 @@ class TestEnrichment(unittest.TestCase):
         self.assertEqual(wkyc_enriched["minor"], 1)
         self.assertEqual(wkyc_enriched["network"], "NBC")
         self.assertEqual(wkyc_enriched["callsign"], "WKYC")
+        self.assertEqual(wkyc_enriched["kind"], "network")
+
+        grit = enrich_channel({"name": "GRIT", "raw_name": "GRIT", "frequency": 479028615, "service_id": 4})
+        self.assertEqual(grit["kind"], "movies")
+        kids = enrich_channel({"name": "KIDS", "raw_name": "KIDS", "frequency": 599028615, "service_id": 7})
+        self.assertEqual(kids["kind"], "kids")
+        shop = enrich_channel({"name": "HSN", "raw_name": "HSN", "frequency": 479028615, "service_id": 7})
+        self.assertEqual(shop["kind"], "shop")
 
         # ABC 5.1 (WEWS)
         wews_raw = {"name": "WEWSHD", "raw_name": "WEWSHD", "frequency": 479028615, "service_id": 3}

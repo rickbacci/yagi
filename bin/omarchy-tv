@@ -95,8 +95,27 @@ def cmd_list(args):
 
 
 def cmd_guide(args):
-    from engine.guide import load_guide, refresh_guide
+    from engine.guide import format_guide_updated, load_guide, refresh_guide, search_guide
     from engine.psip import collect_guide_events
+    if getattr(args, "action", None) == "search":
+        guide = load_guide()
+        query = " ".join(getattr(args, "query", None) or [])
+        print(format_guide_updated(guide.get("updated_at")))
+        hits = search_guide(guide.get("channels") or {}, query)
+        if not hits:
+            print("No shows match.")
+            return
+        for hit in hits:
+            when = f"{hit.get('start') or ''} – {hit.get('end') or ''}".strip(" –")
+            who = hit.get("callsign") or hit.get("tune_name") or ""
+            print(f"{hit.get('channel_number')}  {who}  {hit.get('title')}  {when}".rstrip())
+            before = (hit.get("before") or {}).get("title")
+            after = (hit.get("after") or {}).get("title")
+            if before:
+                print(f"    Before: {before}")
+            if after:
+                print(f"    After: {after}")
+        return
     if getattr(args, "action", None) == "refresh":
         result = refresh_guide(grabber=collect_guide_events)
         if result.get("skipped"):
@@ -351,7 +370,11 @@ def cmd_record(args):
         dur_msg = f" for {args.duration}" if args.duration else ""
         print(f"󰑈 Starting ATSC broadcast recording on {args.target}{dur_msg}...")
         try:
-            session = DvrManager.start_recording(args.target, duration=duration_sec)
+            session = DvrManager.start_recording(
+                args.target,
+                duration=duration_sec,
+                program_title=(getattr(args, "title", None) or None),
+            )
             print("✅ Recording active:")
             print(f"   Station:  {session.station} ({session.channel_number})")
             print(f"   Program:  {session.program_title}")
@@ -467,7 +490,8 @@ def main():
 
     # guide / epg
     p_guide = subparsers.add_parser("guide", aliases=["epg"], help="Show electronic program guide schedules")
-    p_guide.add_argument("action", nargs="?", choices=["refresh"], help="Rebuild from the scanned lineup")
+    p_guide.add_argument("action", nargs="?", choices=["refresh", "search"], help="Refresh the lineup, or search show titles")
+    p_guide.add_argument("query", nargs="*", help="Words to find in show titles")
     p_guide.set_defaults(func=cmd_guide)
 
     # favorite
@@ -524,6 +548,7 @@ def main():
     p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play"], default="list", help="Record action")
     p_rec.add_argument("target", nargs="?", help="Channel to record or file to delete")
     p_rec.add_argument("duration", nargs="?", help="Optional duration limit (e.g. 30m, 1h, 300s)")
+    p_rec.add_argument("--title", default="", help="Program name for the file and the list")
     p_rec.set_defaults(func=cmd_record)
 
     # daemon

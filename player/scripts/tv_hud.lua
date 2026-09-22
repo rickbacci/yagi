@@ -479,16 +479,62 @@ local function write_player_state(running, channel, station)
     os.rename(tmp, PLAYER_STATE_PATH)
 end
 
+local function parse_clock_minutes(label)
+    local h, m, ap = tostring(label or ""):match("^(%d+):(%d+)%s*([AaPp][Mm])")
+    if not h then return -1 end
+    h = tonumber(h)
+    m = tonumber(m)
+    if h == 12 then h = 0 end
+    if ap:upper() == "PM" then h = h + 12 end
+    return h * 60 + m
+end
+
+local function program_on_now(row)
+    if type(row) ~= "table" or type(row.programs) ~= "table" then return nil end
+    local now = os.date("*t")
+    local clock = now.hour * 60 + now.min
+    for _, prog in ipairs(row.programs) do
+        if type(prog) == "table" then
+            local start_m = parse_clock_minutes(prog.start or prog.start_time)
+            local end_m = parse_clock_minutes(prog["end"] or prog.end_time)
+            if start_m >= 0 then
+                local when = clock
+                if end_m < 0 then end_m = start_m + 30 end
+                if end_m <= start_m then
+                    end_m = end_m + 24 * 60
+                    if when < start_m then when = when + 24 * 60 end
+                end
+                if start_m <= when and when < end_m then
+                    return prog
+                end
+            end
+        end
+    end
+    return nil
+end
+
 local function guide_for_channel(matched_ch)
     if not matched_ch then return nil end
     if matched_ch.channel_number and cached_guide[matched_ch.channel_number] then
         return cached_guide[matched_ch.channel_number]
     end
+    local function same(a, b)
+        if not a or not b then return false end
+        a = tostring(a)
+        b = tostring(b)
+        return a ~= "" and string.lower(a) == string.lower(b)
+    end
     for _, p in pairs(cached_guide) do
-        if p.station and (p.station == matched_ch.name or p.station == matched_ch.tune_name) then
-            return p
-        elseif p.network and matched_ch.network and string.lower(p.network) == string.lower(matched_ch.network) then
-            return p
+        if type(p) == "table" then
+            if same(p.tune_name, matched_ch.tune_name) or same(p.tune_name, matched_ch.name) then
+                return p
+            end
+            if same(p.callsign, matched_ch.callsign) or same(p.station, matched_ch.callsign) then
+                return p
+            end
+            if same(p.station, matched_ch.tune_name) or same(p.station, matched_ch.name) then
+                return p
+            end
         end
     end
     return nil
@@ -585,39 +631,18 @@ local function render_hud()
     local display_title = ch.display_name or ch.name or "Live Broadcast"
     local net_col = get_network_color(net)
 
-    local prog_title = prog and prog.title or "Live Terrestrial Broadcast"
-    local prog_start = prog and prog.start_time or ""
-    local prog_end = prog and prog.end_time or ""
+    local block = program_on_now(prog)
+    local prog_title = (block and block.title) or "Live broadcast"
+    local prog_start = (block and (block.start or block.start_time)) or ""
+    local prog_end = (block and (block["end"] or block.end_time)) or ""
     local prog_time = "Over-The-Air"
     if prog_start ~= "" and prog_end ~= "" then
         prog_time = prog_start .. " - " .. prog_end
     elseif prog_start ~= "" then
         prog_time = prog_start
     end
-    local prog_synopsis = (prog and prog.synopsis) or "Digital ATSC 8VSB Terrestrial Transmission"
+    local prog_synopsis = (block and block.synopsis) or ""
 
-    -- Stream quality tags
-    local video_h = mp.get_property_number("height", 720)
-    local v_quality = (video_h >= 1000) and "1080i HD" or "720p HD"
-    local is_muted = mp.get_property_bool("mute", false)
-    local vol = mp.get_property_number("volume", 100)
-    local vol_str = is_muted and "󰝟 MUTED" or string.format("󰕾 %d%%", math.floor(vol))
-
-    local ass = ""
-
-    -- 1. Top Glass Banner Background
-    -- Draw rounded frosted container: x=24, y=20, w=1232, h=108
-    ass = ass .. "{\\an7\\pos(24,20)\\bord0\\shad0\\1c&H181825&\\1a&H28&}{\\p1}m 0 12 s 0 0 12 0 l 1220 0 s 1232 0 1232 12 l 1232 96 s 1232 108 1220 108 l 12 108 s 0 108 0 96{\\p0}\n"
-
-    -- 2. Accent Pill for Channel Number & Network
-    ass = ass .. "{\\an7\\pos(38,32)\\bord0\\shad0\\1c&H11111b&\\1a&H10&}{\\p1}m 0 6 s 0 0 6 0 l 96 0 s 102 0 102 6 l 102 38 s 102 44 96 44 l 6 44 s 0 44 0 38{\\p0}\n"
-    ass = ass .. string.format("{\\an7\\pos(48,38)\\bord0\\shad0\\fnSans-Serif\\b1\\fs26\\1c%s}%s\\N{\\fs14\\1c&Hcdd6f4&}%s\n", net_col, ch_num, net)
-
-    -- 3. Station & Program Title
-    ass = ass .. string.format("{\\an7\\pos(154,34)\\bord0\\shad0\\fnSans-Serif\\b1\\fs24\\1c&Hcdd6f4&}%s  {\\b0\\fs18\\1c&Ha6adc8&}·  %s\n", display_title, prog_time)
-    ass = ass .. string.format("{\\an7\\pos(154,66)\\bord0\\shad0\\fnSans-Serif\\b1\\fs19\\1c%s}%s  {\\b0\\fs15\\1c&Ha6adc8&}·  %s\n", net_col, prog_title, prog_synopsis:sub(1, 75))
-
-    -- Check if active channel is recording
     local is_recording = false
     for _, rec in ipairs(cached_recordings) do
         if rec.channel_number == ch_num or (rec.station and string.lower(rec.station) == string.lower(display_title)) or (rec.tune_name and ch and rec.tune_name == ch.tune_name) then
@@ -625,98 +650,121 @@ local function render_hud()
             break
         end
     end
-    local rec_badge = is_recording and "{\\b1\\fs16\\1c&H7B7BFA&}󰑈 REC  " or ""
     local any_rec = type(cached_recordings) == "table" and #cached_recordings > 0
-    if any_rec and not is_recording then
-        local r0 = cached_recordings[1] or {}
-        rec_badge = string.format("{\\b1\\fs16\\1c&H7B7BFA&}󰑈 REC %s  ", tostring(r0.channel_number or r0.station or "DVR"))
-    end
     local path = mp.get_property("path") or ""
     local is_file = not path:match("^dvb://")
     local is_ts = is_timeshift_playback()
     local is_library = is_library_playback()
     local paused = mp.get_property_bool("pause", false)
+    local is_muted = mp.get_property_bool("mute", false)
     local ts_delay = is_ts and timeshift_delay() or 0
     local delayed = is_ts and (paused or ts_delay > LIVE_SLACK) or ((not is_file) and (paused or behind_live()))
-    local mode_badge
+    local status = "LIVE"
     if is_library then
-        mode_badge = "{\\1c&H89b4fa&}PLAYBACK"
+        status = "PLAY"
     elseif is_ts and (paused or ts_delay > LIVE_SLACK) then
-        mode_badge = string.format("{\\1c&H89b4fa&}%s behind", fmt_clock(ts_delay))
-    else
-        mode_badge = "{\\1c&Ha6e3a1&}LIVE"
+        status = fmt_clock(ts_delay) .. " behind"
+    elseif delayed then
+        status = "BEHIND"
     end
 
-    -- 4. Right Status Badges
-    ass = ass .. string.format("{\\an9\\pos(1240,40)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16}%s%s  {\\1c&Hcdd6f4&}·  %s  ·  5.1 AC-3\n", rec_badge, mode_badge, v_quality)
-    ass = ass .. string.format("{\\an9\\pos(1240,70)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&H89b4fa&}%s  {\\1c&Ha6adc8&}·  CC Sub (C)\n", vol_str)
+    local function ass_escape(s)
+        return tostring(s or ""):gsub("[{}\\\n\r]", " ")
+    end
+    local function clip(s, n)
+        s = ass_escape(s)
+        if #s > n then return s:sub(1, n - 1) .. "…" end
+        return s
+    end
+    local function box(x, y, w, h, bgr, alpha)
+        return string.format(
+            "{\\an7\\pos(%d,%d)\\bord0\\shad0\\1c%s\\1a&H%s&\\p1}m 0 0 l %d 0 l %d %d l 0 %d{\\p0}\n",
+            x, y, bgr, alpha, w, w, h, h
+        )
+    end
 
-    -- 5. Bottom Floating Quick Transport Bar
-    -- Draw bottom pill: x=330, y=654, w=620, h=44
-    ass = ass .. "{\\an7\\pos(330,654)\\bord0\\shad0\\1c&H181825&\\1a&H20&}{\\p1}m 0 10 s 0 0 10 0 l 610 0 s 620 0 620 10 l 620 34 s 620 44 610 44 l 10 44 s 0 44 0 34{\\p0}\n"
-    local rec_prompt
-    if is_library or is_ts then
-        rec_prompt = paused and "{\\b1}󰐊 Play{\\b0} (Space)" or "{\\b1}󰏤 Pause{\\b0} (Space)"
-        if is_ts then
-            local delay = ts_delay
+    local when = ""
+    if prog_start ~= "" and prog_end ~= "" then
+        when = prog_start .. " – " .. prog_end
+    elseif prog_start ~= "" then
+        when = prog_start
+    end
+    local show_line = clip(prog_title, 46)
+    if when ~= "" then
+        show_line = show_line .. "   ·   " .. when
+    end
+
+    local ass = ""
+    ass = ass .. box(0, 0, 1280, 96, "&H12141C&", "18")
+    ass = ass .. box(0, 0, 8, 96, net_col, "00")
+    ass = ass .. string.format(
+        "{\\an7\\pos(28,22)\\bord0\\shad0\\fnSans-Serif\\b1\\fs34\\1c%s}%s\n",
+        net_col, clip(ch_num, 8)
+    )
+    ass = ass .. string.format(
+        "{\\an7\\pos(28,58)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16\\1c&Hcdd6f4&}%s\n",
+        clip(net, 12)
+    )
+    ass = ass .. string.format(
+        "{\\an7\\pos(148,20)\\bord0\\shad0\\fnSans-Serif\\b1\\fs28\\1c&HFFFFFF&}%s\n",
+        clip(display_title, 42)
+    )
+    ass = ass .. string.format(
+        "{\\an7\\pos(148,58)\\bord0\\shad0\\fnSans-Serif\\fs20\\1c&Hc8d0e0&}%s\n",
+        show_line
+    )
+    local status_col = (status == "LIVE") and "&H7dcea0&" or "&H89b4fa&"
+    ass = ass .. string.format(
+        "{\\an9\\pos(1252,28)\\bord0\\shad0\\fnSans-Serif\\b1\\fs18\\1c%s}%s\n",
+        status_col, ass_escape(status)
+    )
+    if is_recording or any_rec then
+        local rec_label = "REC"
+        if any_rec and not is_recording then
+            local r0 = cached_recordings[1] or {}
+            rec_label = "REC " .. tostring(r0.channel_number or r0.station or "")
+        end
+        ass = ass .. string.format(
+            "{\\an9\\pos(1252,52)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16\\1c&H6a6af0&}%s\n",
+            clip(rec_label, 16)
+        )
+    elseif is_muted then
+        ass = ass .. "{\\an9\\pos(1252,52)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16\\1c&Hc8d0e0&}Muted\n"
+    end
+    if paused or delayed then
+        local frac = 0
+        if is_library then
+            frac = (file_progress() or 0) / 100
+        elseif is_ts then
             local t1 = atsc_duration()
-            local pos = math.max(0, t1 - delay)
-            prog_time = delayed and (fmt_clock(delay) .. " behind") or "Live"
-            prog_title = paused and "Paused" or (delayed and "Timeshift" or "Live")
-            prog_synopsis = delayed and "Pause buffer" or "Live dump"
-            local pct = 0
-            if t1 > 0 then
-                pct = 100 * math.max(0, math.min(1, pos / t1))
-            end
-            local bar_w = 1200
-            local fill = math.max(0, math.min(bar_w, math.floor(bar_w * pct / 100.0)))
-            ass = ass .. "{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H11111b&\\1a&H20&}{\\p1}m 0 0 l 1200 0 l 1200 8 l 0 8{\\p0}\n"
-            if fill > 0 then
-                ass = ass .. string.format("{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H5858F8&\\1a&H00&}{\\p1}m 0 0 l %d 0 l %d 8 l 0 8{\\p0}\n", fill, fill)
-            end
+            local pos = math.max(0, t1 - ts_delay)
+            if t1 > 0 then frac = math.max(0, math.min(1, pos / t1)) end
         else
-            local pos, t1
-            pos = virt_update()
-            t1 = atsc_duration()
-            prog_time = fmt_clock(pos) .. " / " .. fmt_clock(t1)
-            prog_title = paused and "Paused" or "Playing"
-            prog_synopsis = "Recorded broadcast"
-            local pct = file_progress()
-            local bar_w = 1200
-            local fill = math.max(0, math.min(bar_w, math.floor(bar_w * pct / 100.0)))
-            ass = ass .. "{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H11111b&\\1a&H20&}{\\p1}m 0 0 l 1200 0 l 1200 8 l 0 8{\\p0}\n"
-            if fill > 0 then
-                ass = ass .. string.format("{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H5858F8&\\1a&H00&}{\\p1}m 0 0 l %d 0 l %d 8 l 0 8{\\p0}\n", fill, fill)
-            end
+            local delay = cache_ahead()
+            frac = LIVE_SLACK / math.max(LIVE_SLACK, delay)
         end
-    elseif delayed then
-        rec_prompt = paused and "{\\b1}󰐊 Play{\\b0} (Space)" or "{\\b1}󰏤 Pause{\\b0} (Space)"
-        local delay = cache_ahead()
-        prog_time = fmt_clock(delay) .. " behind"
-        prog_title = paused and "Paused" or "Timeshift"
-        prog_synopsis = "Live dump"
-        local pct = 100 * LIVE_SLACK / math.max(LIVE_SLACK, delay)
-        local bar_w = 1200
-        local fill = math.max(0, math.min(bar_w, math.floor(bar_w * pct / 100.0)))
-        ass = ass .. "{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H11111b&\\1a&H20&}{\\p1}m 0 0 l 1200 0 l 1200 8 l 0 8{\\p0}\n"
+        local fill = math.floor(1280 * math.max(0, math.min(1, frac)))
+        ass = ass .. box(0, 92, 1280, 4, "&H2a2e3a&", "00")
         if fill > 0 then
-            ass = ass .. string.format("{\\an7\\pos(40,628)\\bord0\\shad0\\1c&H5858F8&\\1a&H00&}{\\p1}m 0 0 l %d 0 l %d 8 l 0 8{\\p0}\n", fill, fill)
+            ass = ass .. box(0, 92, fill, 4, "&H5858F8&", "00")
         end
-    elseif is_recording then
-        rec_prompt = "{\\1c&H7B7BFA&}{\\b1}󰓛 Stop REC{\\b0} (r){\\1c&Hcdd6f4&}"
-    else
-        rec_prompt = "{\\b1}󰑈 Record{\\b0} (r)"
     end
-    local pause_prompt = paused and "{\\b1}󰐊 Play{\\b0} (Space)" or "{\\b1}󰏤 Pause{\\b0} (Space)"
-    local rec_tail = any_rec and "  ·  {\\1c&H7B7BFA&}{\\b1}Stop REC{\\b0} (r){\\1c&Hcdd6f4&}" or ""
-    local mute_full = "{\\b1}Mute{\\b0} (m)  ·  {\\b1}󰕾 Vol{\\b0} (Wheel)  ·  {\\b1}Full{\\b0} (Super+F)"
-    if is_library or is_ts then
-        ass = ass .. string.format("{\\an5\\pos(640,676)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&Hcdd6f4&}{\\b1}󰒮 Prev{\\b0} (j)  ·  {\\b1}󰒭 Next{\\b0} (k)  ·  {\\b1}−10s{\\b0} (←)  ·  %s  ·  {\\b1}+10s{\\b0} (→)  ·  {\\b1}Live{\\b0} (l)  ·  %s%s\n", rec_prompt, mute_full, rec_tail)
-    elseif delayed then
-        ass = ass .. string.format("{\\an5\\pos(640,676)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&Hcdd6f4&}{\\b1}󰒮 Prev{\\b0} (j)  ·  {\\b1}󰒭 Next{\\b0} (k)  ·  %s  ·  {\\b1}Live{\\b0} (l / →)  ·  %s%s\n", rec_prompt, mute_full, rec_tail)
+
+    local vol = math.floor(mp.get_property_number("volume", 100) or 100)
+    local vol_label = is_muted and "Muted" or ("Vol " .. tostring(vol))
+    local action = paused and "Play (Space)" or "Pause (Space)"
+    local record = (is_recording or any_rec) and "Stop (r)" or "Record (r)"
+    local hints
+    if is_library or is_ts or delayed then
+        hints = string.format("Prev (j)    Next (k)    Back 10s (←)    %s    Ahead 10s (→)    Live (l)    Mute (m)    %s", action, vol_label)
     else
-        ass = ass .. string.format("{\\an5\\pos(640,676)\\bord0\\shad0\\fnSans-Serif\\fs16\\1c&Hcdd6f4&}{\\b1}󰒮 Prev{\\b0} (j)  ·  {\\b1}󰒭 Next{\\b0} (k)  ·  %s  ·  %s  ·  {\\b1}Live{\\b0} (l)  ·  %s%s\n", pause_prompt, rec_prompt, mute_full, rec_tail)
+        hints = string.format("Prev (j)    Next (k)    %s    %s    Live (l)    Mute (m)    %s", action, record, vol_label)
     end
+    ass = ass .. box(0, 676, 1280, 44, "&H12141C&", "18")
+    ass = ass .. string.format(
+        "{\\an5\\pos(640,698)\\bord0\\shad0\\fnSans-Serif\\fs18\\1c&Hcdd6f4&}%s\n",
+        hints
+    )
 
     overlay.data = ass
     overlay:update()

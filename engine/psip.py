@@ -2,6 +2,7 @@
 ATSC A/65 PSIP from a full MPEG-TS dump.
 
 TVCT (0xC8) maps source_id to virtual channel. EIT (0xCB) is the schedule.
+ETT (0xCC) is the longer description, when the station sends one.
 Times are GPS seconds, shown in America/New_York. Tuner 1 dumps unique
 frequencies; a recording holds that tuner.
 """
@@ -16,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
+from engine.atsc_huffman import decode_description, decode_title
 from engine.guide import epg_tuner_held
 from engine.paths import CHANNELS_JSON_PATH, TIMESHIFT_DIR
 
@@ -23,6 +25,7 @@ TS_PACKET = 188
 PSIP_PID = 0x1FFB
 TABLE_TVCT = 0xC8
 TABLE_EIT = 0xCB
+TABLE_ETT = 0xCC
 GPS_UNIX_OFFSET = 315964800
 GPS_LEAP_SECONDS = 18
 EASTERN = ZoneInfo("America/New_York")
@@ -144,12 +147,25 @@ def parse_multiple_string(data: bytes) -> str:
         nseg = r.u(8)
         for _ in range(nseg):
             compression = r.u(8)
-            r.u(8)
+            mode = r.u(8)
             nbytes = r.u(8)
             chunk = r.raw(nbytes)
-            if compression == 0:
-                parts.append(chunk.decode("latin-1", "replace").strip("\x00").strip())
+            text = _segment_text(compression, mode, chunk)
+            if text:
+                parts.append(text)
     return " ".join(p for p in parts if p)
+
+
+def _segment_text(compression: int, mode: int, chunk: bytes) -> str:
+    if compression == 0:
+        if mode not in (0, 0xFF):
+            return ""
+        return chunk.decode("latin-1", "replace").strip("\x00").strip()
+    if compression == 1 and mode in (0, 0xFF):
+        return decode_title(chunk).strip()
+    if compression == 2 and mode in (0, 0xFF):
+        return decode_description(chunk).strip()
+    return ""
 
 
 def _private_section(table_id: int, body_after_length: bytes) -> bytes:
@@ -225,6 +241,22 @@ def pack_eit_section(source_id: int, events: List[Dict[str, Any]]) -> bytes:
         body.u(0xF, 4)
         body.u(0, 12)
     return _private_section(TABLE_EIT, body.to_bytes())
+
+
+def pack_ett_section(source_id: int, event_id: int, text: str, section_number: int = 0, last_section: int = 0) -> bytes:
+    """Event ETM. The two low bits of ETM_id are 10; a channel ETM uses 00."""
+    etm_id = ((int(source_id) & 0xFFFF) << 16) | ((int(event_id) & 0x3FFF) << 2) | 0b10
+    body = BitWriter()
+    body.u(0, 16)
+    body.u(3, 2)
+    body.u(1, 5)
+    body.u(1, 1)
+    body.u(section_number, 8)
+    body.u(last_section, 8)
+    body.u(0, 8)
+    body.u(etm_id, 32)
+    body.raw(pack_multiple_string(text))
+    return _private_section(TABLE_ETT, body.to_bytes())
 
 
 def section_to_ts(section: bytes, pid: int = PSIP_PID) -> bytes:
@@ -365,9 +397,33 @@ def parse_eit(section: bytes) -> Dict[str, Any]:
     return {"source_id": source_id, "events": events}
 
 
+def parse_ett(section: bytes) -> Dict[str, Any]:
+    """One extended-text section. Event messages use ETM_id low bits 10."""
+    if len(section) < 17:
+        return {}
+    r = BitReader(section[3:])
+    r.u(16)
+    r.u(2)
+    r.u(5)
+    r.u(1)
+    section_number = r.u(8)
+    r.u(8)
+    r.u(8)
+    etm_id = r.u(32)
+    text = parse_multiple_string(section[13:-4])
+    return {
+        "source_id": (etm_id >> 16) & 0xFFFF,
+        "event_id": (etm_id >> 2) & 0x3FFF,
+        "is_event": (etm_id & 0x3) == 0b10,
+        "section_number": section_number,
+        "text": text.strip(),
+    }
+
+
 def parse_atsc_ts(ts_data: bytes) -> Dict[str, List[Dict[str, Any]]]:
     sources: Dict[int, str] = {}
     by_source: Dict[int, List[Dict[str, Any]]] = {}
+    descriptions: Dict[tuple, List[tuple]] = {}
     for section in collect_sections(ts_data):
         if not section:
             continue
@@ -378,6 +434,11 @@ def parse_atsc_ts(ts_data: bytes) -> Dict[str, List[Dict[str, Any]]]:
             parsed = parse_eit(section)
             sid = int(parsed["source_id"])
             by_source.setdefault(sid, []).extend(parsed["events"])
+        elif table_id == TABLE_ETT:
+            ett = parse_ett(section)
+            if ett.get("is_event") and ett.get("text"):
+                key = (int(ett["source_id"]), int(ett["event_id"]))
+                descriptions.setdefault(key, []).append((int(ett["section_number"]), ett["text"]))
     programs: Dict[str, List[Dict[str, Any]]] = {}
     for source_id, events in by_source.items():
         number = sources.get(source_id) or str(source_id)
@@ -388,9 +449,21 @@ def parse_atsc_ts(ts_data: bytes) -> Dict[str, List[Dict[str, Any]]]:
             if key in seen:
                 continue
             seen.add(key)
+            blurb = _event_description(descriptions, source_id, event.get("event_id"))
+            if blurb:
+                event = dict(event)
+                event["synopsis"] = blurb
             merged.append(event)
         merged.sort(key=lambda e: int(e.get("gps_start") or 0))
     return programs
+
+
+def _event_description(descriptions: Dict[tuple, List[tuple]], source_id: int, event_id: Any) -> str:
+    parts = descriptions.get((int(source_id), int(event_id or 0))) or []
+    if not parts:
+        return ""
+    parts = sorted(parts, key=lambda item: item[0])
+    return "".join(text for _, text in parts).strip()
 
 
 def dump_mux(adapter_id: int, frequency: int, dwell_sec: float = EPG_DWELL_SECS) -> bytes:

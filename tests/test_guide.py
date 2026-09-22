@@ -225,6 +225,97 @@ class TestGuide(unittest.TestCase):
         now, _nxt = now_and_next(programs, now_minutes=15)
         self.assertEqual(now["title"], "Late")
 
+    def test_program_is_on_and_remaining_record_minutes(self):
+        from engine.guide import program_is_on, remaining_record_minutes
+
+        block = {"start": "7:00 PM", "end": "8:00 PM", "title": "News"}
+        self.assertTrue(program_is_on(block, now_minutes=19 * 60 + 30))
+        self.assertEqual(remaining_record_minutes(block, now_minutes=19 * 60 + 30), 30)
+        self.assertFalse(program_is_on(block, now_minutes=18 * 60))
+        self.assertEqual(remaining_record_minutes(block, now_minutes=18 * 60), 60)
+        self.assertIsNone(remaining_record_minutes(block, now_minutes=20 * 60))
+        late = {"start": "11:00 PM", "end": "12:30 AM", "title": "Late"}
+        self.assertEqual(remaining_record_minutes(late, now_minutes=23 * 60 + 45), 45)
+
+    def test_current_program_title_uses_block_on_now_not_stale_row(self):
+        from engine.guide import current_program_title
+
+        row = {
+            "title": "Inside Edition",
+            "programs": [
+                {"start": "7:30 PM", "end": "8:00 PM", "title": "Inside Edition"},
+                {"start": "8:00 PM", "end": "8:15 PM", "title": "Monday Night Football Kickoff"},
+                {"start": "8:15 PM", "end": "11:15 PM", "title": "Monday Night Football"},
+            ],
+        }
+        self.assertEqual(
+            current_program_title(row, now_minutes=20 * 60),
+            "Monday Night Football Kickoff",
+        )
+        self.assertEqual(
+            current_program_title(row, now_minutes=19 * 60 + 45),
+            "Inside Edition",
+        )
+
+    def test_search_guide_shows_neighbors_and_requires_every_word(self):
+        from datetime import datetime
+
+        from engine.guide import format_guide_updated, search_guide
+
+        channels = {
+            "5.1": {
+                "callsign": "WEWSHD",
+                "tune_name": "WEWSHD",
+                "programs": [
+                    {"title": "Inside Edition", "start": "7:30 PM", "end": "8:00 PM"},
+                    {
+                        "title": "Monday Night Football Kickoff",
+                        "start": "8:00 PM",
+                        "end": "8:30 PM",
+                        "duration_sec": 1800,
+                    },
+                    {"title": "Monday Night Football", "start": "8:30 PM", "end": "11:30 PM"},
+                ],
+            },
+            "3.1": {
+                "callsign": "WKYC",
+                "programs": [
+                    {"title": "Cleveland Browns", "start": "1:00 PM", "end": "4:00 PM"},
+                ],
+            },
+        }
+        hits = search_guide(channels, "night football", now_minutes=20 * 60)
+        self.assertEqual(
+            [hit["title"] for hit in hits],
+            ["Monday Night Football Kickoff", "Monday Night Football"],
+        )
+        kick = hits[0]
+        self.assertTrue(kick["on_now"])
+        self.assertEqual(kick["before"]["title"], "Inside Edition")
+        self.assertEqual(kick["after"]["title"], "Monday Night Football")
+        self.assertFalse(hits[1]["on_now"])
+        self.assertEqual(search_guide(channels, "f"), [])
+        self.assertEqual(search_guide(channels, "night browns"), [])
+        browns = search_guide(channels, "Browns", now_minutes=20 * 60)
+        self.assertEqual(browns[0]["channel_number"], "3.1")
+        self.assertIsNone(browns[0]["before"])
+        self.assertIsNone(browns[0]["after"])
+        self.assertFalse(browns[0]["on_now"])
+
+        today = datetime(2026, 9, 21, 21, 0)
+        updated = datetime(2026, 9, 21, 19, 30)
+        self.assertEqual(
+            format_guide_updated(updated.timestamp(), today.timestamp()),
+            "Updated 7:30 PM",
+        )
+        yesterday = datetime(2026, 9, 20, 19, 30)
+        self.assertEqual(
+            format_guide_updated(yesterday.timestamp(), today.timestamp()),
+            "Updated Sep 20, 7:30 PM",
+        )
+        self.assertEqual(format_guide_updated(None), "Listings have not been updated.")
+        self.assertEqual(format_guide_updated(0), "Listings have not been updated.")
+
     def test_merge_does_not_restore_template_after_psip(self):
         from engine.guide import merge_lineup
 

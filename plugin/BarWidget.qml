@@ -11,8 +11,15 @@ BarWidget {
 
   property bool popupOpen: false
   onPopupOpenChanged: {
+    if (!root.popupOpen) {
+      root.clearGuideDetail()
+      return
+    }
     if (root.popupOpen) {
-      if (!root.openIntoGuide) root.guideModalOpen = false
+      if (!root.openIntoGuide) {
+        root.guideModalOpen = false
+        root.clearGuideDetail()
+      }
       root.openIntoGuide = false
       root.libraryModalOpen = false
       root.cursorActive = false
@@ -59,11 +66,10 @@ BarWidget {
   readonly property int guideSlotMax: Model.maxSlotOffset(root.guideVisibleSlots, root.guideClockMin)
   readonly property var guideVisibleSlotLabels: Model.slotWindow(root.guideSlotOffset, root.guideVisibleSlots, root.guideClockMin)
   readonly property int guideStationWidth: Style.space(112)
-  readonly property int guideRecWidth: Style.space(40)
   readonly property int guideSlotGap: Style.space(6)
   readonly property int guideSlotPixelWidth: {
     var n = Math.max(1, root.guideVisibleSlots)
-    var usable = Math.max(n, (popup.contentWidth || Style.space(900)) - root.guideStationWidth - root.guideRecWidth - Style.space(24))
+    var usable = Math.max(n, (popup.contentWidth || Style.space(900)) - root.guideStationWidth - Style.space(24))
     return Math.max(Style.space(96), Math.floor(usable / n) - root.guideSlotGap)
   }
   onGuideVisibleSlotsChanged: {
@@ -78,9 +84,35 @@ BarWidget {
   property bool cursorActive: false
   property int cursorIndex: 0
   property int guideCursorIndex: 0
+  property var guideDetail: null
+  readonly property bool guideDetailOpen: !!(root.guideDetail && (root.guideDetail.playIdent || root.guideDetail.title))
+  property bool guideRefreshing: false
+  property string guideNote: ""
+  property string guideSearchText: ""
+  property string guideKind: "all"
+  property real guideUpdatedAt: 0
+  readonly property bool guideSearchActive: root.guideSearchText.replace(/\s+/g, " ").trim().length >= 2
+  readonly property var guideSearchHits: {
+    var hits = Model.searchGuide(root.guideData, root.guideSearchText, root.guideClockMin) || []
+    if (!root.guideKind || root.guideKind === "all") return hits
+    return hits.filter(function(hit) { return Model.channelKind(hit) === root.guideKind })
+  }
 
   function shiftGuideSlot(delta) {
     root.guideSlotOffset = Math.max(0, Math.min(root.guideSlotMax, root.guideSlotOffset + delta))
+  }
+
+  function refreshGuide() {
+    if (guideRefreshProc.running) return
+    if (root.isRecording) {
+      root.guideNote = "Already recording. Guide left alone."
+      return
+    }
+    root.guideRefreshing = true
+    root.guideNote = "Updating the guide…"
+    guideRefreshProc.running = false
+    guideRefreshProc.command = [root.binPath, "guide", "refresh"]
+    guideRefreshProc.running = true
   }
 
   function snapGuideToNow() {
@@ -94,6 +126,9 @@ BarWidget {
   }
 
   function toggleGuide() {
+    root.clearGuideDetail()
+    guideSearchField.text = ""
+    root.guideSearchText = ""
     if (root.guideModalOpen) {
       root.guideModalOpen = false
       root.cursorActive = false
@@ -114,6 +149,7 @@ BarWidget {
       return
     }
     root.guideModalOpen = false
+    root.clearGuideDetail()
     root.recCursorIndex = 0
     root.cursorActive = false
     root.libraryModalOpen = true
@@ -165,8 +201,12 @@ BarWidget {
   function activateCursor() {
     if (!root.cursorActive) return
     if (root.guideModalOpen) {
+      if (root.guideDetailOpen) {
+        root.watchGuideDetail()
+        return
+      }
       var g = root.guideList[root.guideCursorIndex]
-      if (g) root.selectChannel(Model.guidePlayIdent(g))
+      if (g) root.openGuideDetailFromRow(g)
       return
     }
     if (root.libraryModalOpen) {
@@ -191,17 +231,46 @@ BarWidget {
   }
 
   function isChannelRecording(chIdent) {
-    if (!root.activeRecordings || root.activeRecordings.length === 0) return false
-    var q = (chIdent || "").toString().toLowerCase()
+    return root.recordingSessionFor(chIdent, null) !== null
+  }
+
+  function recordingSessionFor(chIdent, row) {
+    if (!root.activeRecordings || root.activeRecordings.length === 0) return null
+    var idents = []
+    function add(s) {
+      var v = (s || "").toString().toLowerCase().trim()
+      if (v && idents.indexOf(v) === -1) idents.push(v)
+    }
+    add(chIdent)
+    if (row) {
+      add(row.channel_number)
+      add(row.station)
+      add(row.callsign)
+      add(row.tune_name)
+      add(Model.guidePlayIdent(row))
+    }
+    if (idents.length === 0) return null
     for (var i = 0; i < root.activeRecordings.length; i++) {
       var r = root.activeRecordings[i]
-      if ((r.channel_number || "").toLowerCase() === q ||
-          (r.station || "").toLowerCase() === q ||
-          (r.tune_name || "").toLowerCase() === q) {
-        return true
+      var keys = [r.channel_number, r.station, r.tune_name]
+      for (var k = 0; k < keys.length; k++) {
+        var key = (keys[k] || "").toString().toLowerCase().trim()
+        if (key && idents.indexOf(key) !== -1) return r
       }
     }
-    return false
+    return null
+  }
+
+  function isGuideBlockRecording(row, block) {
+    if (!row || !block || block.empty) return false
+    var rec = root.recordingSessionFor(Model.guidePlayIdent(row), row)
+    if (!rec) return false
+    var recTitle = String(rec.program_title || "").replace(/\s+/g, " ").trim().toLowerCase()
+    var blockTitle = String(block.title || "").replace(/\s+/g, " ").trim().toLowerCase()
+    if (recTitle && recTitle !== "live broadcast" && recTitle !== "live") {
+      if (recTitle === blockTitle) return true
+    }
+    return !!block.now
   }
 
   function activeRecordingIdent() {
@@ -218,6 +287,127 @@ BarWidget {
     } else {
       dvrProc.command = [root.binPath, "record", "start", chIdent]
     }
+    dvrProc.running = true
+  }
+
+  function clearGuideDetail() {
+    root.guideDetail = null
+  }
+
+  function openGuideDetail(row, block) {
+    if (!row || !block || block.empty) return
+    root.guideClockMin = Model.minutesNow()
+    var list = root.guideList || []
+    var i
+    for (i = 0; i < list.length; i++) {
+      if (Model.guidePlayIdent(list[i]) === Model.guidePlayIdent(row)) {
+        root.guideCursorIndex = i
+        break
+      }
+    }
+    root.cursorActive = true
+    root.guideDetail = {
+      playIdent: Model.guidePlayIdent(row),
+      channel_number: row.channel_number || "",
+      callsign: row.callsign || row.station || "",
+      tune_name: row.tune_name || "",
+      station: row.station || "",
+      title: block.title || "Live",
+      start: block.start || "",
+      end: block.end || "",
+      synopsis: block.synopsis || "",
+      duration_sec: Number(block.duration_sec) || 0,
+      now: !!block.now,
+      before: block.before || null,
+      after: block.after || null
+    }
+  }
+
+  function openGuideDetailFromRow(row) {
+    if (!row) return
+    var block = Model.preferredGuideBlock(row, root.guideVisibleSlotLabels)
+    if (!block) {
+      root.selectChannel(Model.guidePlayIdent(row))
+      return
+    }
+    root.openGuideDetail(row, block)
+  }
+
+  function alreadyShowingChannel(detail) {
+    if (!detail || !root.activeChannelName || root.isLibraryPlayback) return false
+    function norm(s) {
+      return String(s || "").replace(/\s+/g, " ").trim().toLowerCase()
+    }
+    var active = norm(root.activeChannelName)
+    if (!active) return false
+    var keys = []
+    function add(s) {
+      var v = norm(s)
+      if (v && keys.indexOf(v) === -1) keys.push(v)
+    }
+    add(detail.playIdent)
+    add(detail.channel_number)
+    add(detail.callsign)
+    add(detail.tune_name)
+    add(detail.station)
+    var chs = root.channelsData || []
+    var i
+    for (i = 0; i < chs.length; i++) {
+      var ch = chs[i]
+      var names = [ch.name, ch.tune_name, ch.channel_number, ch.callsign, ch.station]
+      var hitsActive = false
+      var n
+      for (n = 0; n < names.length; n++) {
+        if (norm(names[n]) === active) hitsActive = true
+      }
+      if (!hitsActive) continue
+      for (n = 0; n < names.length; n++) add(names[n])
+    }
+    return keys.indexOf(active) !== -1
+  }
+
+  function watchGuideDetail() {
+    if (!root.guideDetail || !root.guideDetail.playIdent) return
+    if (root.alreadyShowingChannel(root.guideDetail)) {
+      root.close()
+      return
+    }
+    root.selectChannel(root.guideDetail.playIdent)
+  }
+
+  function guideDetailRecording() {
+    var d = root.guideDetail
+    if (!d) return null
+    return root.recordingSessionFor(d.playIdent, d)
+  }
+
+  function playGuideDetailFromStart() {
+    var rec = root.guideDetailRecording()
+    if (!rec || !rec.file_path) return
+    var n = Number(rec.file_size) || 0
+    if (n < 262144) return
+    root.playRecording(rec.file_path, true)
+    root.close()
+  }
+
+  function recordGuideDetail() {
+    if (!root.guideDetail || !root.guideDetail.playIdent) return
+    var ident = root.guideDetail.playIdent
+    if (root.isChannelRecording(ident)) {
+      root.toggleRecord(ident)
+      return
+    }
+    if (!Model.showIsOn(root.guideDetail, root.guideClockMin)) return
+    var dur = Model.recordDurationArg(root.guideDetail, root.guideClockMin)
+    var title = (root.guideDetail.title || "").toString()
+    dvrProc.running = false
+    var cmd = [root.binPath, "record", "start", ident]
+    if (dur) cmd.push(dur)
+    if (title) {
+      cmd.push("--title")
+      cmd.push(title)
+    }
+    dvrProc.command = cmd
     dvrProc.running = true
   }
 
@@ -239,6 +429,9 @@ BarWidget {
           item.programs = Model.programsFor(item)
         list.push(item)
       }
+      if (root.guideKind && root.guideKind !== "all") {
+        list = list.filter(function(item) { return Model.channelKind(item) === root.guideKind })
+      }
       return list
     }
     if (!root.guideData) return list
@@ -250,6 +443,9 @@ BarWidget {
     list.sort(function(a, b) {
       return (parseFloat(a.channel_number) || 999) - (parseFloat(b.channel_number) || 999)
     })
+    if (root.guideKind && root.guideKind !== "all") {
+      list = list.filter(function(item) { return Model.channelKind(item) === root.guideKind })
+    }
     return list
   }
 
@@ -293,7 +489,10 @@ BarWidget {
 
   readonly property string binPath: "omarchy-tv"
 
-  function close() { root.popupOpen = false }
+  function close() {
+    root.clearGuideDetail()
+    root.popupOpen = false
+  }
   function toggle() { root.popupOpen = !root.popupOpen }
 
   function playChannel(chName) {
@@ -485,6 +684,7 @@ BarWidget {
     try {
       var d = JSON.parse(jsonText || "{}")
       root.guideData = d.channels || {}
+      root.guideUpdatedAt = Number(d.updated_at) || 0
     } catch (e) {
       root.guideData = {}
     }
@@ -646,6 +846,7 @@ BarWidget {
     }
 
     function guide(): void {
+      root.clearGuideDetail()
       root.openIntoGuide = true
       root.guideClockMin = Model.minutesNow()
       root.popupOpen = true
@@ -824,6 +1025,14 @@ BarWidget {
   }
 
   Timer {
+    id: guideClockTimer
+    interval: 30000
+    repeat: true
+    running: root.guideModalOpen
+    onTriggered: root.guideClockMin = Model.minutesNow()
+  }
+
+  Timer {
     id: playerAliveTimer
     interval: 1500
     repeat: true
@@ -850,6 +1059,29 @@ BarWidget {
     onExited: function(code) {
       recordingsActiveFile.reload()
       recordingsFile.reload()
+    }
+  }
+
+  Process {
+    id: guideRefreshProc
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var first = String(text || "").split("\n")[0]
+        if (first.indexOf("Tuner 1 is recording") !== -1)
+          root.guideNote = "Already recording. Guide left alone."
+        else
+          root.guideNote = "Guide updated."
+        root.guideRefreshing = false
+        guideFile.reload()
+      }
+    }
+    onExited: function(code) {
+      root.guideRefreshing = false
+      if (code !== 0)
+        root.guideNote = "Guide update failed."
+      guideFile.reload()
     }
   }
 
@@ -901,8 +1133,10 @@ BarWidget {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: guideSearchField.activeFocus
       onCloseRequested: {
-        if (root.guideModalOpen) root.guideModalOpen = false
+        if (root.guideDetailOpen) root.clearGuideDetail()
+        else if (root.guideModalOpen) root.guideModalOpen = false
         else if (root.libraryModalOpen) root.libraryModalOpen = false
         else root.close()
       }
@@ -932,6 +1166,10 @@ BarWidget {
         }
         else if (t === "s" || t === "S") root.startScan()
         else if (t === "r" || t === "R") {
+          if (root.guideDetailOpen) {
+            root.recordGuideDetail()
+            return
+          }
           var ident = root.activeChannelName || root.cursorChannelIdent()
           if (ident) root.toggleRecord(ident)
         }
@@ -1761,7 +1999,7 @@ BarWidget {
 
           Column {
             anchors.left: parent.left
-            anchors.right: guideNowBtn.left
+            anchors.right: guideRefreshBtn.left
             anchors.rightMargin: Style.space(8)
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(2)
@@ -1780,11 +2018,13 @@ BarWidget {
             Text {
               textFormat: Text.PlainText
               text: {
+                if (root.guideNote) return root.guideNote
                 var n = root.guideList ? root.guideList.length : 0
                 var slots = root.guideVisibleSlotLabels || []
                 var window = slots.length ? (slots[0] + " – " + slots[slots.length - 1]) : ""
                 if (!n) return window || "No stations"
-                return n + (n === 1 ? " station" : " stations") + (window ? (" · " + window) : "")
+                var updated = Model.formatGuideUpdated(root.guideUpdatedAt)
+                return n + (n === 1 ? " station" : " stations") + (window ? (" · " + window) : "") + (updated ? (" · " + updated) : "")
               }
               color: Qt.darker(root.bar.foreground, 1.5)
               font.family: root.bar.fontFamily
@@ -1792,6 +2032,18 @@ BarWidget {
               elide: Text.ElideRight
               width: parent.width
             }
+          }
+
+          Button {
+            id: guideRefreshBtn
+            anchors.right: guideNowBtn.left
+            anchors.rightMargin: Style.space(6)
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.guideRefreshing ? "Updating" : "Refresh"
+            tooltipText: root.isRecording ? "Already recording" : "Update the guide"
+            enabled: !root.guideRefreshing
+            foreground: root.bar.foreground
+            onClicked: root.refreshGuide()
           }
 
           Button {
@@ -1817,9 +2069,62 @@ BarWidget {
           }
         }
 
+        TextField {
+          id: guideSearchField
+          width: parent.width
+          placeholderText: "Search shows"
+          foreground: root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.body
+          onTextChanged: root.guideSearchText = text
+          Keys.onEscapePressed: function(event) {
+            if (text !== "") {
+              text = ""
+            } else {
+              focus = false
+            }
+            event.accepted = true
+          }
+        }
+
+        Flickable {
+          width: parent.width
+          height: guideKindRow.implicitHeight
+          contentWidth: guideKindRow.implicitWidth
+          flickableDirection: Flickable.HorizontalFlick
+          clip: true
+
+          Row {
+            id: guideKindRow
+            spacing: Style.space(4)
+
+            Repeater {
+              model: [
+                { id: "all", label: "All" },
+                { id: "network", label: "Network" },
+                { id: "movies", label: "Movies" },
+                { id: "classic", label: "Classic" },
+                { id: "shop", label: "Shop" },
+                { id: "religious", label: "Religious" },
+                { id: "kids", label: "Kids" }
+              ]
+
+              Button {
+                required property var modelData
+                text: modelData.label
+                selected: root.guideKind === modelData.id
+                fontSize: Style.font.caption
+                foreground: root.bar.foreground
+                onClicked: root.guideKind = modelData.id
+              }
+            }
+          }
+        }
+
         Item {
           width: parent.width
-          height: Math.max(Style.space(32), guidePrevBtn.implicitHeight)
+          visible: !root.guideSearchActive
+          height: visible ? Math.max(Style.space(32), guidePrevBtn.implicitHeight) : 0
 
           Button {
             id: guidePrevBtn
@@ -1862,16 +2167,9 @@ BarWidget {
               anchors.left: parent.left
             }
 
-            Item {
-              id: guideHdrRec
-              width: root.guideRecWidth
-              height: parent.height
-              anchors.right: parent.right
-            }
-
             Row {
               anchors.left: guideHdrStation.right
-              anchors.right: guideHdrRec.left
+              anchors.right: parent.right
               anchors.leftMargin: root.guideSlotGap
               anchors.rightMargin: root.guideSlotGap
               anchors.verticalCenter: parent.verticalCenter
@@ -1889,12 +2187,28 @@ BarWidget {
                     anchors.fill: parent
                     textFormat: Text.PlainText
                     text: parent.modelData
-                    color: Model.slotIsNow(parent.modelData) ? Color.accent : Qt.darker(root.bar.foreground, 1.4)
+                    color: Model.slotIsNow(parent.modelData, root.guideClockMin) ? Color.accent : Qt.darker(root.bar.foreground, 1.4)
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.caption
-                    font.bold: Model.slotIsNow(parent.modelData)
+                    font.bold: Model.slotIsNow(parent.modelData, root.guideClockMin)
                     elide: Text.ElideRight
                     verticalAlignment: Text.AlignVCenter
+                  }
+
+                  Rectangle {
+                    visible: Model.slotIsNow(parent.modelData, root.guideClockMin)
+                    width: 2
+                    height: parent.height
+                    color: Color.accent
+                    x: {
+                      var start = Model.parseMinutes(parent.modelData)
+                      var now = root.guideClockMin
+                      if (start < 0 || now < 0) return 0
+                      var frac = (now - start) / 30
+                      if (frac < 0) frac = 0
+                      if (frac > 1) frac = 1
+                      return frac * Math.max(0, parent.width - width)
+                    }
                   }
                 }
               }
@@ -1902,9 +2216,215 @@ BarWidget {
           }
         }
 
-        Item {
+        BorderSurface {
+          id: guideDetailCard
+          visible: root.guideDetailOpen
           width: parent.width
-          height: Math.max(Style.space(320), Math.round((popup.availableCardHeight || Style.space(720)) * 0.72))
+          implicitHeight: visible ? (guideDetailCol.implicitHeight + Style.space(20)) : 0
+          radius: Style.spacing.labelGap
+          color: Style.selectedFillFor(root.bar.foreground, Color.accent)
+          borderSpec: Border.controlSpec("focus", root.bar.foreground, Color.accent)
+
+          Column {
+            id: guideDetailCol
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(10)
+            spacing: Style.space(8)
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: {
+                var d = root.guideDetail
+                if (!d) return ""
+                var num = d.channel_number || ""
+                var call = d.callsign || ""
+                if (num && call) return num + "  ·  " + call
+                return num || call || ""
+              }
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: root.guideDetail ? (root.guideDetail.title || "Live") : ""
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+              wrapMode: Text.WordWrap
+            }
+
+            Text {
+              width: parent.width
+              visible: !!(root.guideDetail && (root.guideDetail.start || root.guideDetail.end))
+              textFormat: Text.PlainText
+              text: {
+                var d = root.guideDetail
+                if (!d) return ""
+                if (d.start && d.end) return d.start + " – " + d.end
+                return d.start || d.end || ""
+              }
+              color: Color.accent
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+
+            Text {
+              width: parent.width
+              visible: !!(root.guideDetail && root.guideDetail.before && root.guideDetail.before.title)
+              textFormat: Text.PlainText
+              text: {
+                var d = root.guideDetail
+                if (!d || !d.before) return ""
+                var when = d.before.start || ""
+                return "Before: " + (d.before.title || "") + (when ? (" · " + when) : "")
+              }
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+
+            Text {
+              width: parent.width
+              visible: !!(root.guideDetail && root.guideDetail.after && root.guideDetail.after.title)
+              textFormat: Text.PlainText
+              text: {
+                var d = root.guideDetail
+                if (!d || !d.after) return ""
+                var when = d.after.start || ""
+                return "After: " + (d.after.title || "") + (when ? (" · " + when) : "")
+              }
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: {
+                var d = root.guideDetail
+                if (!d) return ""
+                if (d.synopsis) return d.synopsis
+                return "No description for this show."
+              }
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              wrapMode: Text.WordWrap
+              maximumLineCount: 8
+              elide: Text.ElideRight
+            }
+
+            Text {
+              width: parent.width
+              visible: {
+                var d = root.guideDetail
+                if (!d || root.isChannelRecording(d.playIdent)) return false
+                return !Model.showIsOn(d, root.guideClockMin)
+              }
+              textFormat: Text.PlainText
+              text: "This show hasn’t started yet."
+              color: Qt.darker(root.bar.foreground, 1.5)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Text {
+              width: parent.width
+              visible: {
+                var rec = root.guideDetailRecording()
+                if (!rec || !rec.file_path) return false
+                return (Number(rec.file_size) || 0) < 262144
+              }
+              textFormat: Text.PlainText
+              text: "Still starting."
+              color: Qt.darker(root.bar.foreground, 1.5)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            Item {
+              width: parent.width
+              height: Math.max(guideWatchBtn.implicitHeight, guideFromStartBtn.implicitHeight, guideRecordShowBtn.implicitHeight, guideDetailCloseBtn.implicitHeight)
+
+              Row {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(6)
+
+                Button {
+                  id: guideWatchBtn
+                  text: root.guideDetailRecording() ? "Watch live" : "Watch"
+                  tooltipText: root.guideDetailRecording() ? "Tune this channel live" : "Tune this channel"
+                  foreground: root.bar.foreground
+                  onClicked: root.watchGuideDetail()
+                }
+
+                Button {
+                  id: guideFromStartBtn
+                  visible: {
+                    var rec = root.guideDetailRecording()
+                    if (!rec || !rec.file_path) return false
+                    return (Number(rec.file_size) || 0) >= 262144
+                  }
+                  text: "From the start"
+                  tooltipText: "Play this recording from the beginning"
+                  foreground: root.bar.foreground
+                  onClicked: root.playGuideDetailFromStart()
+                }
+
+                Button {
+                  id: guideRecordShowBtn
+                  visible: {
+                    var d = root.guideDetail
+                    if (!d) return false
+                    if (root.isChannelRecording(d.playIdent)) return true
+                    return Model.showIsOn(d, root.guideClockMin)
+                  }
+                  text: {
+                    var d = root.guideDetail
+                    if (d && root.isChannelRecording(d.playIdent)) return "Stop"
+                    return "Record this show"
+                  }
+                  tooltipText: {
+                    var d = root.guideDetail
+                    if (d && root.isChannelRecording(d.playIdent)) return "Stop recording"
+                    return "Record until this show ends"
+                  }
+                  foreground: root.bar.foreground
+                  onClicked: root.recordGuideDetail()
+                }
+              }
+
+              Button {
+                id: guideDetailCloseBtn
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Close"
+                tooltipText: "Back to the grid"
+                foreground: root.bar.foreground
+                onClicked: root.clearGuideDetail()
+              }
+            }
+          }
+        }
+
+        Item {
+          id: guideGridClip
+          visible: !root.guideSearchActive
+          width: parent.width
+          height: visible ? Math.max(Style.space(200), Math.round((popup.availableCardHeight || Style.space(720)) * 0.72) - (root.guideDetailOpen ? (guideDetailCard.implicitHeight + Style.space(10)) : 0)) : 0
           clip: true
 
           Flickable {
@@ -1992,28 +2512,15 @@ BarWidget {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: root.selectChannel(gridRow.playIdent)
+                        onClicked: root.openGuideDetailFromRow(gridRow.modelData)
                       }
-                    }
-
-                    PanelActionButton {
-                      id: recBtn
-                      anchors.right: parent.right
-                      anchors.verticalCenter: parent.verticalCenter
-                      readonly property bool isRec: root.isChannelRecording(gridRow.playIdent)
-                      iconText: isRec ? "󰓛" : "󰑈"
-                      tooltipText: isRec ? "Stop recording" : "Record"
-                      foreground: isRec ? Color.urgent : root.bar.foreground
-                      hoverColor: Color.accent
-                      fontFamily: root.bar.fontFamily
-                      onClicked: root.toggleRecord(gridRow.playIdent)
                     }
 
                     Row {
                       anchors.left: stationBadge.right
-                      anchors.right: recBtn.left
+                      anchors.right: parent.right
                       anchors.leftMargin: root.guideSlotGap
-                      anchors.rightMargin: root.guideSlotGap
+                      anchors.rightMargin: 0
                       anchors.verticalCenter: parent.verticalCenter
                       height: parent.height
                       spacing: root.guideSlotGap
@@ -2028,13 +2535,23 @@ BarWidget {
                           radius: Style.spacing.labelGap
                           color: {
                             if (modelData.empty) return "transparent"
-                            if (modelData.now) return Style.selectedFillFor(root.bar.foreground, Color.accent)
+                            var recBox = root.isGuideBlockRecording(gridRow.modelData, modelData)
+                            var d = root.guideDetail
+                            var picked = !!(d && d.playIdent === gridRow.playIdent && d.start === modelData.start && d.title === modelData.title)
+                            if (recBox) return Style.selectedFillFor(root.bar.foreground, Color.urgent)
+                            if (picked || modelData.now) return Style.selectedFillFor(root.bar.foreground, Color.accent)
                             return Style.normalFillFor(root.bar.foreground, Color.accent)
                           }
-                          borderSpec: modelData.empty
-                            ? Border.controlSpec("normal", root.bar.foreground, root.bar.foreground)
-                            : Border.controlSpec(modelData.now ? "focus" : "normal", root.bar.foreground, Color.accent)
-                          opacity: modelData.empty ? 0.35 : 1
+                          borderSpec: {
+                            if (modelData.empty)
+                              return Border.flat("transparent", 0)
+                            if (root.isGuideBlockRecording(gridRow.modelData, modelData))
+                              return Border.controlSpec("focus", root.bar.foreground, Color.urgent)
+                            var d = root.guideDetail
+                            var picked = !!(d && d.playIdent === gridRow.playIdent && d.start === modelData.start && d.title === modelData.title)
+                            return Border.controlSpec((picked || modelData.now) ? "focus" : "normal", root.bar.foreground, Color.accent)
+                          }
+                          opacity: 1
 
                           Column {
                             anchors.fill: parent
@@ -2049,7 +2566,9 @@ BarWidget {
                               width: parent.width
                               textFormat: Text.PlainText
                               text: modelData.title || ""
-                              color: modelData.now || gridRow.isCurrent ? Color.accent : root.bar.foreground
+                              color: root.isGuideBlockRecording(gridRow.modelData, modelData)
+                                ? Color.urgent
+                                : (modelData.now || gridRow.isCurrent ? Color.accent : root.bar.foreground)
                               font.family: root.bar.fontFamily
                               font.pixelSize: Style.font.bodySmall
                               font.bold: true
@@ -2071,14 +2590,141 @@ BarWidget {
                           MouseArea {
                             anchors.fill: parent
                             hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.selectChannel(gridRow.playIdent)
+                            cursorShape: modelData.empty ? Qt.ArrowCursor : Qt.PointingHandCursor
+                            onClicked: {
+                              if (modelData.empty) return
+                              root.openGuideDetail(gridRow.modelData, modelData)
+                            }
                           }
                         }
                       }
                     }
                   }
 
+                }
+              }
+            }
+          }
+        }
+
+        Flickable {
+          id: guideSearchFlick
+          visible: root.guideSearchActive
+          width: parent.width
+          height: visible
+            ? Math.max(Style.space(200), Math.round((popup.availableCardHeight || Style.space(720)) * 0.72) - (root.guideDetailOpen ? (guideDetailCard.implicitHeight + Style.space(10)) : 0))
+            : 0
+          contentWidth: width
+          contentHeight: guideSearchCol.implicitHeight
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+
+          Column {
+            id: guideSearchCol
+            width: parent.width
+            spacing: Style.space(6)
+
+            Text {
+              width: parent.width
+              visible: root.guideSearchHits.length === 0
+              textFormat: Text.PlainText
+              text: "No shows match."
+              color: Qt.darker(root.bar.foreground, 1.5)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            Repeater {
+              model: root.guideSearchHits
+
+              BorderSurface {
+                required property var modelData
+                width: guideSearchCol.width
+                height: searchHitCol.implicitHeight + Style.space(16)
+                radius: Style.spacing.labelGap
+                color: {
+                  var d = root.guideDetail
+                  var picked = !!(d && d.playIdent === Model.guidePlayIdent(modelData) && d.start === modelData.start && d.title === modelData.title)
+                  if (picked || modelData.on_now) return Style.selectedFillFor(root.bar.foreground, Color.accent)
+                  return Style.normalFillFor(root.bar.foreground, Color.accent)
+                }
+                borderSpec: {
+                  var d = root.guideDetail
+                  var picked = !!(d && d.playIdent === Model.guidePlayIdent(modelData) && d.start === modelData.start && d.title === modelData.title)
+                  return Border.controlSpec((picked || modelData.on_now) ? "focus" : "normal", root.bar.foreground, Color.accent)
+                }
+
+                Column {
+                  id: searchHitCol
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: parent.top
+                  anchors.margins: Style.space(8)
+                  spacing: Style.space(2)
+
+                  Text {
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: (modelData.channel_number || "") + "  " + (modelData.callsign || modelData.station || "")
+                    color: Color.accent
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: modelData.title || ""
+                    color: root.bar.foreground
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: (modelData.start && modelData.end) ? (modelData.start + " – " + modelData.end) : (modelData.start || "")
+                    color: Qt.darker(root.bar.foreground, 1.5)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                    visible: text !== ""
+                  }
+
+                  Text {
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: {
+                      var parts = []
+                      if (modelData.before && modelData.before.title)
+                        parts.push("Before: " + modelData.before.title)
+                      if (modelData.after && modelData.after.title)
+                        parts.push("After: " + modelData.after.title)
+                      return parts.join("   ·   ")
+                    }
+                    color: Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    wrapMode: Text.WordWrap
+                    visible: text !== ""
+                  }
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    root.openGuideDetail({
+                      channel_number: modelData.channel_number,
+                      callsign: modelData.callsign,
+                      tune_name: modelData.tune_name,
+                      station: modelData.station || modelData.callsign
+                    }, modelData.block)
+                  }
                 }
               }
             }

@@ -24,7 +24,9 @@ No `Panel.qml`. The flyout is `BarWidget.qml`’s `KeyboardPanel`.
 
 **State.** JSON via `.tmp` + `os.replace`. `player_state.json` is now-playing. `sync` must not wipe a dump while a retune lock is held.
 
-**Flyout.** Channel list hides while watching. Guide is a `KeyboardPanel` grid of the scanned lineup, starting at now. `omarchy-tv guide refresh` dumps Tuner 1 (unique frequencies, all PIDs) and writes ATSC EIT into `guide.json`. A recording holds Tuner 1 — do not steal it.
+**Flyout.** Channel list hides while watching. Guide is a `KeyboardPanel` grid of the scanned lineup, starting at now.
+
+**Guide.** The schedule is only what each station sends in the broadcast (ATSC EIT). No website and no paid listings. `omarchy-tv guide refresh` reads that on Tuner 1 and writes `guide.json`. Search (`guide search`, or the field in the Guide) matches titles already saved and shows the program before and after on that channel. Record from a hit only while that show is on. The Guide shows when those listings were saved. Stations must send a name, not a show list; some send none. What they send usually covers tonight into early morning, not next week. A recording holds Tuner 1 — refresh leaves the saved guide alone. A missing `guide.json` is a canned evening lineup until the first refresh, not the air.
 
 **Library cap.** Oldest finished files until `pref library-max` fits (`auto` ~20 GB, a GB number, or `off`). Timeshift cache is not in that budget.
 

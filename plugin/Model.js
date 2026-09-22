@@ -59,6 +59,34 @@ function isTranslator(ch) {
   return blob.indexOf("DRT") !== -1 || blob.indexOf("TRANSLATOR") !== -1;
 }
 
+function channelKind(item) {
+  if (!item) return ""
+  if (item.kind) return String(item.kind)
+  var blob = [item.network, item.display_name, item.callsign, item.station, item.name]
+    .join(" ").toLowerCase().replace(/[!&-]+/g, " ").replace(/\s+/g, " ").trim()
+  var padded = " " + blob + " "
+  var rules = [
+    ["kids", ["pbs kids", "metv toons", "toons"]],
+    ["religious", ["daystar", "tbn", "tct", "insp"]],
+    ["shop", ["shop lc", "shoplc", "hsn", "qvc", "jtv"]],
+    ["movies", ["movies gold", "movies", "grit", "comet", "charge", "outlaw", "western"]],
+    ["classic", ["antenna", "heroes", "rewind", "metv", "cozi", "laff", "buzzr", "catchy", "start tv", "ion plus", "bounce"]],
+    ["network", ["univision", "unimas", "telemundo", "nbc", "abc", "cbs", "fox", "pbs", "ion", "cw"]]
+  ]
+  var r, p, phrase
+  for (r = 0; r < rules.length; r++) {
+    for (p = 0; p < rules[r][1].length; p++) {
+      phrase = rules[r][1][p]
+      if (phrase.indexOf(" ") !== -1) {
+        if (blob.indexOf(phrase) !== -1) return rules[r][0]
+      } else if (padded.indexOf(" " + phrase + " ") !== -1) {
+        return rules[r][0]
+      }
+    }
+  }
+  return ""
+}
+
 function networkShort(network) {
   if (!network) return "";
   var n = String(network).replace(/\s+/g, " ").trim();
@@ -194,11 +222,61 @@ function programBlocks(item, slots) {
       end: p ? (p.end || p.end_time || "") : "",
       span: p ? span : 1,
       empty: !p,
-      now: now && !!p
+      now: now && !!p,
+      synopsis: p ? (p.synopsis || "") : "",
+      duration_sec: p ? (Number(p.duration_sec) || 0) : 0
     })
     i += p ? span : 1
   }
   return blocks
+}
+
+function preferredGuideBlock(item, slots) {
+  var blocks = programBlocks(item, slots)
+  var i
+  for (i = 0; i < blocks.length; i++) {
+    if (blocks[i].now && !blocks[i].empty) return blocks[i]
+  }
+  for (i = 0; i < blocks.length; i++) {
+    if (!blocks[i].empty) return blocks[i]
+  }
+  return null
+}
+
+function showIsOn(block, nowMin) {
+  if (!block || block.empty) return false
+  if (block.now) return true
+  var now = (nowMin === undefined || nowMin === null) ? minutesNow() : nowMin
+  var a = parseMinutes(block.start || block.start_time)
+  var b = parseMinutes(block.end || block.end_time)
+  if (a < 0) return true
+  if (b < 0) b = a + 30
+  var clock = now
+  if (b <= a) {
+    b += 24 * 60
+    if (clock < a) clock += 24 * 60
+  }
+  return clock >= a && clock < b
+}
+
+function recordDurationArg(block, nowMin) {
+  if (!block) return ""
+  var now = (nowMin === undefined || nowMin === null) ? minutesNow() : nowMin
+  var a = parseMinutes(block.start || block.start_time)
+  var b = parseMinutes(block.end || block.end_time)
+  if (a >= 0) {
+    if (b < 0) b = a + 30
+    var clock = now
+    if (b <= a) {
+      b += 24 * 60
+      if (clock < a) clock += 24 * 60
+    }
+    var remain = b - Math.max(clock, a)
+    if (remain > 0) return remain + "m"
+  }
+  var sec = Number(block.duration_sec) || 0
+  if (sec > 0) return Math.max(1, Math.round(sec / 60)) + "m"
+  return ""
 }
 
 function guideSlotMax() {
@@ -227,4 +305,85 @@ function guideProgramTime(item, slot) {
   }
   if (item.start_time && item.end_time) return item.start_time + " – " + item.end_time
   return "Now"
+}
+
+function _neighborShow(prog) {
+  if (!prog || !prog.title) return null
+  return {
+    title: prog.title || "",
+    start: prog.start || prog.start_time || "",
+    end: prog.end || prog.end_time || ""
+  }
+}
+
+function searchGuide(guideData, query, nowMin) {
+  var words = String(query || "").toLowerCase().split(/\s+/).filter(function(w) { return w })
+  if (words.join(" ").length < 2 || !guideData) return []
+  var now = (nowMin === undefined || nowMin === null || nowMin < 0) ? minutesNow() : nowMin
+  var hits = []
+  for (var num in guideData) {
+    var row = guideData[num]
+    if (!row) continue
+    var programs = row.programs || []
+    var i
+    for (i = 0; i < programs.length; i++) {
+      var prog = programs[i]
+      var title = String((prog && prog.title) || "")
+      var folded = title.toLowerCase()
+      var ok = !!title
+      var w
+      for (w = 0; w < words.length; w++) {
+        if (folded.indexOf(words[w]) === -1) ok = false
+      }
+      if (!ok) continue
+      var block = {
+        title: title,
+        start: prog.start || "",
+        end: prog.end || "",
+        synopsis: prog.synopsis || "",
+        duration_sec: Number(prog.duration_sec) || 0,
+        now: showIsOn(prog, now),
+        empty: false,
+        before: _neighborShow(i > 0 ? programs[i - 1] : null),
+        after: _neighborShow(i + 1 < programs.length ? programs[i + 1] : null)
+      }
+      hits.push({
+        channel_number: String(num),
+        callsign: row.callsign || row.station || "",
+        tune_name: row.tune_name || "",
+        station: row.station || row.callsign || "",
+        network: row.network || "",
+        display_name: row.display_name || "",
+        title: title,
+        start: block.start,
+        end: block.end,
+        on_now: block.now,
+        before: block.before,
+        after: block.after,
+        block: block
+      })
+    }
+  }
+  hits.sort(function(a, b) {
+    var ta = parseMinutes(a.start)
+    var tb = parseMinutes(b.start)
+    if (ta !== tb) return ta - tb
+    return (parseFloat(a.channel_number) || 999) - (parseFloat(b.channel_number) || 999)
+  })
+  return hits
+}
+
+function formatGuideUpdated(updatedAt) {
+  var stamp = Number(updatedAt) || 0
+  if (stamp <= 0) return "Listings have not been updated."
+  var when = new Date(stamp * 1000)
+  var now = new Date()
+  var h24 = when.getHours()
+  var h = h24 % 12
+  if (h === 0) h = 12
+  var min = when.getMinutes()
+  var clock = h + ":" + (min < 10 ? "0" : "") + min + " " + (h24 >= 12 ? "PM" : "AM")
+  if (when.toDateString() === now.toDateString()) return "Updated " + clock
+  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+  return "Updated " + months[when.getMonth()] + " " + when.getDate() + ", " + clock
 }

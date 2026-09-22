@@ -8,6 +8,7 @@ import os
 import json
 import re
 import time
+from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable, Tuple
 from engine.paths import GUIDE_JSON_PATH, CHANNELS_JSON_PATH
 
@@ -262,6 +263,121 @@ def now_and_next(
     return rows[covering_idx], nxt
 
 
+def program_is_on(
+    program: Optional[Dict[str, Any]],
+    now_minutes: Optional[int] = None,
+) -> bool:
+    """True when this program block covers now_minutes."""
+    covering, _ = now_and_next([program] if isinstance(program, dict) else [], now_minutes)
+    return covering is not None
+
+
+def remaining_record_minutes(
+    program: Optional[Dict[str, Any]],
+    now_minutes: Optional[int] = None,
+) -> Optional[int]:
+    """Minutes from now (or the start, if later) until this block ends."""
+    if not isinstance(program, dict):
+        return None
+    clock = _now_minutes() if now_minutes is None else int(now_minutes)
+    start = parse_minutes(str(program.get("start") or program.get("start_time") or ""))
+    end = parse_minutes(str(program.get("end") or program.get("end_time") or ""))
+    if start < 0:
+        sec = program.get("duration_sec")
+        if sec:
+            return max(1, int(round(int(sec) / 60)))
+        return None
+    if end < 0:
+        end = start + 30
+    when = clock
+    if end <= start:
+        end += 24 * 60
+        if when < start:
+            when += 24 * 60
+    remain = end - max(when, start)
+    if remain <= 0:
+        return None
+    return int(remain)
+
+
+def search_guide(
+    channels: Optional[Dict[str, Any]],
+    query: str,
+    now_minutes: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Title matches, each with the show before and after on that channel."""
+    words = [w for w in str(query or "").lower().split() if w]
+    if len(" ".join(words)) < 2:
+        return []
+    hits: List[Dict[str, Any]] = []
+    for number, row in (channels or {}).items():
+        if not isinstance(row, dict):
+            continue
+        programs = [p for p in (row.get("programs") or []) if isinstance(p, dict)]
+        for index, prog in enumerate(programs):
+            title = str(prog.get("title") or "")
+            folded = title.lower()
+            if not title or not all(word in folded for word in words):
+                continue
+            hits.append({
+                "channel_number": str(number),
+                "callsign": row.get("callsign") or row.get("station") or "",
+                "tune_name": row.get("tune_name") or "",
+                "title": title,
+                "start": prog.get("start") or "",
+                "end": prog.get("end") or "",
+                "synopsis": prog.get("synopsis") or "",
+                "duration_sec": int(prog.get("duration_sec") or 0),
+                "on_now": program_is_on(prog, now_minutes),
+                "before": _neighbor_program(programs[index - 1] if index else None),
+                "after": _neighbor_program(programs[index + 1] if index + 1 < len(programs) else None),
+            })
+    hits.sort(key=lambda hit: (parse_minutes(str(hit.get("start") or "")), _channel_sort_key(hit.get("channel_number"))))
+    return hits
+
+
+def _neighbor_program(prog: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    if not isinstance(prog, dict) or not prog.get("title"):
+        return None
+    return {
+        "title": str(prog.get("title") or ""),
+        "start": str(prog.get("start") or ""),
+        "end": str(prog.get("end") or ""),
+    }
+
+
+def _channel_sort_key(number: Any) -> float:
+    try:
+        return float(number)
+    except (TypeError, ValueError):
+        return 999.0
+
+
+def format_guide_updated(updated_at: Optional[float], now: Optional[float] = None) -> str:
+    """Clock label for when the saved listings were written."""
+    if not updated_at:
+        return "Listings have not been updated."
+    when = datetime.fromtimestamp(float(updated_at))
+    current = datetime.fromtimestamp(now) if now is not None else datetime.now()
+    clock = when.strftime("%-I:%M %p")
+    if when.date() == current.date():
+        return f"Updated {clock}"
+    return f"Updated {when.strftime('%b')} {when.day}, {clock}"
+
+
+def current_program_title(
+    channel_row: Optional[Dict[str, Any]],
+    now_minutes: Optional[int] = None,
+) -> str:
+    """Title of the block on now, not a stale channel-level leftover."""
+    if not isinstance(channel_row, dict):
+        return "Live Broadcast"
+    now_prog, _ = now_and_next(channel_row.get("programs"), now_minutes)
+    title = (now_prog or {}).get("title") or channel_row.get("title") or ""
+    title = str(title).strip()
+    return title or "Live Broadcast"
+
+
 def _channel_number(channel: Dict[str, Any]) -> str:
     number = channel.get("channel_number")
     if number:
@@ -333,6 +449,7 @@ def apply_program_events(channels: Dict[str, Any], events: Dict[str, List[Dict[s
             channels[number]["title"] = now_prog.get("title") or channels[number].get("title")
             channels[number]["start_time"] = now_prog.get("start") or ""
             channels[number]["end_time"] = now_prog.get("end") or ""
+            channels[number]["synopsis"] = now_prog.get("synopsis") or ""
         if next_prog:
             channels[number]["next_title"] = next_prog.get("title") or ""
 

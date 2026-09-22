@@ -21,13 +21,13 @@ Tuner 0 live dump; Tuner 1 scan / record. A recording holds Tuner 1. `j`/`k` mov
 ```bash
 omarchy-tv play "8.1 FOX" | next | prev | stop | sync | pause | live | seek 10
 omarchy-tv record start "8.1 FOX" 1h | stop | list | play <file> | delete <file>
-omarchy-tv list | guide | guide refresh | status | scan | scan --full
+omarchy-tv list | guide | guide refresh | guide search Browns | status | scan | scan --full
 omarchy-tv favorite toggle "8.1 FOX"
 omarchy-tv pref filter all|favorites | pref translators off | pref library-max auto|20|50|off
 omarchy-shell shell broadcast richardb.omarchy-tv play "8.1 FOX"   # also: stop next prev live guide reloadChannels
 ```
 
-`record` is a keepable file. `pause` is throwaway `live.ts`. After QML: `omarchy restart shell`. After HUD lua: Close TV and retune.
+`record` is a keepable file. `pause` is throwaway `live.ts`. The Guide schedule is only the broadcast (ATSC EIT on Tuner 1). Search matches titles already in `guide.json`. No downloaded listings. After QML: `omarchy restart shell`. After HUD lua: Close TV and retune.
 
 ## HUD (PiP only — not the plugin, not Super+K)
 

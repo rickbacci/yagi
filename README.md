@@ -5,7 +5,7 @@
 
 OTA ATSC 1.0 for Omarchy: bar plugin, pinned PiP, dual-tuner record. Not MythTV, not Kaffeine.
 
-Click the antenna, scan, watch 16:9 PiP. Guide is your scanned lineup from now; `omarchy-tv guide refresh` writes live ATSC EIT into the grid. Record on Tuner 1 into `~/Videos/TV` while Tuner 0 keeps the live dump. Pause-live is that dump over loopback HTTP (skip is `loadfile` in the same window). Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
+Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts. `omarchy-tv guide refresh` reads that on Tuner 1 into the grid. Search looks at those saved titles. Record on Tuner 1 into `~/Videos/TV` while Tuner 0 keeps the live dump. Pause-live is that dump over loopback HTTP (skip is `loadfile` in the same window). Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
 
 Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `omarchy-tv`.
 
@@ -57,7 +57,7 @@ Scan from the bar (or `omarchy-tv scan`), pick a station. **Close TV** brings th
 ## CLI
 
 ```bash
-omarchy-tv status | scan | scan --full | list | guide
+omarchy-tv status | scan | scan --full | list | guide | guide refresh | guide search Browns
 omarchy-tv play "8.1 FOX" | next | prev | stop | sync | pause | live | seek 10 | fullscreen
 omarchy-tv record start 8.1 1h | stop | list | play <file> | delete <file>
 omarchy-tv favorite toggle "8.1 FOX"

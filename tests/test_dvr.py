@@ -209,11 +209,14 @@ class TestDvrEngine(unittest.TestCase):
                 recordings_dir=tmp_dir,
                 channels_file=channels_file,
                 active_path=active_file,
+                program_title="Monday Night Football Kickoff",
             )
 
             self.assertEqual(session.channel_number, "8.1")
             self.assertEqual(session.station, "FOX")
             self.assertEqual(session.adapter_id, 1)
+            self.assertEqual(session.program_title, "Monday Night Football Kickoff")
+            self.assertIn("Monday_Night_Football_Kickoff", session.file_path)
 
             # Second concurrent recording of same channel must raise RuntimeError
             with self.assertRaises(RuntimeError):

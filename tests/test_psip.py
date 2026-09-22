@@ -121,6 +121,34 @@ class TestPsip(unittest.TestCase):
         self.assertIn('"-r"', src)
         self.assertIn('"-P"', src)
 
+    def test_ett_description_attaches_to_matching_event(self):
+        from engine.psip import pack_ett_section
+
+        gps = gps_for_eastern(2026, 9, 21, 20, 0)
+        tvct = pack_tvct_section([{
+            "short_name": "WJW",
+            "major": 8,
+            "minor": 1,
+            "source_id": 3,
+        }])
+        eit = pack_eit_section(3, [{
+            "event_id": 11,
+            "title": "Local News",
+            "gps_start": gps,
+            "duration_sec": 1800,
+        }])
+        ett = pack_ett_section(3, 11, "Weather, sports, and a look at tomorrow.")
+        other = pack_ett_section(3, 99, "This belongs to a different show.")
+        programs = parse_atsc_ts(section_to_ts(tvct) + section_to_ts(eit) + section_to_ts(ett) + section_to_ts(other))
+        row = programs["8.1"][0]
+        self.assertEqual(row["synopsis"], "Weather, sports, and a look at tomorrow.")
+
+    def test_description_huffman_roundtrip(self):
+        from engine.atsc_huffman import DESCRIPTION, decode_description, encode
+
+        text = "Weather, sports, and a look at tomorrow."
+        self.assertEqual(decode_description(encode(DESCRIPTION, text)), text)
+
 
 if __name__ == "__main__":
     unittest.main()

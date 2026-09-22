@@ -30,7 +30,7 @@ from engine.paths import (
 )
 from engine.tuner import TunerManager
 from engine.enrichment import match_channel
-from engine.guide import get_channel_program, load_guide
+from engine.guide import current_program_title, get_channel_program, load_guide
 
 
 def format_bytes(bytes_count: int) -> str:
@@ -317,6 +317,7 @@ class DvrManager:
         mpv_channels_file: Optional[str] = None,
         active_path: Optional[str] = None,
         adapter_override: Optional[int] = None,
+        program_title: Optional[str] = None,
     ) -> DvrSession:
         """
         Allocates an ATSC tuner and initiates background recording of a channel.
@@ -369,15 +370,18 @@ class DvrManager:
                 raise RuntimeError("No available ATSC tuners. All tuners are currently in use for playback or recording.")
             adapter_id = available_tuner.adapter_id
 
-        # 3. Lookup Program Metadata
-        program_title = "Live Broadcast"
-        try:
-            guide_data = load_guide()
-            prog = get_channel_program(channel_number, guide_data=guide_data)
-            if prog and prog.get("title"):
-                program_title = prog["title"]
-        except Exception:
-            pass
+        # 3. Lookup Program Metadata — clicked title wins; else the block on now
+        chosen = str(program_title or "").strip()
+        if chosen:
+            program_title = chosen
+        else:
+            program_title = "Live Broadcast"
+            try:
+                guide_data = load_guide()
+                prog = get_channel_program(channel_number, guide_data=guide_data)
+                program_title = current_program_title(prog)
+            except Exception:
+                pass
 
         # 4. Generate Target File and Socket Path
         now = datetime.now()

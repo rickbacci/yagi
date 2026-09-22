@@ -7,7 +7,30 @@ network affiliations (NBC, ABC, CBS, FOX, PBS, CW), and human callsigns.
 from typing import Dict, Any, List, Optional
 
 
-# Known Cleveland/Akron/Northeast Ohio market broadcast mappings
+# What a station usually shows. Matched from the name it already sends.
+_KIND_RULES = (
+    ("kids", ("pbs kids", "metv toons", "toons")),
+    ("religious", ("daystar", "tbn", "tct", "insp")),
+    ("shop", ("shop lc", "shoplc", "hsn", "qvc", "jtv")),
+    ("movies", ("movies gold", "movies", "grit", "comet", "charge", "outlaw", "western")),
+    ("classic", ("antenna", "heroes", "rewind", "metv", "cozi", "laff", "buzzr", "catchy", "start tv", "ion plus", "bounce")),
+    ("network", ("univision", "unimas", "telemundo", "nbc", "abc", "cbs", "fox", "pbs", "ion", "cw")),
+)
+
+
+def channel_kind(*parts: str) -> str:
+    """network, movies, classic, shop, religious, kids — or empty when we don't know."""
+    blob = " ".join(str(part or "") for part in parts).lower().replace("!", " ").replace("-", " ").replace("&", " ")
+    blob = " ".join(blob.split())
+    padded = f" {blob} "
+    for kind, phrases in _KIND_RULES:
+        for phrase in phrases:
+            if " " in phrase:
+                if phrase in blob:
+                    return kind
+            elif f" {phrase} " in padded:
+                return kind
+    return ""
 # Key: (frequency_hz, service_id) -> metadata
 KNOWN_STATION_MAP: Dict[tuple, Dict[str, Any]] = {
     # RF 7 (177.028 MHz) - Daystar / WCDN
@@ -198,6 +221,12 @@ def enrich_channel(channel: Dict[str, Any]) -> Dict[str, Any]:
 
     # Retain the exact hardware tuning name (MPV channels.conf identifier)
     res["tune_name"] = res.get("raw_name") or res.get("name")
+    res["kind"] = channel_kind(
+        res.get("network"),
+        res.get("display_name"),
+        res.get("callsign"),
+        res.get("name"),
+    )
     return res
 
 
