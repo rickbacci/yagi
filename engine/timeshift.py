@@ -2,11 +2,11 @@
 Throwaway pause-live buffer: dump Tuner 0 to a growing MPEG-TS file.
 
 A loopback HTTP sidecar serves live.ts (from= playhead, wait at EOF).
-Windowed MPV loadfiles that URL. Skip and live are a new GET in the same
-PiP — not a pipe, not pip-relaunch. The HTTP process outlives
-`omarchy-tv play`. Channel change fills a new dump, then pip-relaunch.
-HUD `omarchy-tv play` must not quit mpv itself. Close TV wipes the dump
-and the sidecar. This is not a library recording and not dvb:// cache.
+Windowed MPV loadfiles that URL. Skip, live, and channel change are a new
+GET in the same PiP — not a pipe, not pip-relaunch. The HTTP process
+outlives `omarchy-tv play`. Channel change dumps tuner 0, then loadfile
+from byte 0. HUD `omarchy-tv play` must not quit mpv itself. Close TV wipes
+the dump and the sidecar. This is not a library recording and not dvb:// cache.
 """
 
 import json
@@ -27,12 +27,14 @@ from engine.paths import (
     TIMESHIFT_ACTIVE_PATH,
     TIMESHIFT_DIR,
     TIMESHIFT_FILE,
-    TIMESHIFT_NEXT_FILE,
-    TIMESHIFT_NEXT_SOCKET_PATH,
     TIMESHIFT_SOCKET_PATH,
     TUNE_LOCK_PATH,
     TUNE_STATUS_PATH,
+    chmod_private_file,
+    ensure_private_dir,
+    touch_private_file,
 )
+from engine.tuner import LIVE_ADAPTER
 
 FOLLOW_TS_PY = os.path.join(os.path.dirname(os.path.realpath(__file__)), "follow_ts.py")
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -115,8 +117,7 @@ class Timeshift:
 
     @classmethod
     def ensure_dir(cls) -> str:
-        os.makedirs(TIMESHIFT_DIR, mode=0o755, exist_ok=True)
-        return TIMESHIFT_DIR
+        return ensure_private_dir(TIMESHIFT_DIR)
 
     @classmethod
     def dump_path(cls) -> str:
@@ -893,11 +894,15 @@ class Timeshift:
         sock: str,
         log_name: str = "dump.log",
     ) -> Optional[subprocess.Popen]:
+        cls.ensure_dir()
         if os.path.exists(sock):
             try:
                 os.unlink(sock)
             except OSError:
                 pass
+        touch_private_file(dest)
+        log_path = os.path.join(TIMESHIFT_DIR, log_name)
+        touch_private_file(log_path)
         cmd = [
             "mpv",
             f"--stream-dump={dest}",
@@ -923,6 +928,8 @@ class Timeshift:
         )
         if isinstance(proc.poll(), int):
             return None
+        chmod_private_file(dest)
+        chmod_private_file(log_path)
         return proc
 
     @classmethod
@@ -944,6 +951,9 @@ class Timeshift:
             except OSError:
                 size = 0
             if size >= MIN_PLAYABLE_BYTES:
+                chmod_private_file(dest)
+                if log_path:
+                    chmod_private_file(log_path)
                 return True
             last_size = size
             time.sleep(0.05)
@@ -983,14 +993,11 @@ class Timeshift:
         adapter_id: Optional[int] = None,
         keep_follow: bool = False,
     ) -> Optional[str]:
-        """Locks a tuner, dumps dvb:// into live.ts, waits until the file is playable.
+        """Locks tuner 0, dumps dvb:// into live.ts, waits until the file is playable.
 
         keep_follow: channel change under a live PiP. Stop the dump, replace
-        live.ts, and leave the follow pid in state. The player then recycles
-        the PiP onto a new follow pipe so lavf starts the new mux.
+        live.ts, leave any follow pid. The player then loadfiles from=0.
         """
-        from engine.tuner import TunerManager
-
         name = (tune_name or "").strip()
         if not name:
             return None
@@ -1013,8 +1020,7 @@ class Timeshift:
             cls.ensure_dir()
 
         if adapter_id is None:
-            available = TunerManager.get_available_tuner(require_atsc=True)
-            adapter_id = available.adapter_id if available else 0
+            adapter_id = LIVE_ADAPTER
 
         cls._reap_orphan_dumps()
         cls._wait_frontend_free(timeout=0.8, adapter_id=adapter_id)
@@ -1054,84 +1060,5 @@ class Timeshift:
 
     @classmethod
     def retune_keep_window(cls, tune_name: str) -> Optional[str]:
-        """Swap live.ts to a new station without killing the follow/PiP.
-
-        If Tuner 1 is free, lock the next station there while the current
-        dump keeps filling (picture keeps moving), then cut over. If not,
-        pause the follower and retune Tuner 0.
-        """
-        from engine.tuner import TunerManager
-
-        name = (tune_name or "").strip()
-        if not name:
-            return None
-        state = cls.load_state()
-        follow_pid = int(state.get("follow_pid") or 0)
-        follow_socket = str(state.get("follow_socket") or FOLLOW_SOCKET_PATH)
-        current_adapter = int(state.get("adapter_id") or 0)
-        other = TunerManager.get_available_tuner(
-            require_atsc=True,
-            exclude_adapters={current_adapter},
-        )
-        if other is not None:
-            cls.ensure_dir()
-            try:
-                if os.path.isfile(TIMESHIFT_NEXT_FILE):
-                    os.remove(TIMESHIFT_NEXT_FILE)
-            except OSError:
-                pass
-            live_sock = str(state.get("socket") or TIMESHIFT_SOCKET_PATH)
-            next_sock = (
-                TIMESHIFT_SOCKET_PATH
-                if live_sock == TIMESHIFT_NEXT_SOCKET_PATH
-                else TIMESHIFT_NEXT_SOCKET_PATH
-            )
-            proc = cls._capture_dump(
-                name,
-                other.adapter_id,
-                TIMESHIFT_NEXT_FILE,
-                next_sock,
-                "dump-next.log",
-            )
-            if proc is not None:
-                cls.stop_dump(keep_follow=True)
-                cls._reap_orphan_dumps(keep_pid=proc.pid)
-                try:
-                    os.replace(TIMESHIFT_NEXT_FILE, TIMESHIFT_FILE)
-                except OSError:
-                    cls._kill_pid(proc.pid)
-                    proc = None
-                else:
-                    cls._write_state({
-                        "running": True,
-                        "channel": name,
-                        "tune_name": name,
-                        "adapter_id": other.adapter_id,
-                        "path": TIMESHIFT_FILE,
-                        "pid": proc.pid,
-                        "socket": next_sock,
-                        "follow_pid": follow_pid,
-                        "follow_socket": follow_socket,
-                        "view": "live",
-                        "paused": False,
-                        "playhead_byte": 0,
-                        "playhead_t": 0,
-                        "updated_at": time.time(),
-                    })
-                    return TIMESHIFT_FILE
-            if proc is not None:
-                cls._kill_pid(proc.pid)
-            try:
-                if os.path.isfile(TIMESHIFT_NEXT_FILE):
-                    os.remove(TIMESHIFT_NEXT_FILE)
-            except OSError:
-                pass
-            try:
-                have = os.path.getsize(TIMESHIFT_FILE) if os.path.isfile(TIMESHIFT_FILE) else 0
-            except OSError:
-                have = 0
-            if have >= MIN_PLAYABLE_BYTES:
-                return None
-
-        cls.send_follow_pause()
-        return cls.start_dump(name, keep_follow=True)
+        """New dump on tuner 0. Caller loadfiles from=0 in the same PiP."""
+        return cls.start_dump(tune_name, adapter_id=LIVE_ADAPTER, keep_follow=True)

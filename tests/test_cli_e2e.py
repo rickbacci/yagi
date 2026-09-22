@@ -20,7 +20,8 @@ class TestCliE2E(unittest.TestCase):
         self.sandbox_config = os.path.join(self.temp_dir.name, "config")
         self.sandbox_runtime = os.path.join(self.temp_dir.name, "runtime")
         os.makedirs(self.sandbox_config, exist_ok=True)
-        os.makedirs(self.sandbox_runtime, exist_ok=True)
+        os.makedirs(self.sandbox_runtime, mode=0o700, exist_ok=True)
+        os.chmod(self.sandbox_runtime, 0o700)
 
         self.env = dict(os.environ)
         self.env["XDG_CONFIG_HOME"] = self.sandbox_config

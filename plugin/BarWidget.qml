@@ -9,7 +9,15 @@ BarWidget {
   id: root
   moduleName: "richardb.omarchy-tv"
 
+  readonly property string tvConfigDir: Model.tvConfigDir(
+    Quickshell.env("XDG_CONFIG_HOME"),
+    Quickshell.env("HOME")
+  )
+  property string binPath: "omarchy-tv"
+
   property bool popupOpen: false
+  readonly property bool opened: root.popupOpen
+  property bool popoutSwitchClosing: false
   onPopupOpenChanged: {
     if (!root.popupOpen) {
       root.guideStripOpen = false
@@ -259,15 +267,7 @@ BarWidget {
     if (onNow) {
       if (root.tuner1Busy) return
       var left = Model.recordDurationArg(show, root.guideClockMin)
-      dvrProc.running = false
-      var cmd = [root.binPath, "record", "start", show.tune_name]
-      if (left) cmd.push(left)
-      if (show.title) {
-        cmd.push("--title")
-        cmd.push(show.title)
-      }
-      dvrProc.command = cmd
-      dvrProc.running = true
+      root.startRecord(show.tune_name, left, show.title || "")
       return
     }
     root.scheduleLater(show)
@@ -359,6 +359,35 @@ BarWidget {
     root.selectChannel(chName)
   }
 
+  function startRecord(chName, duration, title) {
+    if (!chName) return
+    dvrProc.running = false
+    var cmd = [root.binPath, "record", "start", chName]
+    if (duration) cmd.push(duration)
+    if (title) {
+      cmd.push("--title")
+      cmd.push(title)
+    }
+    dvrProc.command = cmd
+    dvrProc.running = true
+  }
+
+  function stopRecord(chName) {
+    if (!chName) return
+    dvrProc.running = false
+    dvrProc.command = [root.binPath, "record", "stop", chName]
+    dvrProc.running = true
+  }
+
+  function toggleRecord(chName) {
+    if (!chName) return
+    if (root.isChannelRecording(chName)) {
+      root.stopRecord(chName)
+      return
+    }
+    root.startRecord(chName)
+  }
+
   function recordListedShow(chName) {
     if (!chName) return
     if (root.isChannelRecording(chName)) {
@@ -382,15 +411,7 @@ BarWidget {
     if (prog && Model.showIsOn(prog, now)) {
       var dur = Model.recordDurationArg(prog, now)
       var title = (prog.title || "").toString()
-      dvrProc.running = false
-      var cmd = [root.binPath, "record", "start", chName]
-      if (dur) cmd.push(dur)
-      if (title) {
-        cmd.push("--title")
-        cmd.push(title)
-      }
-      dvrProc.command = cmd
-      dvrProc.running = true
+      root.startRecord(chName, dur, title)
       return
     }
     root.toggleRecord(chName)
@@ -510,12 +531,21 @@ BarWidget {
     if (root.cursorIndex >= n) root.cursorIndex = Math.max(0, n - 1)
   }
 
-  readonly property string binPath: "omarchy-tv"
+  function open() {
+    root.popupOpen = true
+  }
 
   function close() {
     root.popupOpen = false
   }
-  function toggle() { root.popupOpen = !root.popupOpen }
+
+  function closeForPopoutSwitch() {
+    root.popoutSwitchClosing = true
+    root.close()
+    Qt.callLater(function() { root.popoutSwitchClosing = false })
+  }
+
+  function toggle() { root.opened ? root.close() : root.open() }
 
   function playChannel(chName) {
     if (tuneProc.running && root.activeChannelName === chName)
@@ -953,10 +983,18 @@ BarWidget {
     }
 
     function open(): void {
-      root.popupOpen = true
+      root.open()
     }
 
     function close(): void {
+      root.close()
+    }
+
+    function show(): void {
+      root.open()
+    }
+
+    function hide(): void {
       root.close()
     }
 
@@ -965,14 +1003,38 @@ BarWidget {
       root.guideClockMin = Model.minutesNow()
       root.snapGuideBlock()
       root.guideStripOpen = true
-      root.popupOpen = true
+      root.open()
+    }
+  }
+
+  readonly property string cliBesidePluginPath: Model.fileUrlToPath(Qt.resolvedUrl("../bin/omarchy-tv"))
+  readonly property string cliBesideRootPath: Model.fileUrlToPath(Qt.resolvedUrl("bin/omarchy-tv"))
+
+  Process {
+    id: cliCheckPlugin
+    command: ["test", "-x", root.cliBesidePluginPath]
+    running: true
+    onExited: function(code) {
+      if (code === 0)
+        root.binPath = root.cliBesidePluginPath
+      else
+        cliCheckRoot.running = true
+    }
+  }
+
+  Process {
+    id: cliCheckRoot
+    command: ["test", "-x", root.cliBesideRootPath]
+    onExited: function(code) {
+      if (code === 0 && root.binPath === "omarchy-tv")
+        root.binPath = root.cliBesideRootPath
     }
   }
 
   // Watch channels.json file
   FileView {
     id: channelsFile
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/channels.json"
+    path: root.tvConfigDir + "/channels.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applyChannels(text())
@@ -982,7 +1044,7 @@ BarWidget {
   // Watch favorites.json file
   FileView {
     id: favoritesFile
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/favorites.json"
+    path: root.tvConfigDir + "/favorites.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applyFavorites(text())
@@ -991,7 +1053,7 @@ BarWidget {
 
   FileView {
     id: hiddenFile
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/hidden.json"
+    path: root.tvConfigDir + "/hidden.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applyHidden(text())
@@ -1000,7 +1062,7 @@ BarWidget {
 
   FileView {
     id: uiPrefsFile
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/ui_prefs.json"
+    path: root.tvConfigDir + "/ui_prefs.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applyUiPrefs(text())
@@ -1010,7 +1072,7 @@ BarWidget {
   // Watch guide.json EPG file
   FileView {
     id: guideFile
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/guide.json"
+    path: root.tvConfigDir + "/guide.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applyGuide(text())
@@ -1019,7 +1081,7 @@ BarWidget {
 
   FileView {
     id: recordingsFile
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/recordings.json"
+    path: root.tvConfigDir + "/recordings.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applyRecordings(text())
@@ -1029,7 +1091,7 @@ BarWidget {
   // Watch live scan status file
   FileView {
     id: scanStatusFile
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/scan_status.json"
+    path: root.tvConfigDir + "/scan_status.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applyScanStatus(text())
@@ -1039,7 +1101,7 @@ BarWidget {
   // Watch active DVR recordings
   FileView {
     id: recordingsActiveFile
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/recordings_active.json"
+    path: root.tvConfigDir + "/recordings_active.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applyRecordingsActive(text())
@@ -1099,7 +1161,7 @@ BarWidget {
   // Watch live playback state
   FileView {
     id: playerStateFile
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/player_state.json"
+    path: root.tvConfigDir + "/player_state.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applyPlayerState(text())
@@ -1108,7 +1170,7 @@ BarWidget {
 
   FileView {
     id: scheduleFile
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/schedule.json"
+    path: root.tvConfigDir + "/schedule.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applySchedule(text())
@@ -1141,7 +1203,7 @@ BarWidget {
 
   FileView {
     id: tuneStatusFile
-    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/tune_status.json"
+    path: root.tvConfigDir + "/tune_status.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applyTuneStatus(text())
@@ -1202,14 +1264,6 @@ BarWidget {
   Process {
     id: hiddenProc
     command: []
-    onExited: function(code) {
-      hiddenFile.reload()
-    }
-  }
-
-  Process {
-    id: hiddenSeedProc
-    command: [root.binPath, "hidden", "list"]
     onExited: function(code) {
       hiddenFile.reload()
     }
@@ -1303,7 +1357,7 @@ BarWidget {
     Qt.callLater(function() {
       channelsFile.reload()
       guideFile.reload()
-      hiddenSeedProc.running = true
+      hiddenFile.reload()
       uiPrefsFile.reload()
       scanStatusFile.reload()
       recordingsActiveFile.reload()

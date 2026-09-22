@@ -1,0 +1,6 @@
+---
+description: Read MEMORY.md. Do not read the cleanup backup unless asked.
+alwaysApply: true
+---
+
+Read `MEMORY.md` in this repo. Do not read `reviews/cleanup/backup/` unless Richard asks.

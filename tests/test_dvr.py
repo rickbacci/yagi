@@ -178,20 +178,41 @@ class TestDvrEngine(unittest.TestCase):
                     recordings_dir=tmp_dir,
                     active_path=os.path.join(tmp_dir, "active.json"),
                 )
-            self.assertEqual(removed, [os.path.realpath(paths[0])])
+            self.assertEqual(removed, [paths[0]])
             self.assertFalse(os.path.exists(paths[0]))
             self.assertTrue(os.path.exists(paths[1]))
             self.assertTrue(os.path.exists(paths[2]))
 
-    @patch("subprocess.Popen")
-    @patch("engine.tuner.TunerManager.get_available_tuner")
-    def test_start_and_stop_recording_mocked(self, mock_get_tuner, mock_popen):
-        fake_tuner = MagicMock()
-        fake_tuner.adapter_id = 1
-        fake_tuner.supports_atsc = True
-        fake_tuner.is_busy = False
-        mock_get_tuner.return_value = fake_tuner
+    def test_enforce_library_budget_does_not_follow_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            lib = os.path.join(tmp_dir, "TV")
+            outside = os.path.join(tmp_dir, "photos")
+            os.makedirs(lib)
+            os.makedirs(outside)
+            victim = os.path.join(outside, "wedding.mp4")
+            with open(victim, "wb") as f:
+                f.write(b"keep" * 2000)
+            trap = os.path.join(lib, "trap.ts")
+            os.symlink(victim, trap)
+            old = os.path.join(lib, "old.ts")
+            with open(old, "wb") as f:
+                f.write(b"x" * 3000)
+            os.utime(old, (1000, 1000))
+            names = [item["name"] for item in DvrManager.list_recordings(recordings_dir=lib)]
+            self.assertEqual(names, ["old.ts"])
+            with patch("engine.dvr.resolve_library_budget_bytes", return_value=100):
+                removed = DvrManager.enforce_library_budget(
+                    recordings_dir=lib,
+                    active_path=os.path.join(lib, "active.json"),
+                )
+            self.assertEqual(removed, [old])
+            self.assertFalse(os.path.exists(old))
+            self.assertTrue(os.path.exists(victim))
+            self.assertTrue(os.path.lexists(trap))
 
+    @patch("subprocess.Popen")
+    @patch("engine.tuner.TunerManager.adapter_is_free", return_value=True)
+    def test_start_and_stop_recording_mocked(self, mock_free, mock_popen):
         fake_proc = MagicMock()
         fake_proc.pid = os.getpid()
         fake_proc.poll.return_value = None
@@ -217,6 +238,9 @@ class TestDvrEngine(unittest.TestCase):
             self.assertEqual(session.adapter_id, 1)
             self.assertEqual(session.program_title, "Monday Night Football Kickoff")
             self.assertIn("Monday_Night_Football_Kickoff", session.file_path)
+            rec_cmd = mock_popen.call_args_list[0][0][0]
+            self.assertIn("--dvbin-card=1", rec_cmd)
+            self.assertNotIn("--dvbin-card=0", rec_cmd)
 
             # Second concurrent recording of same channel must raise RuntimeError
             with self.assertRaises(RuntimeError):
@@ -234,6 +258,25 @@ class TestDvrEngine(unittest.TestCase):
                 self.assertEqual(len(stopped), 1)
                 self.assertEqual(stopped[0].channel_number, "8.1")
                 mock_stop.assert_called_once()
+
+    @patch("subprocess.Popen")
+    @patch("engine.tuner.TunerManager.adapter_is_free", return_value=False)
+    def test_start_recording_refuses_busy_tuner1(self, mock_free, mock_popen):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            active_file = os.path.join(tmp_dir, "recordings_active.json")
+            channels_file = os.path.join(tmp_dir, "channels.json")
+            with open(channels_file, "w") as f:
+                json.dump([{"channel_number": "8.1", "station": "FOX", "name": "WJW-HD", "tune_name": "8.1"}], f)
+            with self.assertRaises(RuntimeError) as ctx:
+                DvrManager.start_recording(
+                    channel_query="8.1",
+                    duration=300,
+                    recordings_dir=tmp_dir,
+                    channels_file=channels_file,
+                    active_path=active_file,
+                )
+            self.assertIn("Tuner 1", str(ctx.exception))
+            mock_popen.assert_not_called()
 
 
 if __name__ == "__main__":

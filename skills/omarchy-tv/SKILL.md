@@ -9,12 +9,9 @@ description: >
 
 # Omarchy TV
 
-Project `~/Projects/personal/omarchy-tv`. CLI `omarchy-tv` (`PATH` or `bin/`). Product: `DESIGN.md`. Repo rules: `AGENTS.md`.
+Project `~/Projects/personal/omarchy-tv`. CLI `omarchy-tv` (`PATH` or `bin/`). Rules: `AGENTS.md`. Facts: `MEMORY.md`.
 
-**Live:** Tuner 0 dumps `~/.cache/omarchy/tv/timeshift/live.ts`. A sidecar HTTP server on `127.0.0.1` serves it (`path` is `http://127.0.0.1:…/live.ts?from=`). Playing the growing file directly hits `keep-open` EOF.
-**Delayed / skip / live:** `loadfile` that URL at a new `from=` byte in the same window. Do not SEEK a pipe. Channel change still fills a new dump, then `pip-relaunch`. Library files live in `~/Videos/TV` and are not the pause dump. Never `dvb://` in the PiP. Never `drop-buffers`.
-
-Tuner 0 live dump; Tuner 1 scan / record. A recording holds Tuner 1. Channel changes are the flyout list. The picture has no Prev or Next. HUD `play` must not quit this mpv. Close TV wipes the dump, the sidecar, and any sidecar it lost track of. Match `engine.timeshift_http`. A path match also kills the picture (`--log-file=.../hud.log`). One `omarchy-tv` window.
+**Play path:** Tuner 0 dumps `live.ts`. A sidecar on `127.0.0.1` serves `http://127.0.0.1:…/live.ts?from=`. Playing the file directly hits `keep-open` EOF. Skip and live are `loadfile` of that URL at a new `from=` in the same window. Do not SEEK a pipe. Never `drop-buffers`. HUD `play` must not quit this mpv. One window. Reap a lost sidecar by module `engine.timeshift_http`, not by the timeshift path.
 
 ## CLI
 
@@ -25,24 +22,22 @@ omarchy-tv list | guide | guide refresh | guide search Browns | status | scan | 
 omarchy-tv favorite toggle "8.1 FOX"
 omarchy-tv pref filter favorites|watchable|all|hidden | pref library-max auto|20|50|off
 omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
-omarchy-shell shell broadcast richardb.omarchy-tv play "8.1 FOX"   # also: stop next prev live guide reloadChannels
+omarchy-shell shell broadcast richardb.omarchy-tv play "8.1 FOX"   # also: stop next prev live guide reloadChannels open close toggle
 ```
 
-`record` is a keepable file. `pause` is throwaway `live.ts`. The writer stops when that file is an hour of air ahead of the playhead. Close TV still deletes it. A station with no video or audio ID is dumped as the whole channel group once, the IDs are saved, and the next dump is just that station. The Guide schedule is only the broadcast (ATSC EIT on Tuner 1). The Guide button opens a strip in the flyout: search, one row per station, three hours across, Earlier and Later, and shows waiting to record (`record later`, `record due`, `schedule.json`). The flyout widens only while that strip is open. Recordings stays the saved files. No downloaded listings. After QML: `omarchy restart shell`. After HUD lua: Close TV and retune.
+A station with no video or audio ID is dumped as the whole channel group once; the next dump is just that station. Guide strip: search, one row per station, three hours, Earlier and Later, `record later` / `record due`. After HUD lua: Close TV and retune.
 
-## HUD (PiP only — not the plugin, not Super+K)
+## Keys
 
-The picture overlay and the flyout are settled. `AGENTS.md` **Settled**. Do not restyle either. If a task needs the look to change, stop and bring the reason first.
-
-Space pause (dump fills until it is an hour ahead, then the writer stops) / play still behind · `l` live (same window) · ←/→ skip HTTP playhead or recording (10s, 5s near live; last hop is live) · r record · Super+F fullscreen (unpins first) · Super+LMB move · c captions · m / middle-click mute this window · wheel volume. Channel changes are the flyout list. The picture has no Prev or Next. Until the first frame, the top bar and the bottom line stay up and the middle stays empty. After a frame, those bars hide on their own.
+Space pause / play still behind · `l` live · ←/→ skip (10s, 5s near live; last hop is live) · r record · c captions · m / middle-click mute · wheel volume.
 
 ## Paths
 
-`~/.config/omarchy/tv/` channels, guide, state · `~/.config/mpv/channels.conf` · plugin `~/.config/omarchy/plugins/richardb.omarchy-tv` · recordings `~/Videos/TV` · dump `~/.cache/omarchy/tv/timeshift/live.ts` · IPC `$XDG_RUNTIME_DIR/omarchy-tv-mpv.sock`
+`~/.config/omarchy/tv/` channels, guide, state, optional `station_map.json` · `~/.config/mpv/channels.conf` · plugin `~/.config/omarchy/plugins/richardb.omarchy-tv` · IPC `$XDG_RUNTIME_DIR/omarchy-tv-mpv.sock`. First run is empty. Cleveland RF names: `markets/cleveland.json`.
 
 ## If pause / skip / HUD is wrong
 
 1. This machine’s `mpv --version` / manpage — not a wiki.
 2. Probe the socket **before** editing lua: live `path` is `http://127.0.0.1:…/live.ts`; never `dvb://`. Then `pause`, `time-pos`. Skip and read them again. If only the HUD clock moved, the decoder did not seek.
-3. lua loads at mpv start. Not fixed until they see it (or have).
+3. lua loads at mpv start. Not fixed until they see it.
 4. Do not ship another overlay for a demuxer or path bug. Probe the socket first.

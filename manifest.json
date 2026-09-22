@@ -10,10 +10,11 @@
     "bar-widget"
   ],
   "entryPoints": {
-    "barWidget": "BarWidget.qml"
+    "barWidget": "plugin/BarWidget.qml"
   },
   "barWidget": {
     "displayName": "TV",
+    "description": "Scan, watch, guide, and record OTA ATSC on a dual tuner.",
     "category": "Media",
     "allowMultiple": false,
     "defaultSection": "right"

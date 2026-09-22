@@ -23,6 +23,8 @@ from engine.paths import (
     FOLLOW_FIFO_PATH,
     FOLLOW_SOCKET_PATH,
     TIMESHIFT_DIR,
+    chmod_private_file,
+    touch_private_file,
 )
 from engine.dvr import MIN_PLAYABLE_BYTES
 from engine.hidden import is_hidden_channel, load_hidden
@@ -507,17 +509,21 @@ class MpvController:
             if keep_window:
                 dump_path = Timeshift.retune_keep_window(target_name)
             else:
-                dump_path = Timeshift.start_dump(target_name, adapter_id=adapter_id)
+                dump_path = Timeshift.start_dump(target_name)
             if not dump_path:
                 Timeshift.fail_tune(target_name, station)
                 return False
             Timeshift.finish_tune()
 
-            # stdin lavf will not switch muxes. Recycle only after the new
-            # dump exists. Do not quit from HUD's `omarchy-tv play` child —
-            # that process dies with the window and never relaunches.
             if keep_window:
-                self.spawn_pip_relaunch(target_name, station)
+                self.open_timeshift_dump(0, paused=False)
+                update_player_state(
+                    True,
+                    channel=target_name,
+                    station=station,
+                    pid=_stated_player_pid(),
+                    mode="live",
+                )
                 return True
             ok = self.launch_file(
                 dump_path,
@@ -671,6 +677,7 @@ class MpvController:
             cmd.append("--force-seekable=yes")
         Timeshift.ensure_dir()
         log_path = os.path.join(TIMESHIFT_DIR, "hud.log")
+        touch_private_file(log_path)
         cmd.append(f"--log-file={log_path}")
         cmd.append("--script-opts=" + ",".join(script_opts))
         cmd.append(play_url)
@@ -681,6 +688,7 @@ class MpvController:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        chmod_private_file(log_path)
         def commit_playing() -> bool:
             if live_dump:
                 label = channel or Timeshift.current_channel() or os.path.basename(file_path)

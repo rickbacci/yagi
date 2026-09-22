@@ -10,7 +10,7 @@ import time
 import tempfile
 import subprocess
 from typing import List, Dict, Generator, Any, Optional
-from engine.tuner import TunerManager, TunerAdapter
+from engine.tuner import TunerManager, WORK_ADAPTER
 from engine.paths import CHANNELS_JSON_PATH, MPV_CHANNELS_CONF, SCAN_STATUS_PATH
 
 
@@ -88,11 +88,13 @@ class AtscScanner:
     def _resolve_adapter(self) -> int:
         if self.adapter_id is not None:
             return self.adapter_id
-        tuner = TunerManager.get_available_tuner(require_atsc=True)
-        if not tuner:
-            # Fall back to adapter 0 if none marked free
-            return 0
-        return tuner.adapter_id
+        return WORK_ADAPTER
+
+    def _work_tuner_ready(self, adapter: int) -> bool:
+        from engine.guide import epg_tuner_held
+        if epg_tuner_held():
+            return False
+        return TunerManager.adapter_is_free(adapter)
 
     def scan(self, quick_mode: bool = False, timeout_multiplier: float = 1.0) -> Generator[Dict[str, Any], None, List[Dict[str, Any]]]:
         """
@@ -102,6 +104,18 @@ class AtscScanner:
         adapter = self._resolve_adapter()
         freq_list = get_atsc_frequencies(quick_mode=quick_mode)
         total_freqs = len(freq_list)
+
+        if not self._work_tuner_ready(adapter):
+            ev_busy = {
+                "status": "error",
+                "is_scanning": False,
+                "adapter_id": adapter,
+                "message": "Tuner 1 is busy.",
+                "percent": 0,
+            }
+            write_scan_status(ev_busy)
+            yield ev_busy
+            return []
 
         ev_start = {
             "status": "starting",
@@ -119,7 +133,8 @@ class AtscScanner:
             f_in.write(generate_scan_conf(freq_list))
             in_conf_path = f_in.name
 
-        out_conf_path = tempfile.mktemp(suffix=".conf")
+        with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as f_out:
+            out_conf_path = f_out.name
 
         cmd = [
             "dvbv5-scan",

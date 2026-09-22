@@ -260,3 +260,17 @@ function guideHourBlocks(channels, nowUnix) {
   if (!blocks.length) blocks.push(start)
   return blocks
 }
+
+function fileUrlToPath(url) {
+  var s = String(url || "")
+  if (s.indexOf("file://") === 0)
+    s = decodeURIComponent(s.slice(7))
+  return s
+}
+
+function tvConfigDir(xdgConfigHome, home) {
+  var xdg = String(xdgConfigHome || "")
+  if (xdg.length)
+    return xdg + "/omarchy/tv"
+  return String(home || "") + "/.config/omarchy/tv"
+}

@@ -3,7 +3,7 @@ Unit tests for TunerManager and TunerAdapter.
 """
 
 import unittest
-from engine.tuner import TunerManager
+from engine.tuner import LIVE_ADAPTER, TunerManager, WORK_ADAPTER
 
 
 def _has_atsc_tuner() -> bool:
@@ -32,6 +32,11 @@ class TestTuner(unittest.TestCase):
         if tuner:
             self.assertTrue(tuner.supports_atsc)
             self.assertFalse(tuner.is_busy)
+
+    def test_job_adapters_are_pinned(self):
+        self.assertEqual(LIVE_ADAPTER, 0)
+        self.assertEqual(WORK_ADAPTER, 1)
+        self.assertFalse(TunerManager.adapter_is_free(99))
 
 
 if __name__ == "__main__":

@@ -72,6 +72,7 @@ class TestTimeshift(unittest.TestCase):
                 path = Timeshift.ensure_dir()
                 self.assertEqual(path, tmp_dir)
                 self.assertTrue(os.path.isdir(tmp_dir))
+                self.assertEqual(os.stat(tmp_dir).st_mode & 0o777, 0o700)
 
     def test_wipe_removes_cache_files(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -460,10 +461,8 @@ class TestTimeshift(unittest.TestCase):
                  patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
                  patch("engine.timeshift.MPV_CHANNELS_CONF", os.path.join(tmp_dir, "channels.conf")), \
-                 patch("engine.tuner.TunerManager.get_available_tuner") as mock_tuner, \
                  patch.object(Timeshift, "_wait_frontend_free"), \
                  patch("subprocess.Popen", side_effect=fake_popen) as mock_popen:
-                mock_tuner.return_value = MagicMock(adapter_id=0)
                 path = Timeshift.start_dump("FOX")
                 self.assertEqual(path, live)
                 cmd = mock_popen.call_args[0][0]
@@ -477,6 +476,7 @@ class TestTimeshift(unittest.TestCase):
             self.assertTrue(data["running"])
             self.assertEqual(data["tune_name"], "FOX")
             self.assertEqual(data["pid"], 4242)
+            self.assertEqual(data["adapter_id"], 0)
 
     def test_follow_emits_appended_bytes(self):
         import select
@@ -627,13 +627,11 @@ class TestTimeshift(unittest.TestCase):
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
                  patch("engine.timeshift.FOLLOW_SOCKET_PATH", follow_sock), \
                  patch("engine.timeshift.MPV_CHANNELS_CONF", os.path.join(tmp_dir, "channels.conf")), \
-                 patch("engine.tuner.TunerManager.get_available_tuner") as mock_tuner, \
                  patch.object(Timeshift, "_wait_frontend_free"), \
                  patch.object(Timeshift, "send_follow_reopen", return_value=True), \
                  patch.object(Timeshift, "wipe") as mock_wipe, \
                  patch.object(Timeshift, "stop_follow") as mock_stop_follow, \
                  patch("subprocess.Popen", side_effect=fake_popen):
-                mock_tuner.return_value = MagicMock(adapter_id=0)
                 Timeshift._write_state({
                     "running": True,
                     "pid": 999999,
@@ -688,36 +686,30 @@ class TestTimeshift(unittest.TestCase):
                 self.assertFalse(Timeshift.tune_lock_held())
                 self.assertFalse(os.path.exists(lock))
 
-    def test_retune_keep_window_locks_next_on_free_tuner(self):
+    def test_retune_keep_window_dumps_tuner_0(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             live = os.path.join(tmp_dir, "live.ts")
-            nxt = os.path.join(tmp_dir, "live.next.ts")
             state = os.path.join(tmp_dir, "timeshift_active.json")
             sock = os.path.join(tmp_dir, "dump.sock")
-            next_sock = os.path.join(tmp_dir, "dump-next.sock")
             follow_sock = os.path.join(tmp_dir, "follow.sock")
             proc = MagicMock()
             proc.pid = 8888
             proc.poll.return_value = None
 
             def fake_popen(*_args, **_kwargs):
-                with open(nxt, "wb") as f:
+                with open(live, "wb") as f:
                     f.write(b"x" * (256 * 1024))
                 return proc
 
             with patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
                  patch("engine.timeshift.TIMESHIFT_FILE", live), \
-                 patch("engine.timeshift.TIMESHIFT_NEXT_FILE", nxt), \
                  patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
-                 patch("engine.timeshift.TIMESHIFT_NEXT_SOCKET_PATH", next_sock), \
                  patch("engine.timeshift.FOLLOW_SOCKET_PATH", follow_sock), \
                  patch("engine.timeshift.MPV_CHANNELS_CONF", os.path.join(tmp_dir, "channels.conf")), \
-                 patch("engine.tuner.TunerManager.get_available_tuner") as mock_tuner, \
-                 patch.object(Timeshift, "send_follow_pause", return_value=True), \
+                 patch.object(Timeshift, "_wait_frontend_free"), \
                  patch.object(Timeshift, "stop_dump"), \
-                 patch("subprocess.Popen", side_effect=fake_popen):
-                mock_tuner.return_value = MagicMock(adapter_id=1)
+                 patch("subprocess.Popen", side_effect=fake_popen) as mock_popen:
                 Timeshift._write_state({
                     "running": True,
                     "pid": 1111,
@@ -725,117 +717,31 @@ class TestTimeshift(unittest.TestCase):
                     "follow_pid": 2222,
                     "follow_socket": follow_sock,
                 })
-                with open(live, "wb") as f:
-                    f.write(b"old")
                 path = Timeshift.retune_keep_window("FOX")
                 self.assertEqual(path, live)
-                self.assertTrue(os.path.isfile(live))
-                self.assertFalse(os.path.exists(nxt))
+                cmd = mock_popen.call_args[0][0]
+                self.assertIn("--dvbin-card=0", cmd)
+                self.assertNotIn("--dvbin-card=1", cmd)
                 data = Timeshift.load_state()
-            self.assertEqual(data["adapter_id"], 1)
+            self.assertEqual(data["adapter_id"], 0)
             self.assertEqual(data["pid"], 8888)
             self.assertEqual(data["tune_name"], "FOX")
             self.assertEqual(data["follow_pid"], 2222)
-            self.assertEqual(data["socket"], next_sock)
-
-    def test_retune_keep_window_does_not_reuse_live_dump_socket(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            live = os.path.join(tmp_dir, "live.ts")
-            nxt = os.path.join(tmp_dir, "live.next.ts")
-            state = os.path.join(tmp_dir, "timeshift_active.json")
-            sock = os.path.join(tmp_dir, "dump.sock")
-            next_sock = os.path.join(tmp_dir, "dump-next.sock")
-            follow_sock = os.path.join(tmp_dir, "follow.sock")
-            proc = MagicMock()
-            proc.pid = 9999
-            proc.poll.return_value = None
-
-            def fake_popen(*_args, **_kwargs):
-                with open(nxt, "wb") as f:
-                    f.write(b"x" * (256 * 1024))
-                return proc
-
-            with patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
-                 patch("engine.timeshift.TIMESHIFT_FILE", live), \
-                 patch("engine.timeshift.TIMESHIFT_NEXT_FILE", nxt), \
-                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
-                 patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
-                 patch("engine.timeshift.TIMESHIFT_NEXT_SOCKET_PATH", next_sock), \
-                 patch("engine.timeshift.FOLLOW_SOCKET_PATH", follow_sock), \
-                 patch("engine.timeshift.MPV_CHANNELS_CONF", os.path.join(tmp_dir, "channels.conf")), \
-                 patch("engine.tuner.TunerManager.get_available_tuner") as mock_tuner, \
-                 patch.object(Timeshift, "send_follow_pause", return_value=True), \
-                 patch.object(Timeshift, "stop_dump"), \
-                 patch("subprocess.Popen", side_effect=fake_popen):
-                mock_tuner.return_value = MagicMock(adapter_id=1)
-                Timeshift._write_state({
-                    "running": True,
-                    "pid": 1111,
-                    "adapter_id": 0,
-                    "socket": next_sock,
-                    "follow_pid": 2222,
-                    "follow_socket": follow_sock,
-                })
-                with open(live, "wb") as f:
-                    f.write(b"old")
-                path = Timeshift.retune_keep_window("NBC")
-                self.assertEqual(path, live)
-                data = Timeshift.load_state()
             self.assertEqual(data["socket"], sock)
-            self.assertEqual(data["pid"], 9999)
 
-    def test_retune_keep_window_keeps_the_picture_when_the_side_dump_fails(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            live = os.path.join(tmp_dir, "live.ts")
-            nxt = os.path.join(tmp_dir, "live.next.ts")
-            state = os.path.join(tmp_dir, "timeshift_active.json")
-            sock = os.path.join(tmp_dir, "dump.sock")
-            next_sock = os.path.join(tmp_dir, "dump-next.sock")
-            follow_sock = os.path.join(tmp_dir, "follow.sock")
-            proc = MagicMock()
-            proc.pid = 8888
-            proc.poll.return_value = None
-
-            def fake_popen(*_args, **_kwargs):
-                with open(nxt, "wb") as f:
-                    f.write(b"short")
-                return proc
-
-            with patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
-                 patch("engine.timeshift.TIMESHIFT_FILE", live), \
-                 patch("engine.timeshift.TIMESHIFT_NEXT_FILE", nxt), \
-                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
-                 patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
-                 patch("engine.timeshift.TIMESHIFT_NEXT_SOCKET_PATH", next_sock), \
-                 patch("engine.timeshift.FOLLOW_SOCKET_PATH", follow_sock), \
-                 patch("engine.timeshift.MPV_CHANNELS_CONF", os.path.join(tmp_dir, "channels.conf")), \
-                 patch("engine.tuner.TunerManager.get_available_tuner") as mock_tuner, \
-                 patch.object(Timeshift, "send_follow_pause") as pause, \
-                 patch.object(Timeshift, "start_dump") as start, \
-                 patch.object(Timeshift, "_wait_dump_playable", return_value=False), \
-                 patch.object(Timeshift, "_kill_pid") as kill, \
-                 patch("subprocess.Popen", side_effect=fake_popen):
-                mock_tuner.return_value = MagicMock(adapter_id=1)
-                Timeshift._write_state({
-                    "running": True,
-                    "pid": 1111,
-                    "adapter_id": 0,
-                    "follow_pid": 2222,
-                    "follow_socket": follow_sock,
-                })
-                with open(live, "wb") as f:
-                    f.write(b"x" * (256 * 1024))
-                path = Timeshift.retune_keep_window("WBNX-HD")
-                self.assertIsNone(path)
-                start.assert_not_called()
-                pause.assert_not_called()
-                kill.assert_called_with(8888)
-                self.assertFalse(os.path.exists(nxt))
-                with open(live, "rb") as f:
-                    self.assertEqual(len(f.read()), 256 * 1024)
-                data = Timeshift.load_state()
-                self.assertEqual(data["pid"], 1111)
-                self.assertEqual(data["adapter_id"], 0)
+    def test_channel_change_does_not_borrow_tuner_1(self):
+        src = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+            "engine",
+            "timeshift.py",
+        )
+        with open(src, encoding="utf-8") as f:
+            text = f.read()
+        start = text.index("def retune_keep_window")
+        chunk = text[start:start + 400]
+        self.assertIn("LIVE_ADAPTER", chunk)
+        self.assertNotIn("get_available_tuner", chunk)
+        self.assertNotIn("TIMESHIFT_NEXT_FILE", chunk)
 
     def test_snr_db_from_log_is_tenths(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

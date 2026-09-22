@@ -6,6 +6,7 @@ import os
 import json
 import unittest
 import tempfile
+from unittest.mock import patch
 from engine.scanner import AtscScanner, write_scan_status
 from engine.paths import SCAN_STATUS_PATH, CHANNELS_JSON_PATH
 
@@ -98,6 +99,29 @@ class TestScannerParser(unittest.TestCase):
                 self.assertEqual(json.load(f)["channels"][0]["name"], "KEEP")
             with open(test_mpv_path, encoding="utf-8") as f:
                 self.assertIn("KEEP", f.read())
+
+    def test_scan_does_not_use_mktemp(self):
+        import inspect
+        from engine import scanner
+        src = inspect.getsource(scanner)
+        self.assertNotIn("mktemp", src)
+        self.assertIn("NamedTemporaryFile", src)
+
+    def test_scan_uses_work_tuner_and_refuses_when_busy(self):
+        from engine.tuner import WORK_ADAPTER
+        scanner = AtscScanner()
+        self.assertEqual(scanner._resolve_adapter(), WORK_ADAPTER)
+        self.assertEqual(WORK_ADAPTER, 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            status = os.path.join(tmp, "scan_status.json")
+            with patch("engine.scanner.SCAN_STATUS_PATH", status), \
+                 patch.object(AtscScanner, "_work_tuner_ready", return_value=False):
+                events = list(scanner.scan(quick_mode=True))
+            self.assertEqual(events[0]["status"], "error")
+            self.assertEqual(events[0]["adapter_id"], 1)
+            self.assertFalse(events[0]["is_scanning"])
+            with open(status, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["status"], "error")
 
 
 if __name__ == "__main__":

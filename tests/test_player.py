@@ -23,7 +23,7 @@ from player.controller import (
     OMARCHY_FULLSCREEN_LUA,
 )
 from engine.paths import FOLLOW_FIFO_PATH
-from engine.enrichment import enrich_and_sort_channels
+from engine.enrichment import enrich_and_sort_channels, load_station_map
 from engine.timeshift import Timeshift
 
 
@@ -32,12 +32,16 @@ LUA_HUD = os.path.join(PROJECT_ROOT, "player", "scripts", "tv_hud.lua")
 CLI_BIN = os.path.join(PROJECT_ROOT, "bin", "omarchy-tv")
 
 
-ENRICHED_CHANNELS = enrich_and_sort_channels([
-    {"name": "WKYC-HD", "raw_name": "WKYC-HD", "frequency": 503028615, "service_id": 1},
-    {"name": "WEWSHD", "raw_name": "WEWSHD", "frequency": 479028615, "service_id": 3},
-    {"name": "FOX", "raw_name": "FOX", "frequency": 183028615, "service_id": 3},
-    {"name": "COZI TV", "raw_name": "COZI TV", "frequency": 503028615, "service_id": 3},
-])
+_CLEVELAND = load_station_map(os.path.join(PROJECT_ROOT, "markets", "cleveland.json"))
+ENRICHED_CHANNELS = enrich_and_sort_channels(
+    [
+        {"name": "WKYC-HD", "raw_name": "WKYC-HD", "frequency": 503028615, "service_id": 1},
+        {"name": "WEWSHD", "raw_name": "WEWSHD", "frequency": 479028615, "service_id": 3},
+        {"name": "FOX", "raw_name": "FOX", "frequency": 183028615, "service_id": 3},
+        {"name": "COZI TV", "raw_name": "COZI TV", "frequency": 503028615, "service_id": 3},
+    ],
+    known=_CLEVELAND,
+)
 
 
 class FakeMpvIpc:
@@ -473,19 +477,24 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
     def test_get_active_channel_name_skips_mpv_events(self):
         self.assertEqual(self.controller.get_active_channel_name(), "WKYC-HD")
 
-    def test_channel_up_spawns_relaunch_instead_of_quitting_in_play(self):
+    def test_channel_up_loadfiles_same_window(self):
         with patch.object(self.controller, "launch_file", return_value=True) as mock_launch, \
              patch("player.controller.subprocess.Popen") as mock_popen, \
              patch("player.controller.Timeshift.retune_keep_window", return_value=self.dump_path) as mock_retune, \
-             patch("player.controller.Timeshift.load_state", return_value={"follow_pid": 99}), \
-             patch("player.controller.Timeshift._pid_alive", return_value=True), \
+             patch("player.controller.Timeshift.start_http", return_value=18765), \
+             patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=0"), \
+             patch("player.controller.Timeshift.write_rate", return_value=1e6), \
+             patch("player.controller.Timeshift.dump_bytes", return_value=256 * 1024), \
+             patch("player.controller.Timeshift.patch_state"), \
              patch("player.controller.update_player_state"):
             self.controller.channel_up()
         mock_retune.assert_called()
         mock_launch.assert_not_called()
-        argv = mock_popen.call_args[0][0]
-        self.assertIn("pip-relaunch", argv)
-        self.assertTrue(mock_popen.call_args.kwargs.get("start_new_session"))
+        mock_popen.assert_not_called()
+        sent = [m.get("command") for m in self.server.commands]
+        load = next(c for c in sent if c and c[0] == "loadfile")
+        self.assertTrue(str(load[1]).startswith("http://127.0.0.1:"))
+        self.assertEqual(load[2], "replace")
         self.assertFalse(
             any((c.get("command") or [None])[0] == "quit" for c in self.server.commands)
         )
@@ -674,9 +683,7 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
 
     def test_channel_down_wraps_to_last_station(self):
         with patch("player.controller.Timeshift.retune_keep_window", return_value=self.dump_path), \
-             patch("player.controller.Timeshift.load_state", return_value={"follow_pid": 99}), \
-             patch("player.controller.Timeshift._pid_alive", return_value=True), \
-             patch("player.controller.Timeshift.send_follow_reopen", return_value=True), \
+             patch.object(self.controller, "open_timeshift_dump", return_value=True), \
              patch("player.controller.update_player_state"):
             self.controller.channel_down()
         self.assertEqual(self.controller.current_channel_index, len(ENRICHED_CHANNELS) - 1)
@@ -686,9 +693,7 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self._ch_patcher = patch("player.controller.Timeshift.current_channel", return_value="COZI TV")
         self._ch_patcher.start()
         with patch("player.controller.Timeshift.retune_keep_window", return_value=self.dump_path) as mock_retune, \
-             patch("player.controller.Timeshift.load_state", return_value={"follow_pid": 99}), \
-             patch("player.controller.Timeshift._pid_alive", return_value=True), \
-             patch("player.controller.Timeshift.send_follow_reopen", return_value=True), \
+             patch.object(self.controller, "open_timeshift_dump", return_value=True), \
              patch("player.controller.update_player_state"):
             self.controller.channel_up()
         mock_retune.assert_called()
@@ -726,6 +731,9 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("video-params/w", src)
         self.assertIn('mp.observe_property("video-params/w"', src)
         self.assertNotIn("string.lower(p.network) == string.lower(matched_ch.network)", src)
+        self.assertNotIn("Projects/personal", src)
+        self.assertIn("debug.getinfo(1, \"S\")", src)
+        self.assertIn("/bin/omarchy-tv", src)
 
 
 class TestOmarchyFullscreen(unittest.TestCase):
@@ -832,6 +840,19 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("record\", \"due\"", src)
         self.assertIn("useListedChannel", src)
         self.assertIn("function recordListedShow", src)
+        self.assertIn("function toggleRecord", src)
+        self.assertIn("function startRecord", src)
+        self.assertIn("function stopRecord", src)
+        self.assertIn("function open()", src)
+        self.assertIn("function closeForPopoutSwitch", src)
+        self.assertIn("readonly property bool opened:", src)
+        self.assertIn("function show():", src)
+        self.assertIn("function hide():", src)
+        self.assertIn('record", "stop"', src)
+        self.assertIn("tvConfigDir", src)
+        self.assertIn("../bin/omarchy-tv", src)
+        self.assertNotIn('Quickshell.env("HOME") || "") + "/.config/omarchy/tv', src)
+        self.assertNotIn('readonly property string binPath: "omarchy-tv"', src)
         self.assertIn("Model.currentProgram(program, root.guideClockMin)", src)
         self.assertIn("chItem.onNow", src)
         self.assertIn("text: chItem.onNow ? chItem.onNow.title : \"\"", src)
@@ -880,6 +901,8 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("function currentProgram", js)
         self.assertIn("function searchGuide", js)
         self.assertIn("function guideHourBlocks", js)
+        self.assertIn("function tvConfigDir", js)
+        self.assertIn("function fileUrlToPath", js)
         self.assertIn("#F9E2AF", js)
         self.assertIn("--title", src)
         self.assertIn("guideClockTimer", src)
@@ -892,6 +915,23 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertNotIn("setShowTranslators", src)
         self.assertNotIn("text: \"Dupes", src)
         self.assertNotIn("#a6e3a1", js)
+
+
+class TestPluginManifest(unittest.TestCase):
+    def test_manifest_at_repo_root(self):
+        path = os.path.join(PROJECT_ROOT, "manifest.json")
+        self.assertTrue(os.path.isfile(path))
+        self.assertFalse(os.path.exists(os.path.join(PROJECT_ROOT, "plugin", "manifest.json")))
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["schemaVersion"], 1)
+        self.assertEqual(data["id"], "richardb.omarchy-tv")
+        self.assertEqual(data["kinds"], ["bar-widget"])
+        self.assertEqual(data["entryPoints"]["barWidget"], "plugin/BarWidget.qml")
+        self.assertTrue(os.path.isfile(os.path.join(PROJECT_ROOT, "plugin", "BarWidget.qml")))
+        self.assertNotIn("..", data["entryPoints"]["barWidget"])
+        self.assertEqual(data["barWidget"]["defaultSection"], "right")
+        self.assertTrue(data["barWidget"]["description"])
 
 
 if __name__ == "__main__":

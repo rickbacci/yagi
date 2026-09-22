@@ -4,7 +4,9 @@ Centralizes configuration, socket locations, and directories with secure permiss
 """
 
 import os
-from typing import Optional
+
+DIR_PRIVATE = 0o700
+FILE_PRIVATE = 0o600
 
 _XDG_CONFIG = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
 CONFIG_DIR = os.path.join(_XDG_CONFIG, "omarchy", "tv")
@@ -22,6 +24,7 @@ RECORDINGS_INDEX_PATH = os.path.join(CONFIG_DIR, "recordings.json")
 SCHEDULE_PATH = os.path.join(CONFIG_DIR, "schedule.json")
 PLAYER_STATE_PATH = os.path.join(CONFIG_DIR, "player_state.json")
 UI_PREFS_PATH = os.path.join(CONFIG_DIR, "ui_prefs.json")
+STATION_MAP_PATH = os.path.join(CONFIG_DIR, "station_map.json")
 _XDG_CACHE = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
 TIMESHIFT_DIR = os.path.join(_XDG_CACHE, "omarchy", "tv", "timeshift")
 TIMESHIFT_FILE = os.path.join(TIMESHIFT_DIR, "live.ts")
@@ -30,19 +33,56 @@ TIMESHIFT_ACTIVE_PATH = os.path.join(CONFIG_DIR, "timeshift_active.json")
 TUNE_STATUS_PATH = os.path.join(CONFIG_DIR, "tune_status.json")
 
 
+def ensure_private_dir(path: str) -> str:
+    """Creates path as 0700. chmod again if it already existed with a looser mode."""
+    os.makedirs(path, mode=DIR_PRIVATE, exist_ok=True)
+    try:
+        os.chmod(path, DIR_PRIVATE)
+    except OSError:
+        pass
+    return path
+
+
+def chmod_private_file(path: str) -> None:
+    """Best-effort 0600 on a dump, recording, or log the process just created."""
+    try:
+        os.chmod(path, FILE_PRIVATE)
+    except OSError:
+        pass
+
+
+def touch_private_file(path: str) -> None:
+    """Creates an empty 0600 file if missing so mpv inherits the mode."""
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_WRONLY, FILE_PRIVATE)
+        os.close(fd)
+    except OSError:
+        return
+    chmod_private_file(path)
+
+
 def get_runtime_socket(name: str) -> str:
     """
-    Returns a secure UNIX socket path inside $XDG_RUNTIME_DIR (mode 0700).
-    Falls back to a private user directory in /tmp if XDG_RUNTIME_DIR is absent.
+    Returns a UNIX socket path inside $XDG_RUNTIME_DIR (0700, owned by $USER).
+    Refuses /tmp. Refuses a missing or world-accessible runtime dir.
     """
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
-    if runtime_dir and os.path.isdir(runtime_dir):
-        return os.path.join(runtime_dir, name)
+    if not name or os.path.sep in name or name in (".", ".."):
+        raise ValueError("socket name must be a basename")
 
-    uid = os.getuid()
-    fallback_dir = os.path.join("/tmp", f"omarchy-tv-{uid}")
-    os.makedirs(fallback_dir, mode=0o700, exist_ok=True)
-    return os.path.join(fallback_dir, name)
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime_dir or not os.path.isdir(runtime_dir):
+        raise RuntimeError(
+            "XDG_RUNTIME_DIR is unset or not a directory; refusing /tmp sockets"
+        )
+    try:
+        st = os.stat(runtime_dir)
+    except OSError as exc:
+        raise RuntimeError(f"cannot stat XDG_RUNTIME_DIR: {exc}") from exc
+    if st.st_uid != os.getuid():
+        raise RuntimeError("XDG_RUNTIME_DIR is not owned by this user")
+    if (st.st_mode & 0o077) != 0:
+        raise RuntimeError("XDG_RUNTIME_DIR must not be group or world accessible")
+    return os.path.join(runtime_dir, name)
 
 
 MPV_SOCKET_PATH = get_runtime_socket("omarchy-tv-mpv.sock")

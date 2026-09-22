@@ -8,6 +8,10 @@ import glob
 import subprocess
 from typing import List, Dict, Optional, Any, Set
 
+# DualHD jobs: 0 is the picture, 1 is scan / Guide / library record.
+LIVE_ADAPTER = 0
+WORK_ADAPTER = 1
+
 
 class TunerAdapter:
     def __init__(self, adapter_id: int):
@@ -98,6 +102,24 @@ class TunerManager:
             except ValueError:
                 continue
         return adapters
+
+    @classmethod
+    def get_adapter(cls, adapter_id: int) -> Optional[TunerAdapter]:
+        for tuner in cls.list_tuners():
+            if tuner.adapter_id == adapter_id:
+                return tuner
+        return None
+
+    @classmethod
+    def adapter_is_free(cls, adapter_id: int, require_atsc: bool = True) -> bool:
+        """True when that numbered frontend exists, is ATSC, and fuser is clear."""
+        path = f"/dev/dvb/adapter{adapter_id}/frontend0"
+        if not os.path.exists(path):
+            return False
+        tuner = TunerAdapter(adapter_id)
+        if require_atsc and not tuner.supports_atsc:
+            return False
+        return not tuner.is_busy
 
     @classmethod
     def get_available_tuner(cls, require_atsc: bool = True, exclude_adapters: Optional[Set[int]] = None) -> Optional[TunerAdapter]:

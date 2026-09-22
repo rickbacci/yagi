@@ -10,9 +10,11 @@ Seat ACLs, not `video` group, not root:
 
 ```bash
 getfacl /dev/dvb/adapter0/frontend0   # expect user:<you>:rw-
+getfacl /dev/dvb/adapter1/frontend0
 loginctl show-session $(loginctl | awk '/seat0/{print $1}') -p Active
-femon -H -a 0
 ```
+
+`femon` is optional. This box may not have it. SNR while a tune runs is on the flyout watch row.
 
 ## Signal
 
@@ -33,6 +35,7 @@ ATSC A/53: DTV pilot is 310 kHz above the lower band edge, i.e. nominal center *
 | What | Where |
 | --- | --- |
 | Channels, guide, now-playing, DVR index | `~/.config/omarchy/tv/` |
+| Optional RF names | `~/.config/omarchy/tv/station_map.json` (copy `markets/cleveland.json`) |
 | MPV channel table | `~/.config/mpv/channels.conf` |
 | Library recordings | `~/Videos/TV` |
 | Pause dump | `~/.cache/omarchy/tv/timeshift/live.ts` |

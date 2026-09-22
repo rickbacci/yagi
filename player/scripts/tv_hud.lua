@@ -236,12 +236,16 @@ local dump_start_t = nil
 local function tv_cli()
     local cli = mp.get_opt("cli")
     if cli and cli ~= "" then return cli end
-    local home = os.getenv("HOME") or ""
-    local fallback = home .. "/Projects/personal/omarchy-tv/bin/omarchy-tv"
-    local f = io.open(fallback, "r")
-    if f then
-        f:close()
-        return fallback
+    local src = debug.getinfo(1, "S").source or ""
+    if src:sub(1, 1) == "@" then src = src:sub(2) end
+    local root = src:match("^(.*)/player/scripts/tv_hud%.lua$")
+    if root then
+        local candidate = root .. "/bin/omarchy-tv"
+        local f = io.open(candidate, "r")
+        if f then
+            f:close()
+            return candidate
+        end
     end
     return "omarchy-tv"
 end

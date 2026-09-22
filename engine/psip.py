@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 from engine.atsc_huffman import decode_description, decode_title
 from engine.guide import epg_tuner_held
 from engine.paths import CHANNELS_JSON_PATH, TIMESHIFT_DIR
+from engine.tuner import WORK_ADAPTER
 
 TS_PACKET = 188
 PSIP_PID = 0x1FFB
@@ -29,7 +30,7 @@ TABLE_ETT = 0xCC
 GPS_UNIX_OFFSET = 315964800
 GPS_LEAP_SECONDS = 18
 EASTERN = ZoneInfo("America/New_York")
-EPG_ADAPTER = 1
+EPG_ADAPTER = WORK_ADAPTER
 EPG_DWELL_SECS = 8.0
 
 

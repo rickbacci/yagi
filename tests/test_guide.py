@@ -9,28 +9,57 @@ import tempfile
 from engine.guide import load_guide, save_default_guide, get_channel_program
 
 
+GUIDE_FIXTURE = {
+    "3.1": {
+        "network": "NBC",
+        "station": "WKYC-HD",
+        "title": "NBC Nightly News with Lester Holt",
+        "start_time": "6:30 PM",
+        "end_time": "7:00 PM",
+        "next_title": "Local News at 7:00 PM",
+    },
+    "5.1": {
+        "network": "ABC",
+        "station": "WEWSHD",
+        "title": "World News",
+        "start_time": "6:30 PM",
+        "end_time": "7:00 PM",
+    },
+    "8.1": {
+        "network": "FOX",
+        "station": "FOX",
+        "title": "FOX 8 News at 6:00 PM",
+        "start_time": "6:00 PM",
+        "end_time": "7:00 PM",
+    },
+    "61.1": {
+        "network": "Univision",
+        "station": "WQHS-DT",
+        "title": "Noticiero Univision",
+        "start_time": "6:30 PM",
+        "end_time": "7:00 PM",
+    },
+}
+
+
 class TestGuide(unittest.TestCase):
-    def test_default_guide_generation(self):
+    def test_default_guide_is_empty(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             guide_file = os.path.join(tmp_dir, "guide.json")
             data = save_default_guide(guide_path=guide_file)
             self.assertTrue(os.path.exists(guide_file))
-            self.assertIn("channels", data)
-            self.assertIn("3.1", data["channels"])
-            self.assertEqual(data["channels"]["3.1"]["network"], "NBC")
-            self.assertIn("title", data["channels"]["3.1"])
+            self.assertEqual(data["channels"], {})
+            self.assertEqual(data["updated_at"], 0)
 
-    def test_default_guide_has_evening_programs(self):
+    def test_missing_guide_does_not_invent_listings(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             guide_file = os.path.join(tmp_dir, "guide.json")
-            data = save_default_guide(guide_path=guide_file)
-            nbc = data["channels"]["3.1"]["programs"]
-            self.assertGreaterEqual(len(nbc), 6)
-            self.assertEqual(nbc[0]["start"], "6:00 PM")
-            fox = data["channels"]["8.1"]["programs"]
-            self.assertTrue(any(p.get("title") for p in fox))
+            data = load_guide(guide_path=guide_file)
+            self.assertEqual(data["channels"], {})
+            self.assertIsNone(get_channel_program("3.1", guide_data=data))
+            self.assertIsNone(get_channel_program("FOX", guide_data=data))
 
-    def test_load_guide_writes_programs_onto_now_next_file(self):
+    def test_load_guide_leaves_a_now_next_row_alone(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             guide_file = os.path.join(tmp_dir, "guide.json")
             with open(guide_file, "w", encoding="utf-8") as f:
@@ -47,45 +76,29 @@ class TestGuide(unittest.TestCase):
                     },
                 }, f)
             data = load_guide(guide_path=guide_file)
-            self.assertGreaterEqual(len(data["channels"]["8.1"]["programs"]), 6)
+            self.assertEqual(data["channels"]["8.1"].get("programs") or [], [])
             with open(guide_file, encoding="utf-8") as f:
                 on_disk = json.load(f)
-            self.assertGreaterEqual(len(on_disk["channels"]["8.1"]["programs"]), 6)
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            guide_file = os.path.join(tmp_dir, "guide.json")
-            data = load_guide(guide_path=guide_file)
-
-            # Match by channel number
-            nbc_prog = get_channel_program("3.1", guide_data=data)
-            self.assertIsNotNone(nbc_prog)
-            self.assertEqual(nbc_prog["network"], "NBC")
-
-            # Match by station callsign
+            self.assertEqual(on_disk["channels"]["8.1"].get("programs") or [], [])
             fox_prog = get_channel_program("FOX", guide_data=data)
-            self.assertIsNotNone(fox_prog)
             self.assertEqual(fox_prog["network"], "FOX")
-
-            # Match by network
             abc_prog = get_channel_program("ABC", guide_data=data)
-            self.assertIsNotNone(abc_prog)
-            self.assertEqual(abc_prog["network"], "ABC")
-
+            self.assertIsNone(abc_prog)
 
     def test_get_timeline_grid(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            guide_file = os.path.join(tmp_dir, "guide.json")
-            save_default_guide(guide_path=guide_file)
-            from engine.guide import get_timeline_grid
-            grid = get_timeline_grid(guide_data=load_guide(guide_path=guide_file))
-            self.assertIn("slots", grid)
-            self.assertIn("rows", grid)
-            self.assertGreater(len(grid["rows"]), 0)
-            self.assertEqual(grid["rows"][0]["channel_number"], "3.1")
+        from engine.guide import get_timeline_grid
+        grid = get_timeline_grid(guide_data={"channels": GUIDE_FIXTURE})
+        self.assertIn("slots", grid)
+        self.assertIn("rows", grid)
+        self.assertGreater(len(grid["rows"]), 0)
+        self.assertEqual(grid["rows"][0]["channel_number"], "3.1")
+        empty = get_timeline_grid(guide_data={"channels": {}})
+        self.assertEqual(empty["rows"], [])
 
     def test_get_slot_program_now_and_next(self):
-        from engine.guide import get_slot_program, BROADCAST_SCHEDULES
+        from engine.guide import get_slot_program
 
-        nbc = BROADCAST_SCHEDULES["3.1"]
+        nbc = GUIDE_FIXTURE["3.1"]
         now = get_slot_program(nbc, 0)
         self.assertEqual(now["label"], "Now Playing")
         self.assertEqual(now["title"], nbc["title"])
@@ -102,20 +115,28 @@ class TestGuide(unittest.TestCase):
         self.assertEqual(empty_next["time_label"], "Next")
 
     def test_match_guide_program_from_raw_scan(self):
-        from engine.guide import match_guide_program, BROADCAST_SCHEDULES
+        from engine.guide import match_guide_program
 
-        fox = match_guide_program({"name": "FOX", "raw_name": "FOX"}, BROADCAST_SCHEDULES)
+        fox = match_guide_program({"name": "FOX", "raw_name": "FOX"}, GUIDE_FIXTURE)
         self.assertIsNotNone(fox)
         self.assertEqual(fox["network"], "FOX")
 
-        nbc = match_guide_program({"name": "WKYC-HD", "raw_name": "WKYC-HD"}, BROADCAST_SCHEDULES)
-        self.assertEqual(nbc["title"], BROADCAST_SCHEDULES["3.1"]["title"])
+        nbc = match_guide_program({"name": "WKYC-HD", "raw_name": "WKYC-HD"}, GUIDE_FIXTURE)
+        self.assertEqual(nbc["title"], GUIDE_FIXTURE["3.1"]["title"])
 
-        uni = match_guide_program({"name": "WQHS-DT", "tune_name": "WQHS-DT"}, BROADCAST_SCHEDULES)
+        uni = match_guide_program({"name": "WQHS-DT", "tune_name": "WQHS-DT"}, GUIDE_FIXTURE)
         self.assertEqual(uni["network"], "Univision")
 
-        numbered = match_guide_program({"name": "FOX", "channel_number": "5.1"}, BROADCAST_SCHEDULES)
+        numbered = match_guide_program({"name": "FOX", "channel_number": "5.1"}, GUIDE_FIXTURE)
         self.assertEqual(numbered["network"], "ABC")
+
+    def test_engine_has_no_canned_lineup(self):
+        src = os.path.join(os.path.dirname(os.path.dirname(__file__)), "engine", "guide.py")
+        with open(src, encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn("BROADCAST_SCHEDULES", text)
+        self.assertNotIn("Lester Holt", text)
+        self.assertNotIn("_ensure_programs", text)
 
     def test_merge_lineup_uses_scanned_channels_not_just_templates(self):
         from engine.guide import merge_lineup
@@ -141,7 +162,7 @@ class TestGuide(unittest.TestCase):
         self.assertIn("53.2", merged)
         self.assertEqual(merged["8.1"]["tune_name"], "8.1 WJW")
         self.assertEqual(merged["8.1"]["station"], "WJW")
-        self.assertGreaterEqual(len(merged["8.1"]["programs"]), 6)
+        self.assertEqual(merged["8.1"]["programs"], [])
         self.assertEqual(merged["53.2"]["callsign"], "WCDN-2")
         self.assertEqual(merged["53.2"]["programs"], [])
 
@@ -199,7 +220,7 @@ class TestGuide(unittest.TestCase):
             self.assertFalse(grabbed["called"])
             with open(guide_file, encoding="utf-8") as f:
                 data = json.load(f)
-            self.assertNotEqual(data["channels"]["8.1"]["programs"][0]["title"], "PSIP")
+            self.assertEqual(data["channels"]["8.1"]["programs"], [])
 
     def test_refresh_applies_grabber_when_tuner1_free(self):
         from engine.guide import refresh_guide

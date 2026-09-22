@@ -6,35 +6,6 @@ from typing import Any, Dict, List, Optional
 
 from engine.paths import HIDDEN_JSON_PATH
 
-# First-run pile. 19.10 stays; it carries the longer CBS 19 guide.
-SEED_HIDDEN = [
-    "19.1",
-    "23.5",
-    "23.7",
-    "26.1",
-    "26.4",
-    "25.5",
-    "25.6",
-    "25.7",
-    "28.1",
-    "28.3",
-    "28.4",
-    "32.1",
-    "32.2",
-    "32.3",
-    "32.4",
-    "33.1",
-    "33.2",
-    "33.3",
-    "33.4",
-    "33.5",
-    "33.6",
-    "33.7",
-    "41.1",
-    "41.2",
-    "65.7",
-]
-
 
 def channel_number(ch: Optional[Dict[str, Any]]) -> str:
     if not ch:
@@ -42,12 +13,9 @@ def channel_number(ch: Optional[Dict[str, Any]]) -> str:
     return str(ch.get("channel_number") or "").strip()
 
 
-def load_hidden(path: Optional[str] = None, seed: bool = True) -> List[str]:
+def load_hidden(path: Optional[str] = None) -> List[str]:
     target = path or HIDDEN_JSON_PATH
     if not os.path.exists(target):
-        if seed:
-            save_hidden(list(SEED_HIDDEN), target)
-            return list(SEED_HIDDEN)
         return []
     try:
         with open(target, encoding="utf-8") as f:

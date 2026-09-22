@@ -17,194 +17,11 @@ from engine.paths import GUIDE_JSON_PATH, GUIDE_HISTORY_PATH, CHANNELS_JSON_PATH
 _EASTERN = ZoneInfo("America/New_York")
 
 
-# High-quality broadcast schedule templates for North American terrestrial networks
-BROADCAST_SCHEDULES: Dict[str, Dict[str, Any]] = {
-    "3.1": {
-        "network": "NBC",
-        "station": "WKYC-HD",
-        "title": "NBC Nightly News with Lester Holt",
-        "start_time": "6:30 PM",
-        "end_time": "7:00 PM",
-        "synopsis": "Nightly news broadcast providing in-depth coverage of world, national, and political events.",
-        "next_title": "Local News at 7:00 PM"
-    },
-    "5.1": {
-        "network": "ABC",
-        "station": "WEWSHD",
-        "title": "ABC World News Tonight with David Muir",
-        "start_time": "6:30 PM",
-        "end_time": "7:00 PM",
-        "synopsis": "David Muir reports on the top stories from around the nation and across the globe.",
-        "next_title": "Wheel of Fortune"
-    },
-    "8.1": {
-        "network": "FOX",
-        "station": "FOX",
-        "title": "FOX 8 News at 6:00 PM",
-        "start_time": "6:00 PM",
-        "end_time": "7:00 PM",
-        "synopsis": "Northeast Ohio's news leader featuring live breaking news, investigative reports, and Pinpoint Weather.",
-        "next_title": "The Big Bang Theory"
-    },
-    "19.1": {
-        "network": "CBS",
-        "station": "WOIO-HD",
-        "title": "CBS Evening News with Norah O'Donnell",
-        "start_time": "6:30 PM",
-        "end_time": "7:00 PM",
-        "synopsis": "National and international reporting from the worldwide staff of CBS News correspondents.",
-        "next_title": "Jeopardy!"
-    },
-    "23.1": {
-        "network": "ION",
-        "station": "ION",
-        "title": "Law & Order: Special Victims Unit",
-        "start_time": "6:00 PM",
-        "end_time": "7:00 PM",
-        "synopsis": "Captain Olivia Benson leads an elite squad of NYPD detectives investigating sexually based offenses.",
-        "next_title": "Law & Order: SVU"
-    },
-    "25.1": {
-        "network": "PBS",
-        "station": "WVIZ-HD",
-        "title": "PBS NewsHour",
-        "start_time": "6:00 PM",
-        "end_time": "7:00 PM",
-        "synopsis": "Comprehensive and balanced nightly reporting on the day's major national and international news.",
-        "next_title": "BBC News America"
-    },
-    "43.1": {
-        "network": "CW",
-        "station": "WUAB",
-        "title": "Modern Family",
-        "start_time": "6:30 PM",
-        "end_time": "7:00 PM",
-        "synopsis": "Acclaimed comedy following the Pritchett-Dunphy-Tucker clan through modern family life.",
-        "next_title": "The CW Primetime"
-    },
-    "55.1": {
-        "network": "CW",
-        "station": "WBNX-HD",
-        "title": "The King of Queens",
-        "start_time": "6:30 PM",
-        "end_time": "7:00 PM",
-        "synopsis": "Doug Heffernan, a parcel delivery driver, tries to keep peace between his ambitious wife and eccetric father-in-law.",
-        "next_title": "Seinfeld"
-    },
-    "61.1": {
-        "network": "Univision",
-        "station": "WQHS-DT",
-        "title": "Noticiero Univision",
-        "start_time": "6:30 PM",
-        "end_time": "7:00 PM",
-        "synopsis": "Noticias mundiales y reportajes especiales para la comunidad hispanohablante de Estados Unidos.",
-        "next_title": "La Rosa de Guadalupe"
-    }
-}
-
-
-def _evening(*blocks):
-    return [{"start": start, "end": end, "title": title} for start, end, title in blocks]
-
-
-for _ch, _blocks in {
-    "3.1": _evening(
-        ("6:00 PM", "6:30 PM", "WKYC Channel 3 News"),
-        ("6:30 PM", "7:00 PM", "NBC Nightly News with Lester Holt"),
-        ("7:00 PM", "7:30 PM", "Local News at 7:00 PM"),
-        ("7:30 PM", "8:00 PM", "Access Hollywood"),
-        ("8:00 PM", "9:00 PM", "The Voice"),
-        ("9:00 PM", "10:00 PM", "Dateline NBC"),
-        ("10:00 PM", "10:30 PM", "WKYC News at 10"),
-        ("10:30 PM", "11:00 PM", "The Tonight Show"),
-    ),
-    "5.1": _evening(
-        ("6:00 PM", "6:30 PM", "News 5 at 6"),
-        ("6:30 PM", "7:00 PM", "ABC World News Tonight with David Muir"),
-        ("7:00 PM", "7:30 PM", "Wheel of Fortune"),
-        ("7:30 PM", "8:00 PM", "Jeopardy!"),
-        ("8:00 PM", "9:00 PM", "Celebrity Wheel of Fortune"),
-        ("9:00 PM", "10:00 PM", "20/20"),
-        ("10:00 PM", "11:00 PM", "News 5 at 10"),
-    ),
-    "8.1": _evening(
-        ("6:00 PM", "7:00 PM", "FOX 8 News at 6:00 PM"),
-        ("7:00 PM", "7:30 PM", "The Big Bang Theory"),
-        ("7:30 PM", "8:00 PM", "The Big Bang Theory"),
-        ("8:00 PM", "9:00 PM", "FOX Primetime"),
-        ("9:00 PM", "10:00 PM", "FOX Primetime"),
-        ("10:00 PM", "11:00 PM", "FOX 8 News at 10"),
-    ),
-    "19.1": _evening(
-        ("6:00 PM", "6:30 PM", "19 News at 6"),
-        ("6:30 PM", "7:00 PM", "CBS Evening News with Norah O'Donnell"),
-        ("7:00 PM", "7:30 PM", "Jeopardy!"),
-        ("7:30 PM", "8:00 PM", "Wheel of Fortune"),
-        ("8:00 PM", "9:00 PM", "CBS Primetime"),
-        ("9:00 PM", "10:00 PM", "CBS Primetime"),
-        ("10:00 PM", "11:00 PM", "19 News at 10"),
-    ),
-    "23.1": _evening(
-        ("6:00 PM", "7:00 PM", "Law & Order: Special Victims Unit"),
-        ("7:00 PM", "8:00 PM", "Law & Order: SVU"),
-        ("8:00 PM", "9:00 PM", "Law & Order"),
-        ("9:00 PM", "10:00 PM", "Criminal Minds"),
-        ("10:00 PM", "11:00 PM", "Law & Order: SVU"),
-    ),
-    "25.1": _evening(
-        ("6:00 PM", "7:00 PM", "PBS NewsHour"),
-        ("7:00 PM", "8:00 PM", "BBC News America"),
-        ("8:00 PM", "9:00 PM", "Nature"),
-        ("9:00 PM", "10:00 PM", "NOVA"),
-        ("10:00 PM", "11:00 PM", "Amanpour and Company"),
-    ),
-    "43.1": _evening(
-        ("6:00 PM", "6:30 PM", "Family Feud"),
-        ("6:30 PM", "7:00 PM", "Modern Family"),
-        ("7:00 PM", "8:00 PM", "The CW Primetime"),
-        ("8:00 PM", "9:00 PM", "The CW Primetime"),
-        ("9:00 PM", "10:00 PM", "The CW Primetime"),
-        ("10:00 PM", "11:00 PM", "Seinfeld"),
-    ),
-    "55.1": _evening(
-        ("6:00 PM", "6:30 PM", "The King of Queens"),
-        ("6:30 PM", "7:00 PM", "The King of Queens"),
-        ("7:00 PM", "7:30 PM", "Seinfeld"),
-        ("7:30 PM", "8:00 PM", "Seinfeld"),
-        ("8:00 PM", "9:00 PM", "Friends"),
-        ("9:00 PM", "10:00 PM", "Friends"),
-        ("10:00 PM", "11:00 PM", "The King of Queens"),
-    ),
-    "61.1": _evening(
-        ("6:00 PM", "6:30 PM", "Noticias"),
-        ("6:30 PM", "7:00 PM", "Noticiero Univision"),
-        ("7:00 PM", "8:00 PM", "La Rosa de Guadalupe"),
-        ("8:00 PM", "9:00 PM", "Novela"),
-        ("9:00 PM", "10:00 PM", "Novela"),
-        ("10:00 PM", "11:00 PM", "Noticiero Univision: Edición Nocturna"),
-    ),
-}.items():
-    if _ch in BROADCAST_SCHEDULES:
-        BROADCAST_SCHEDULES[_ch]["programs"] = _blocks
-
-
 EVENING_SLOTS = [
     "6:00 PM", "6:30 PM", "7:00 PM", "7:30 PM",
     "8:00 PM", "8:30 PM", "9:00 PM", "9:30 PM",
     "10:00 PM", "10:30 PM",
 ]
-
-
-def _ensure_programs(channels: Dict[str, Any]) -> bool:
-    changed = False
-    for ch_num, info in channels.items():
-        if not isinstance(info, dict) or info.get("programs"):
-            continue
-        template = BROADCAST_SCHEDULES.get(ch_num)
-        if template and template.get("programs"):
-            info["programs"] = list(template["programs"])
-            changed = True
-    return changed
 
 
 def _write_guide(payload: Dict[str, Any], target: str) -> None:
@@ -397,33 +214,31 @@ def _channel_number(channel: Dict[str, Any]) -> str:
 
 def _row_from_scan(channel: Dict[str, Any], prior: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     prior = prior if isinstance(prior, dict) else {}
-    number = _channel_number(channel)
-    template = BROADCAST_SCHEDULES.get(number) or {}
     if prior.get("source") == "psip":
         programs = list(prior.get("programs") or [])
     elif prior.get("programs"):
         programs = list(prior.get("programs"))
     else:
-        programs = list(template.get("programs") or [])
+        programs = []
     now_prog, next_prog = now_and_next(programs)
-    title = (now_prog or {}).get("title") or prior.get("title") or template.get("title") or "Live"
-    start = (now_prog or {}).get("start") or prior.get("start_time") or template.get("start_time") or ""
-    end = (now_prog or {}).get("end") or prior.get("end_time") or template.get("end_time") or ""
-    next_title = (next_prog or {}).get("title") or prior.get("next_title") or template.get("next_title") or ""
+    title = (now_prog or {}).get("title") or prior.get("title") or "Live"
+    start = (now_prog or {}).get("start") or prior.get("start_time") or ""
+    end = (now_prog or {}).get("end") or prior.get("end_time") or ""
+    next_title = (next_prog or {}).get("title") or prior.get("next_title") or ""
     return {
-        "network": channel.get("network") or prior.get("network") or template.get("network") or "",
-        "station": channel.get("callsign") or prior.get("station") or template.get("station") or "",
+        "network": channel.get("network") or prior.get("network") or "",
+        "station": channel.get("callsign") or prior.get("station") or "",
         "tune_name": channel.get("tune_name") or channel.get("name") or prior.get("tune_name") or "",
         "callsign": channel.get("callsign") or prior.get("callsign") or "",
         "display_name": channel.get("display_name") or channel.get("name") or prior.get("display_name") or "",
         "programs": list(programs),
         "is_translator": bool(channel.get("is_translator") or prior.get("is_translator")),
-        "source": prior.get("source") or ("template" if programs and number in BROADCAST_SCHEDULES else ""),
+        "source": prior.get("source") or "",
         "title": title,
         "start_time": start,
         "end_time": end,
         "next_title": next_title,
-        "synopsis": prior.get("synopsis") or template.get("synopsis") or "",
+        "synopsis": prior.get("synopsis") or "",
     }
 
 
@@ -720,8 +535,7 @@ def refresh_guide(
     if lineup:
         merged = merge_lineup(lineup, existing)
     else:
-        merged = dict(existing) if existing else dict(BROADCAST_SCHEDULES)
-        _ensure_programs(merged)
+        merged = dict(existing) if existing else {}
     skipped = False
     if grabber is not None:
         if epg_tuner_held(sessions):
@@ -743,16 +557,13 @@ def sync_guide_from_channels(channels: List[Dict[str, Any]], guide_path: Optiona
 
 
 def load_guide(guide_path: Optional[str] = None) -> Dict[str, Any]:
-    """Loads EPG data from guide.json. If missing, initializes default broadcast guide."""
+    """Loads EPG data from guide.json. Missing file is empty channels, not a canned lineup."""
     target = guide_path or GUIDE_JSON_PATH
     if os.path.exists(target):
         try:
             with open(target, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                if _ensure_programs(data.get("channels", {})):
-                    data["updated_at"] = time.time()
-                    _write_guide(data, target)
                 return data
         except Exception:
             pass
@@ -760,11 +571,11 @@ def load_guide(guide_path: Optional[str] = None) -> Dict[str, Any]:
 
 
 def save_default_guide(guide_path: Optional[str] = None) -> Dict[str, Any]:
-    """Writes default broadcast schedules to guide.json."""
+    """Writes an empty guide.json until a PSIP refresh fills it."""
     target = guide_path or GUIDE_JSON_PATH
     payload = {
-        "updated_at": time.time(),
-        "channels": BROADCAST_SCHEDULES
+        "updated_at": 0,
+        "channels": {},
     }
     _write_guide(payload, target)
     return payload
@@ -827,7 +638,6 @@ def get_timeline_grid(guide_data: Optional[Dict[str, Any]] = None) -> Dict[str, 
         guide_data = load_guide()
 
     channels_sched = guide_data.get("channels", {})
-    _ensure_programs(channels_sched)
     slots = list(EVENING_SLOTS)
 
     grid_rows = []

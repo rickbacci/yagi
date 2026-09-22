@@ -4,31 +4,28 @@ import os
 import tempfile
 import unittest
 
-from engine.hidden import SEED_HIDDEN, hide_channel, is_hidden_channel, load_hidden, show_channel
+from engine.hidden import hide_channel, is_hidden_channel, load_hidden, show_channel
 from player.controller import surfable_channels
 
 
 class TestHidden(unittest.TestCase):
-    def test_missing_file_seeds_and_keeps_the_longer_cbs_row(self):
+    def test_missing_file_is_empty_and_unwritten(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "hidden.json")
-            items = load_hidden(path)
-            self.assertIn("19.1", items)
-            self.assertNotIn("19.10", items)
-            self.assertEqual(items, SEED_HIDDEN)
-            again = load_hidden(path)
-            self.assertEqual(again, SEED_HIDDEN)
+            self.assertEqual(load_hidden(path), [])
+            self.assertFalse(os.path.exists(path))
 
     def test_show_and_hide_one_number(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "hidden.json")
-            load_hidden(path)
+            hide_channel("19.1", path)
+            self.assertEqual(load_hidden(path), ["19.1"])
             show_channel("19.1", path)
-            self.assertNotIn("19.1", load_hidden(path))
+            self.assertEqual(load_hidden(path), [])
             hide_channel("19.1", path)
             self.assertIn("19.1", load_hidden(path))
 
-    def test_an_empty_file_is_not_reseeded(self):
+    def test_an_empty_file_stays_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "hidden.json")
             with open(path, "w", encoding="utf-8") as f:

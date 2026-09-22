@@ -26,9 +26,12 @@ from engine.paths import (
     RECORDINGS_ACTIVE_PATH,
     RECORDINGS_INDEX_PATH,
     UI_PREFS_PATH,
+    chmod_private_file,
+    ensure_private_dir,
     get_runtime_socket,
+    touch_private_file,
 )
-from engine.tuner import TunerManager
+from engine.tuner import TunerManager, WORK_ADAPTER
 from engine.enrichment import match_channel
 from engine.guide import current_program_title, get_channel_program, load_guide
 
@@ -69,7 +72,7 @@ def load_ui_prefs(prefs_path: Optional[str] = None) -> Dict[str, Any]:
 def default_library_budget_bytes(recordings_dir: str) -> int:
     """Small starting cap: 20 GB, shrunk when the volume is tight."""
     try:
-        os.makedirs(recordings_dir, exist_ok=True)
+        ensure_private_dir(recordings_dir)
         usage = shutil.disk_usage(recordings_dir)
     except OSError:
         return DEFAULT_LIBRARY_BUDGET_GIB * GIB
@@ -327,8 +330,7 @@ class DvrManager:
         rec_dir = recordings_dir or RECORDINGS_DIR
         act_path = active_path or RECORDINGS_ACTIVE_PATH
 
-        # Ensure recordings directory exists
-        os.makedirs(rec_dir, mode=0o755, exist_ok=True)
+        ensure_private_dir(rec_dir)
         cls.enforce_library_budget(recordings_dir=rec_dir, active_path=act_path)
 
         # 1. Match channel
@@ -360,15 +362,20 @@ class DvrManager:
             if s.is_active() and (s.channel_number == channel_number or s.station == station):
                 raise RuntimeError(f"Channel {station} ({channel_number}) is already being recorded (PID {s.pid})")
 
-        # 2. Allocate Tuner
+        # 2. Tuner 1 only. Do not take the live dump card.
         if adapter_override is not None:
             adapter_id = adapter_override
         else:
-            busy_adapters = {s.adapter_id for s in current_sessions if s.is_active()}
-            available_tuner = TunerManager.get_available_tuner(require_atsc=True, exclude_adapters=busy_adapters)
-            if not available_tuner:
-                raise RuntimeError("No available ATSC tuners. All tuners are currently in use for playback or recording.")
-            adapter_id = available_tuner.adapter_id
+            adapter_id = WORK_ADAPTER
+            held = {
+                s.adapter_id
+                for s in current_sessions
+                if s.is_active() and s.adapter_id == WORK_ADAPTER
+            }
+            if held or not TunerManager.adapter_is_free(adapter_id):
+                raise RuntimeError(
+                    "Tuner 1 is busy. Stop the recording or wait for the Guide update."
+                )
 
         # 3. Lookup Program Metadata — clicked title wins; else the block on now
         chosen = str(program_title or "").strip()
@@ -391,6 +398,7 @@ class DvrManager:
         safe_title = sanitize_filename(program_title)
         filename = f"{safe_channel}-{safe_station}_{safe_title}_{timestamp_str}.ts"
         file_path = os.path.join(rec_dir, filename)
+        touch_private_file(file_path)
 
         session_id = f"dvr-{safe_channel}-{int(time.time())}"
         socket_path = get_runtime_socket(f"omarchy-tv-{session_id}.sock")
@@ -425,6 +433,7 @@ class DvrManager:
         exited = proc.poll()
         if isinstance(exited, int):
             raise RuntimeError("Recorder exited before the tuner locked. Try again when a tuner is free.")
+        chmod_private_file(file_path)
 
         session = DvrSession(
             session_id=session_id,
@@ -505,7 +514,7 @@ class DvrManager:
 
         results = []
         for entry in os.scandir(rec_dir):
-            if entry.is_file() and entry.name.lower().endswith((".ts", ".mkv", ".mp4")):
+            if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith((".ts", ".mkv", ".mp4")):
                 try:
                     stat = entry.stat()
                     # Parse filename parts: e.g. 8.1-FOX_FOX_8_News_20260920_163200.ts
@@ -569,23 +578,28 @@ class DvrManager:
         if used <= budget:
             return []
 
+        rec_real = os.path.realpath(rec_dir)
         removed: List[str] = []
         for item in sorted(recordings, key=lambda rec: rec.get("mtime") or 0):
             if used <= budget:
                 break
             path = item.get("path") or ""
             try:
+                if os.path.islink(path):
+                    continue
                 real_path = os.path.realpath(path)
-            except OSError:
+                if os.path.commonpath([rec_real, real_path]) != rec_real:
+                    continue
+            except (OSError, ValueError):
                 continue
             if real_path in protected:
                 continue
             try:
-                os.remove(real_path)
+                os.remove(path)
             except OSError:
                 continue
             used -= int(item.get("size_bytes") or 0)
-            removed.append(real_path)
+            removed.append(path)
         return removed
 
     @classmethod
