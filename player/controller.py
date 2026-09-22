@@ -278,19 +278,6 @@ def channel_index(channels: List[Dict[str, Any]], query: Optional[str]) -> int:
     return 0 if found is None else found
 
 
-def is_translator_channel(ch: Optional[Dict[str, Any]]) -> bool:
-    if not ch:
-        return False
-    if ch.get("is_translator") is True or ch.get("translator") is True:
-        return True
-    blob = " ".join([
-        str(ch.get("callsign") or ""),
-        str(ch.get("display_name") or ""),
-        str(ch.get("name") or ""),
-    ]).upper()
-    return "DRT" in blob or "TRANSLATOR" in blob
-
-
 def is_favorite_channel(ch: Optional[Dict[str, Any]], favorites: Optional[List[Any]]) -> bool:
     if not ch:
         return False
@@ -307,7 +294,6 @@ def is_favorite_channel(ch: Optional[Dict[str, Any]], favorites: Optional[List[A
 def surfable_channels(
     channels: Optional[List[Dict[str, Any]]],
     favorites: Optional[List[Any]] = None,
-    show_translators: bool = False,
     channel_filter: str = "favorites",
     hidden: Optional[List[Any]] = None,
 ) -> List[Dict[str, Any]]:
@@ -671,6 +657,8 @@ class MpvController:
                 return False
             play_url = Timeshift.http_url(Timeshift.live_edge_byte())
             script_opts.append(f"tv_hud-timeshift-file={file_path}")
+            if channel:
+                script_opts.append("tv_hud-tune=" + channel.replace(",", " "))
             cmd.extend([
                 "--demuxer-lavf-format=mpegts",
                 "--keep-open=yes",

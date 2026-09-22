@@ -186,22 +186,6 @@ def cmd_pref(args):
     key = args.key
     value = (args.value or "").lower()
 
-    if key == "translators":
-        current = bool(prefs.get("show_translators"))
-        if value in ("on", "true", "1"):
-            prefs["show_translators"] = True
-        elif value in ("off", "false", "0"):
-            prefs["show_translators"] = False
-        elif value in ("toggle", ""):
-            prefs["show_translators"] = not current
-        else:
-            print("Use: omarchy-tv pref translators on|off|toggle")
-            return
-        save_ui_prefs(prefs)
-        state = "shown" if prefs["show_translators"] else "hidden"
-        print(f"Translator / duplicate channels are {state}.")
-        return
-
     if key == "filter":
         if value in ("favorites", "favs", "fav"):
             prefs["channel_filter"] = "favorites"
@@ -245,7 +229,7 @@ def cmd_pref(args):
             print(f"Recording library cap is {format_bytes(budget)}.")
         return
 
-    print("Unknown pref. Use: omarchy-tv pref translators on|off|toggle | pref filter all|favorites | pref library-max auto|20|50|off")
+    print("Unknown pref. Use: omarchy-tv pref filter favorites|watchable|all|hidden | pref library-max auto|20|50|off")
 
 
 def cmd_favorite(args):
@@ -587,8 +571,8 @@ def main():
     p_hid.set_defaults(func=cmd_hidden)
 
     p_pref = subparsers.add_parser("pref", help="UI preferences")
-    p_pref.add_argument("key", help="Preference key (translators, filter, library-max)")
-    p_pref.add_argument("value", nargs="?", default="toggle", help="on, off, or toggle")
+    p_pref.add_argument("key", help="Preference key (filter, library-max)")
+    p_pref.add_argument("value", nargs="?", default="", help="favorites, watchable, all, hidden, or a library cap")
     p_pref.set_defaults(func=cmd_pref)
 
     # play

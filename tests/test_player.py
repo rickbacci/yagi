@@ -170,7 +170,7 @@ class TestMpvPlayerController(unittest.TestCase):
         self._state_patcher.start()
         self._prefs_patcher = patch(
             "player.controller.load_surf_prefs",
-            return_value={"show_translators": True, "channel_filter": "all"},
+            return_value={"channel_filter": "all"},
         )
         self._prefs_patcher.start()
         self._favs_patcher = patch("player.controller.load_favorites_list", return_value=[])
@@ -315,6 +315,7 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertIn("--slang=eng", cmd)
         self.assertIn("--subs-fallback=yes", cmd)
         self.assertTrue(any("tv_hud-timeshift-file=" in str(arg) for arg in cmd))
+        self.assertTrue(any("tv_hud-tune=" in str(arg) for arg in cmd))
         self.assertFalse(any("tv_hud-follow-sock=" in str(arg) for arg in cmd))
         self.assertNotEqual(cmd[-1], "-")
 
@@ -417,7 +418,7 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self._state_patcher.start()
         self._prefs_patcher = patch(
             "player.controller.load_surf_prefs",
-            return_value={"show_translators": True, "channel_filter": "all"},
+            return_value={"channel_filter": "all"},
         )
         self._prefs_patcher.start()
         self._favs_patcher = patch("player.controller.load_favorites_list", return_value=[])
@@ -701,6 +702,8 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertNotIn('mp.add_forced_key_binding("k", "tv_surf_next_k"', src)
         self.assertNotIn("Prev (j)", src)
         self.assertNotIn("Next (k)", src)
+        self.assertNotIn("surf_preview", src)
+        self.assertNotIn("local function surf(", src)
         self.assertIn('mp.add_forced_key_binding("LEFT", "tv_seek_back"', src)
         self.assertIn('mp.add_forced_key_binding("RIGHT", "tv_seek_fwd"', src)
         self.assertIn('mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)', src)
@@ -717,6 +720,10 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertNotIn("MBTN_LEFT_DBL", src)
         self.assertIn("Super+F", src)
         self.assertIn("function program_on_now", src)
+        self.assertIn("function picture_ready", src)
+        self.assertIn('mp.get_opt("tune")', src)
+        self.assertIn("video-params/w", src)
+        self.assertIn('mp.observe_property("video-params/w"', src)
         self.assertNotIn("string.lower(p.network) == string.lower(matched_ch.network)", src)
 
 
@@ -829,7 +836,7 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("text: chItem.onNow ? chItem.onNow.title : \"\"", src)
         self.assertIn("function roomFor", src)
         self.assertIn("function flyoutContentWidth", src)
-        self.assertIn("function guideBodyHeight", src)
+        self.assertNotIn("function guideBodyHeight", src)
         self.assertIn("property string channelFilter: \"favorites\"", src)
         self.assertIn("text: \"Watchable", src)
         self.assertIn("? \"Show\" : \"Hide\"", src)
@@ -854,7 +861,7 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("color: root.bar.barForeground", src)
         self.assertIn("color: Color.urgent", src)
 
-    def test_guide_grid_uses_lineup_and_omarchy_tokens(self):
+    def test_guide_strip_uses_lineup_and_omarchy_tokens(self):
         qml = os.path.join(PROJECT_ROOT, "plugin", "BarWidget.qml")
         model = os.path.join(PROJECT_ROOT, "plugin", "Model.js")
         with open(qml, encoding="utf-8") as f:
@@ -862,45 +869,27 @@ class TestPluginSessionCards(unittest.TestCase):
         with open(model, encoding="utf-8") as f:
             js = f.read()
         self.assertIn("root.displayChannels", src)
-        self.assertIn("text: \"Now\"", src)
+        self.assertIn("id: guideStripCol", src)
+        self.assertIn("guideStripRows", src)
+        self.assertIn("placeholderText: \"Search titles\"", src)
+        self.assertIn("blocked: guideStripSearch.activeFocus", src)
         self.assertIn("Style.selectedFillFor", src)
-        self.assertIn("Model.guidePlayIdent", src)
-        self.assertIn("root.openGuideDetail(gridRow.modelData, modelData)", src)
-        self.assertIn("root.watchGuideDetail()", src)
-        self.assertIn("root.recordGuideDetail()", src)
-        self.assertIn("Record this show", src)
-        self.assertIn("From the start", src)
-        self.assertIn("playGuideDetailFromStart", src)
-        self.assertIn("Watch live", src)
-        self.assertIn("alreadyShowingChannel", src)
-        self.assertIn("Refresh", src)
-        self.assertIn("Already recording. Guide left alone.", src)
-        self.assertIn("guideClockTimer", src)
-        self.assertIn("frac * Math.max(0, parent.width - width)", src)
-        self.assertIn("isGuideBlockRecording", src)
-        self.assertIn("Color.urgent", src)
-        self.assertNotIn("id: recBtn", src)
-        self.assertNotIn("guideRecWidth", src)
-        self.assertNotIn("onClicked: root.toggleRecord(gridRow.modelData.station", src)
-        self.assertNotIn("gridRow.netCol", src)
-        self.assertIn("nowMin - (nowMin % 30)", js)
-        self.assertIn("function guidePlayIdent", js)
         self.assertIn("function showIsOn", js)
         self.assertIn("function recordDurationArg", js)
         self.assertIn("function currentProgram", js)
-        self.assertIn("#F9E2AF", js)
         self.assertIn("function searchGuide", js)
-        self.assertIn("function channelKind", js)
-        self.assertIn("guideKind", src)
-        self.assertIn("guideDetail.usual", src)
-        self.assertIn("text: modelData.label", src)
+        self.assertIn("function guideHourBlocks", js)
+        self.assertIn("#F9E2AF", js)
         self.assertIn("--title", src)
-        self.assertIn("placeholderText: \"Search shows\"", src)
-        self.assertIn("blocked: guideSearchField.activeFocus", src)
-        self.assertIn("No shows match.", src)
-        self.assertIn("Before: ", src)
-        self.assertIn("guideUpdatedAt", src)
-        self.assertIn("Border.flat(\"transparent\", 0)", src)
+        self.assertIn("guideClockTimer", src)
+        self.assertIn("Color.urgent", src)
+        self.assertNotIn("guideModalOpen", src)
+        self.assertNotIn("guideGridView", src)
+        self.assertNotIn("guideKind", src)
+        self.assertNotIn("function channelKind", js)
+        self.assertNotIn("function guidePlayIdent", js)
+        self.assertNotIn("setShowTranslators", src)
+        self.assertNotIn("text: \"Dupes", src)
         self.assertNotIn("#a6e3a1", js)
 
 

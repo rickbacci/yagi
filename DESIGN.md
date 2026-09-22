@@ -14,13 +14,13 @@ No `Panel.qml`. The flyout is `BarWidget.qml`’s `KeyboardPanel`.
 
 ## Decisions
 
-**Tuners.** Hauppauge dualHD is two adapters. Tuner 0: live dump + pause buffer. Tuner 1: scan, EPG, library record. A recording holds Tuner 1; live `j`/`k` then retune Tuner 0. Close DVB frontends before a new dump (`EBUSY`).
+**Tuners.** Hauppauge dualHD is two adapters. Tuner 0: live dump + pause buffer. Tuner 1: scan, EPG, library record. A recording holds Tuner 1. Channel changes are the flyout list, and they retune tuner 0. Close DVB frontends before a new dump (`EBUSY`).
 
 **ATSC.** Every frequency is nominal `+28615` Hz (A/53 pilot). Scan dwell ≥ 1.2 s. Do not round tables to `000000`.
 
 **Library vs pause-live.** `r` writes keepable files to `$XDG_VIDEOS_DIR/TV` (Recordings, Tuner 1). Space writes throwaway `live.ts` under `$XDG_CACHE_HOME/omarchy/tv/timeshift` (Tuner 0 dump). Pause files are never in Recordings. They can run together.
 
-**PiP is never `dvb://`.** Tuner 0 dumps growing `live.ts`. A loopback HTTP sidecar serves it (`from=` playhead, wait at EOF). That process outlives `omarchy-tv play` — an in-process server dies when play returns and the PiP flashes then exits. Live and skip are `loadfile` of that URL in the same window. Channel change: new dump, then `pip-relaunch`. Close TV wipes the dump, the sidecar, and any sidecar it lost track of. End of a library file retunes the last live station. One window; no idle/black PiP; HUD `play` must not quit it. A pipe is not seekable — do not SEEK a follow feeder.
+**PiP is never `dvb://`.** Tuner 0 dumps growing `live.ts`. A loopback HTTP sidecar serves it (`from=` playhead, wait at EOF). That process outlives `omarchy-tv play` — an in-process server dies when play returns and the PiP flashes then exits. Live and skip are `loadfile` of that URL in the same window. Channel change: new dump, then `pip-relaunch`. Close TV wipes the dump, the sidecar, and any sidecar it lost track of. End of a library file retunes the last live station. One window. Until the first frame, the window may be black: the top bar and the bottom line stay up, and the middle stays empty. After a frame, those bars hide on their own. HUD `play` must not quit the window. A pipe is not seekable — do not SEEK a follow feeder.
 
 **State.** JSON via `.tmp` + `os.replace`. `player_state.json` is now-playing. `sync` must not wipe a dump while a retune lock is held.
 

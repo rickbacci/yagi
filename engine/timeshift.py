@@ -73,7 +73,7 @@ class Timeshift:
     def acquire_tune_lock(cls) -> bool:
         """Marks an in-flight retune so sync/Cmd+W cannot wipe the new dump.
 
-        Returns False if another living process already holds the lock (stacked j/k).
+        Returns False if another living process already holds the lock.
         """
         if cls.tune_lock_held():
             return False

@@ -34,18 +34,6 @@ function minutesNow() {
   return d.getHours() * 60 + d.getMinutes()
 }
 
-function slotIsNow(slotLabel, nowMin) {
-  var t = parseMinutes(slotLabel)
-  if (t < 0) return false
-  if (nowMin === undefined || nowMin === null) nowMin = minutesNow()
-  return nowMin >= t && nowMin < t + 30
-}
-
-function guidePlayIdent(item) {
-  if (!item) return ""
-  return item.tune_name || item.station || item.channel_number || ""
-}
-
 function getChannelBadge(channel) {
   if (!channel) return "OTA";
   if (channel.channel_number) return channel.channel_number;
@@ -57,53 +45,6 @@ function getDisplayTitle(channel) {
   if (!channel) return "Unknown Station";
   if (channel.display_name) return channel.display_name;
   return cleanChannelName(channel.name);
-}
-
-function isTranslator(ch) {
-  if (!ch) return false;
-  if (ch.is_translator === true) return true;
-  var blob = ((ch.callsign || "") + " " + (ch.display_name || "") + " " + (ch.name || "")).toUpperCase();
-  return blob.indexOf("DRT") !== -1 || blob.indexOf("TRANSLATOR") !== -1;
-}
-
-function channelKind(item) {
-  if (!item) return ""
-  if (item.kind) return String(item.kind)
-  var blob = [item.network, item.display_name, item.callsign, item.station, item.name]
-    .join(" ").toLowerCase().replace(/[!&-]+/g, " ").replace(/\s+/g, " ").trim()
-  var padded = " " + blob + " "
-  var rules = [
-    ["kids", ["pbs kids", "metv toons", "toons"]],
-    ["religious", ["daystar", "tbn", "tct", "insp"]],
-    ["shop", ["shop lc", "shoplc", "hsn", "qvc", "jtv"]],
-    ["movies", ["movies gold", "movies", "grit", "comet", "charge", "outlaw", "western"]],
-    ["classic", ["antenna", "heroes", "rewind", "metv", "cozi", "laff", "buzzr", "catchy", "start tv", "ion plus", "bounce"]],
-    ["network", ["univision", "unimas", "telemundo", "nbc", "abc", "cbs", "fox", "pbs", "ion", "cw"]]
-  ]
-  var r, p, phrase
-  for (r = 0; r < rules.length; r++) {
-    for (p = 0; p < rules[r][1].length; p++) {
-      phrase = rules[r][1][p]
-      if (phrase.indexOf(" ") !== -1) {
-        if (blob.indexOf(phrase) !== -1) return rules[r][0]
-      } else if (padded.indexOf(" " + phrase + " ") !== -1) {
-        return rules[r][0]
-      }
-    }
-  }
-  return ""
-}
-
-function networkShort(network) {
-  if (!network) return "";
-  var n = String(network).replace(/\s+/g, " ").trim();
-  if (!n) return "";
-  var key = n.toUpperCase();
-  if (key === "UNIVISION") return "UNI";
-  if (key === "TELEMUNDO") return "TEL";
-  if (key === "ANTENNA TV") return "ANT";
-  if (n.length <= 4) return n;
-  return n.slice(0, 3).toUpperCase();
 }
 
 function _normIdent(s) {
@@ -150,35 +91,6 @@ function formatSlot(minutes) {
   return h + ":" + (min < 10 ? "0" : "") + min + " " + ap
 }
 
-function guideAllSlots(nowMin) {
-  if (nowMin === undefined || nowMin === null || nowMin < 0) nowMin = minutesNow()
-  var start = nowMin - (nowMin % 30)
-  var slots = []
-  for (var i = 0; i < 10; i++) slots.push(formatSlot(start + i * 30))
-  return slots
-}
-
-function visibleSlotCount(panelWidth, minSlotPx) {
-  var w = Number(panelWidth) || 0
-  var minSlot = Math.max(80, Number(minSlotPx) || 120)
-  var usable = Math.max(minSlot * 3, w - 160)
-  var n = Math.floor(usable / minSlot)
-  if (n < 3) n = 3
-  if (n > 10) n = 10
-  return n
-}
-
-function slotWindow(offset, count, nowMin) {
-  var all = guideAllSlots(nowMin)
-  var start = Math.max(0, Number(offset) || 0)
-  var n = Math.max(1, Number(count) || 3)
-  return all.slice(start, start + n)
-}
-
-function maxSlotOffset(visibleCount, nowMin) {
-  return Math.max(0, guideAllSlots(nowMin).length - Math.max(1, Number(visibleCount) || 1))
-}
-
 function programsFor(item) {
   if (item && item.programs && item.programs.length) return item.programs
   var out = []
@@ -209,50 +121,6 @@ function coveringProgram(programs, slotLabel) {
       if (clock < a) clock += 24 * 60
     }
     if (clock >= a && clock < b) return p
-  }
-  return null
-}
-
-function programBlocks(item, slots) {
-  var programs = programsFor(item)
-  var nowMin = minutesNow()
-  var blocks = []
-  var i = 0
-  while (i < slots.length) {
-    var p = coveringProgram(programs, slots[i])
-    var span = 1
-    while (p && i + span < slots.length && coveringProgram(programs, slots[i + span]) === p)
-      span++
-    var now = false
-    var s = 0
-    for (s = 0; s < span; s++) {
-      if (slotIsNow(slots[i + s], nowMin)) now = true
-    }
-    blocks.push({
-      title: p ? (p.title || "") : "",
-      start: p ? (p.start || p.start_time || "") : "",
-      end: p ? (p.end || p.end_time || "") : "",
-      span: p ? span : 1,
-      empty: !p,
-      now: now && !!p,
-      synopsis: p ? (p.synopsis || "") : "",
-      usual: p ? (p.usual || "") : "",
-      also: p ? (p.also || "") : "",
-      duration_sec: p ? (Number(p.duration_sec) || 0) : 0
-    })
-    i += p ? span : 1
-  }
-  return blocks
-}
-
-function preferredGuideBlock(item, slots) {
-  var blocks = programBlocks(item, slots)
-  var i
-  for (i = 0; i < blocks.length; i++) {
-    if (blocks[i].now && !blocks[i].empty) return blocks[i]
-  }
-  for (i = 0; i < blocks.length; i++) {
-    if (!blocks[i].empty) return blocks[i]
   }
   return null
 }
@@ -291,34 +159,6 @@ function recordDurationArg(block, nowMin) {
   var sec = Number(block.duration_sec) || 0
   if (sec > 0) return Math.max(1, Math.round(sec / 60)) + "m"
   return ""
-}
-
-function guideSlotMax() {
-  return Math.max(0, guideAllSlots().length - 1)
-}
-
-function guideSlotLabel(slot) {
-  var slots = guideAllSlots()
-  return slots[Number(slot)] || slots[0] || "Tonight"
-}
-
-function guideSlotCaption(slot) {
-  return "Tonight"
-}
-
-function guideProgramTitle(item, slot) {
-  if (!item) return "Live Broadcast"
-  if (Number(slot) === 1) return item.next_title || "Upcoming"
-  return item.title || "Live Broadcast"
-}
-
-function guideProgramTime(item, slot) {
-  if (!item) return ""
-  if (Number(slot) === 1) {
-    return item.end_time ? ("From " + item.end_time) : "Next"
-  }
-  if (item.start_time && item.end_time) return item.start_time + " – " + item.end_time
-  return "Now"
 }
 
 function _neighborShow(prog) {
@@ -419,19 +259,4 @@ function guideHourBlocks(channels, nowUnix) {
   for (t = start; t < end; t += step) blocks.push(t)
   if (!blocks.length) blocks.push(start)
   return blocks
-}
-
-function formatGuideUpdated(updatedAt) {
-  var stamp = Number(updatedAt) || 0
-  if (stamp <= 0) return "Listings have not been updated."
-  var when = new Date(stamp * 1000)
-  var now = new Date()
-  var h24 = when.getHours()
-  var h = h24 % 12
-  if (h === 0) h = 12
-  var min = when.getMinutes()
-  var clock = h + ":" + (min < 10 ? "0" : "") + min + " " + (h24 >= 12 ? "PM" : "AM")
-  if (when.toDateString() === now.toDateString()) return "Updated " + clock
-  var months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-  return "Updated " + months[when.getMonth()] + " " + when.getDate() + ", " + clock
 }

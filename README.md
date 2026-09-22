@@ -5,7 +5,7 @@
 
 OTA ATSC 1.0 for Omarchy: bar plugin, pinned PiP, dual-tuner record. Not MythTV, not Kaffeine.
 
-Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts. `omarchy-tv guide refresh` reads that on Tuner 1 into the grid. Search looks at those saved titles. Record on Tuner 1 into `~/Videos/TV` while Tuner 0 keeps the live dump. Pause-live is that dump over loopback HTTP (skip is `loadfile` in the same window). Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
+Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts. `omarchy-tv guide refresh` reads that on Tuner 1 into the flyout strip. Search looks at those saved titles. Record on Tuner 1 into `~/Videos/TV` while Tuner 0 keeps the live dump. Pause-live is that dump over loopback HTTP (skip is `loadfile` in the same window). Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
 
 Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `omarchy-tv`.
 
@@ -61,7 +61,8 @@ omarchy-tv status | scan | scan --full | list | guide | guide refresh | guide se
 omarchy-tv play "8.1 FOX" | next | prev | stop | sync | pause | live | seek 10 | fullscreen
 omarchy-tv record start 8.1 1h | stop | list | play <file> | delete <file>
 omarchy-tv favorite toggle "8.1 FOX"
-omarchy-tv pref translators off | pref filter favorites | pref library-max auto|20|50|off
+omarchy-tv pref filter favorites|watchable|all|hidden | pref library-max auto|20|50|off
+omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
 ```
 
 `pause` is throwaway `live.ts`. `record` is a keepable file. `live` `loadfile`s the dump write head, or retunes after a recording.
@@ -71,7 +72,6 @@ omarchy-tv pref translators off | pref filter favorites | pref library-max auto|
 | Key | Live TV | Recording |
 | --- | --- | --- |
 | Space | Pause (dump fills); play stays behind until `l` | Pause / resume |
-| j / k or ↓ / ↑ | Banner; tunes after you stop | Commit returns to live |
 | ← / → | Skip HTTP playhead (last hop is live, same window) | Skip; last hop retunes live |
 | l | Live write head (same window) | Return to live (new dump) |
 | r | Library record | ignored |
@@ -81,7 +81,7 @@ omarchy-tv pref translators off | pref filter favorites | pref library-max auto|
 | Wheel | Volume | same |
 | Super+LMB | Move PiP | same |
 
-MPEG-TS often has no duration; the HUD uses file size. EOF of a recording retunes live.
+Until the picture has a frame, the top bar and the bottom line stay up and the middle stays empty. After a frame, they hide on their own. MPEG-TS often has no duration; the HUD uses file size. EOF of a recording retunes live.
 
 ## Plugin IPC
 

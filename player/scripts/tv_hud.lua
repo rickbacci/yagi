@@ -31,11 +31,6 @@ local pointer_in = false
 local hud_visible = false
 local hide_timer = nil
 local HIDE_DELAY = 3.5
-local SURF_COMMIT_DELAY = 0.9
-local surf_idx = nil
-local surf_timer = nil
-local surf_busy = false
-local surf_preview = nil
 local LIVE_SLACK = 2.5
 
 -- Paths
@@ -47,9 +42,6 @@ local CHANNELS_PATH = xdg_config .. "/omarchy/tv/channels.json"
 local GUIDE_PATH = xdg_config .. "/omarchy/tv/guide.json"
 local RECORDINGS_PATH = xdg_config .. "/omarchy/tv/recordings_active.json"
 local PLAYER_STATE_PATH = xdg_config .. "/omarchy/tv/player_state.json"
-local FAVORITES_PATH = xdg_config .. "/omarchy/tv/favorites.json"
-local HIDDEN_PATH = xdg_config .. "/omarchy/tv/hidden.json"
-local UI_PREFS_PATH = xdg_config .. "/omarchy/tv/ui_prefs.json"
 local TIMESHIFT_ACTIVE_PATH = xdg_config .. "/omarchy/tv/timeshift_active.json"
 local xdg_cache = os.getenv("XDG_CACHE_HOME")
 if not xdg_cache or xdg_cache == "" then
@@ -60,9 +52,6 @@ local TIMESHIFT_DIR = xdg_cache .. "/omarchy/tv/timeshift"
 local cached_channels = {}
 local cached_guide = {}
 local cached_recordings = {}
-local cached_favorites = {}
-local cached_hidden = {}
-local cached_prefs = {}
 local cached_timeshift = {}
 
 local function reload_data()
@@ -100,36 +89,6 @@ local function reload_data()
         end
     end
 
-    local f_fav = io.open(FAVORITES_PATH, "r")
-    if f_fav then
-        local content = f_fav:read("*all")
-        f_fav:close()
-        local data = utils.parse_json(content)
-        if type(data) == "table" then
-            cached_favorites = data
-        end
-    end
-
-    local f_hid = io.open(HIDDEN_PATH, "r")
-    if f_hid then
-        local content = f_hid:read("*all")
-        f_hid:close()
-        local data = utils.parse_json(content)
-        if type(data) == "table" then
-            cached_hidden = data
-        end
-    end
-
-    local f_prefs = io.open(UI_PREFS_PATH, "r")
-    if f_prefs then
-        local content = f_prefs:read("*all")
-        f_prefs:close()
-        local data = utils.parse_json(content)
-        if type(data) == "table" then
-            cached_prefs = data
-        end
-    end
-
     cached_timeshift = {}
     local f_ts = io.open(TIMESHIFT_ACTIVE_PATH, "r")
     if f_ts then
@@ -151,6 +110,18 @@ local function timeshift_file_opt()
     local p = mp.get_opt("timeshift-file")
     if p and p ~= "" then return p end
     return nil
+end
+
+local function opted_tune()
+    local t = mp.get_opt("tune")
+    if t and t ~= "" then return t end
+    return ""
+end
+
+local function picture_ready()
+    local w = mp.get_property_number("video-params/w", 0) or 0
+    local h = mp.get_property_number("video-params/h", 0) or 0
+    return w > 0 and h > 0
 end
 
 local function follow_sock_opt()
@@ -553,13 +524,13 @@ local function guide_for_channel(matched_ch)
 end
 
 local function get_active_info()
-    if surf_preview then
-        return surf_preview, guide_for_channel(surf_preview)
-    end
     local path = mp.get_property("path") or ""
     local tune_name = nil
     if is_timeshift_playback() then
-        tune_name = tostring(cached_timeshift.tune_name or cached_timeshift.channel or "")
+        tune_name = opted_tune()
+        if tune_name == "" then
+            tune_name = tostring(cached_timeshift.tune_name or cached_timeshift.channel or "")
+        end
         if tune_name == "" then
             local f = io.open(PLAYER_STATE_PATH, "r")
             if f then
@@ -609,7 +580,6 @@ local function get_active_info()
 end
 
 local function sync_player_state()
-    if surf_preview then return end
     local ch = select(1, get_active_info())
     if ch then
         write_player_state(true, ch.tune_name or ch.name or "", ch.display_name or "")
@@ -783,7 +753,7 @@ local function render_hud()
 end
 
 local function hide_hud()
-    if surf_preview then
+    if not picture_ready() then
         return
     end
     if is_timeshift_playback() and timeshift_behind() then
@@ -808,17 +778,16 @@ local function show_hud()
             hide_timer:kill()
             hide_timer = nil
         end
+        if not picture_ready() then
+            return
+        end
         if mp.get_property_bool("pause", false) then
             return
         end
         if is_timeshift_playback() and timeshift_behind() then
             return
         end
-        local delay = HIDE_DELAY
-        if surf_preview then
-            delay = math.max(delay, SURF_COMMIT_DELAY + 2)
-        end
-        hide_timer = mp.add_timeout(delay, hide_hud)
+        hide_timer = mp.add_timeout(HIDE_DELAY, hide_hud)
     end)
     if not ok then
         mp.msg.error("show_hud: " .. tostring(err))
@@ -831,176 +800,6 @@ local function toggle_hud()
     else
         show_hud()
     end
-end
-
--- Channel surfing stays inside MPV. Spawning omarchy-tv here deadlocks:
--- Lua blocks on the subprocess, which waits on this same IPC socket.
-local function is_favorite(ch)
-    if not ch or not cached_favorites then return false end
-    local favs = {}
-    for _, f in ipairs(cached_favorites) do
-        favs[string.lower(tostring(f))] = true
-    end
-    local keys = {"name", "tune_name", "raw_name", "callsign", "channel_number", "network"}
-    for _, key in ipairs(keys) do
-        local ident = ch[key]
-        if ident and favs[string.lower(tostring(ident))] then
-            return true
-        end
-    end
-    return false
-end
-
-local function is_hidden(ch)
-    if not ch or not cached_hidden then return false end
-    local num = tostring(ch.channel_number or "")
-    if num == "" then return false end
-    for _, item in ipairs(cached_hidden) do
-        if tostring(item) == num then return true end
-    end
-    return false
-end
-
-local function surf_pool()
-    local filter = tostring((cached_prefs and cached_prefs.channel_filter) or "favorites")
-    local want_favs = filter == "favorites" or filter == "favs" or filter == "fav"
-    local pool = {}
-    for _, ch in ipairs(cached_channels) do
-        if is_hidden(ch) then
-            -- skip
-        elseif want_favs and not is_favorite(ch) then
-            -- skip
-        else
-            pool[#pool + 1] = ch
-        end
-    end
-    return pool
-end
-
-local function channel_index_for(pool, tune_name)
-    for i, ch in ipairs(pool) do
-        if ch.name == tune_name or ch.tune_name == tune_name or ch.raw_name == tune_name then
-            return i
-        end
-    end
-    return nil
-end
-
-local function live_tune_name()
-    reload_data()
-    local ts = cached_timeshift or {}
-    local name = tostring(ts.tune_name or ts.channel or "")
-    if name ~= "" then return name end
-    local saved = surf_preview
-    surf_preview = nil
-    local ch = select(1, get_active_info())
-    surf_preview = saved
-    if ch then return tostring(ch.tune_name or ch.name or "") end
-    return ""
-end
-
-local function format_ch_banner(ch)
-    if not ch then return "" end
-    local num = tostring(ch.channel_number or "")
-    local name = ch.display_name or ch.callsign or ch.name or ch.tune_name or ""
-    if num ~= "" and num ~= "OTA" and num ~= "REC" then
-        return num .. "  " .. name
-    end
-    return name
-end
-
-local function commit_surf()
-    surf_timer = nil
-    local pool = surf_pool()
-    local n = pool and #pool or 0
-    if n == 0 or not surf_idx or not pool[surf_idx] then
-        return
-    end
-    if surf_busy then
-        surf_timer = mp.add_timeout(0.3, commit_surf)
-        return
-    end
-    local ch = pool[surf_idx]
-    local target = ch.tune_name or ch.name or ch.raw_name or ""
-    if target == "" then return end
-    if target == live_tune_name() then
-        surf_preview = nil
-        show_hud()
-        return
-    end
-    surf_busy = true
-    surf_preview = ch
-    show_hud()
-    local cli = tv_cli()
-    mp.command_native_async({
-        name = "subprocess",
-        playback_only = false,
-        args = {cli, "play", target}
-    }, function()
-        surf_busy = false
-        reload_data()
-        local live = live_tune_name()
-        if surf_preview then
-            local want = surf_preview.tune_name or surf_preview.name
-            if want == live then
-                surf_preview = nil
-            end
-        end
-        show_hud()
-        -- Extra j/k during the tune already reset surf_timer. Do not
-        -- start a second play from this callback — that paused the
-        -- follow pipe and froze the picture.
-    end)
-end
-
-local function surf(delta)
-    if not cached_channels or #cached_channels == 0 then
-        reload_data()
-    else
-        local f_fav = io.open(FAVORITES_PATH, "r")
-        if f_fav then
-            local content = f_fav:read("*all")
-            f_fav:close()
-            local data = utils.parse_json(content)
-            if type(data) == "table" then cached_favorites = data end
-        end
-        local f_hid = io.open(HIDDEN_PATH, "r")
-        if f_hid then
-            local content = f_hid:read("*all")
-            f_hid:close()
-            local data = utils.parse_json(content)
-            if type(data) == "table" then cached_hidden = data end
-        end
-        local f_prefs = io.open(UI_PREFS_PATH, "r")
-        if f_prefs then
-            local content = f_prefs:read("*all")
-            f_prefs:close()
-            local data = utils.parse_json(content)
-            if type(data) == "table" then cached_prefs = data end
-        end
-        local f_ts = io.open(TIMESHIFT_ACTIVE_PATH, "r")
-        if f_ts then
-            local content = f_ts:read("*all")
-            f_ts:close()
-            local data = utils.parse_json(content)
-            if type(data) == "table" then cached_timeshift = data end
-        end
-    end
-    local pool = surf_pool()
-    local n = pool and #pool or 0
-    if n == 0 then return end
-    if not surf_idx then
-        surf_idx = channel_index_for(pool, live_tune_name()) or 1
-    end
-    surf_idx = ((surf_idx - 1 + delta) % n) + 1
-    if surf_idx < 1 then surf_idx = surf_idx + n end
-    surf_preview = pool[surf_idx]
-    show_hud()
-    if surf_timer then
-        surf_timer:kill()
-        surf_timer = nil
-    end
-    surf_timer = mp.add_timeout(SURF_COMMIT_DELAY, commit_surf)
 end
 
 local returning_live = false
@@ -1104,14 +903,6 @@ local function request_pause()
     cli_async({"pause"})
 end
 
-local function surf_next()
-    surf(1)
-end
-
-local function surf_prev()
-    surf(-1)
-end
-
 local function vol_up()
     mp.commandv("no-osd", "add", "volume", 5)
     show_hud()
@@ -1137,13 +928,6 @@ mp.register_script_message("tv-retuned", function()
         mp.commandv("set", "aid", "auto")
         mp.commandv("set", "pause", "no")
     end)
-    local live = live_tune_name()
-    if surf_preview then
-        local want = surf_preview.tune_name or surf_preview.name
-        if want == live then
-            surf_preview = nil
-        end
-    end
     show_hud()
 end)
 mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)
@@ -1307,6 +1091,12 @@ mp.add_forced_key_binding("r", "tv_record_toggle", function()
         reload_data()
         show_hud()
     end)
+end)
+
+mp.observe_property("video-params/w", "number", function(_, w)
+    if w and w > 0 then
+        show_hud()
+    end
 end)
 
 reload_data()
