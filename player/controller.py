@@ -307,10 +307,10 @@ def surfable_channels(
     channels: Optional[List[Dict[str, Any]]],
     favorites: Optional[List[Any]] = None,
     show_translators: bool = False,
-    channel_filter: str = "all",
+    channel_filter: str = "favorites",
 ) -> List[Dict[str, Any]]:
     """Channels next/prev may land on — the same list the flyout is showing."""
-    want_favs = str(channel_filter or "all").strip().lower() in ("favorites", "favs", "fav")
+    want_favs = str(channel_filter or "favorites").strip().lower() in ("favorites", "favs", "fav")
     pool: List[Dict[str, Any]] = []
     for ch in channels or []:
         if want_favs and not is_favorite_channel(ch, favorites):
@@ -513,13 +513,16 @@ class MpvController:
             matched = match_channel(channel_name, self.channels)
             target_name = (matched.get("tune_name") or matched.get("name")) if matched else channel_name
             station = matched.get("display_name", "") if matched else ""
+            Timeshift.begin_tune(target_name, station)
 
             if keep_window:
                 dump_path = Timeshift.retune_keep_window(target_name)
             else:
                 dump_path = Timeshift.start_dump(target_name, adapter_id=adapter_id)
             if not dump_path:
+                Timeshift.fail_tune(target_name, station)
                 return False
+            Timeshift.finish_tune()
 
             # stdin lavf will not switch muxes. Recycle only after the new
             # dump exists. Do not quit from HUD's `omarchy-tv play` child —
@@ -800,7 +803,7 @@ class MpvController:
             self.channels,
             favorites=load_favorites_list(),
             show_translators=bool(prefs.get("show_translators")),
-            channel_filter=str(prefs.get("channel_filter") or "all"),
+            channel_filter=str(prefs.get("channel_filter") or "favorites"),
         )
         if not pool:
             return

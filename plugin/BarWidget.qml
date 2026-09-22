@@ -25,8 +25,7 @@ BarWidget {
       root.cursorActive = false
       root.channelListOpen = !root.flyoutStatusOn
       root.reloadChannelData()
-      if (root.guideModalOpen)
-        root.guideClockMin = Model.minutesNow()
+      root.guideClockMin = Model.minutesNow()
       if (!tuneProc.running)
         root.syncPlayerState()
     }
@@ -92,7 +91,7 @@ BarWidget {
   onGuideVisibleSlotsChanged: {
     root.guideSlotOffset = Math.max(0, Math.min(root.guideSlotMax, root.guideSlotOffset))
   }
-  property string channelFilter: "all" // "all" | "favorites"
+  property string channelFilter: "favorites" // "all" | "favorites"
   property string playerMode: "live"
   property string lastLiveChannel: ""
   readonly property bool isLibraryPlayback: root.playerMode === "recording"
@@ -113,6 +112,33 @@ BarWidget {
     var hits = Model.searchGuide(root.guideData, root.guideSearchText, root.guideClockMin) || []
     if (!root.guideKind || root.guideKind === "all") return hits
     return hits.filter(function(hit) { return Model.channelKind(hit) === root.guideKind })
+  }
+
+  function roomFor(chromeHeight) {
+    var avail = popup.availableCardHeight
+    if (!(avail > 0)) avail = Style.space(720)
+    var inset = popup.verticalContentInset || 0
+    return Math.max(Style.space(96), Math.round(avail - inset - Math.max(0, chromeHeight)))
+  }
+
+  function guideBodyHeight() {
+    var inner = popup.contentHeight || 0
+    var inset = popup.verticalContentInset || 0
+    if (inner <= inset) {
+      var avail = popup.availableCardHeight
+      inner = avail > 0 ? Math.round(avail * 0.92) : Style.space(720)
+    }
+    var chrome = (guideHeader.height || 0) + (guideSearchField.implicitHeight || 0) + (guideKindFlick.height || 0) + (guideSlotNav.height || 0)
+    if (root.guideDetailOpen) chrome += guideDetailCard.implicitHeight || 0
+    chrome += Style.space(10) * 5
+    return Math.max(Style.space(120), Math.round(inner - inset - chrome))
+  }
+
+  function flyoutContentWidth() {
+    var avail = popup.availableCardWidth
+    if (!(avail > 0)) return popup.fittedContentWidth(Style.space(440))
+    var share = Math.round(avail * 0.30)
+    return popup.fittedContentWidth(Math.max(Style.space(340), Math.min(Style.space(460), share)))
   }
 
   function shiftGuideSlot(delta) {
@@ -238,10 +264,47 @@ BarWidget {
   function useListedChannel(chName) {
     if (!chName) return
     if (root.tuner0Busy && !root.tuner1Busy) {
-      root.toggleRecord(chName)
+      root.recordListedShow(chName)
       return
     }
     root.selectChannel(chName)
+  }
+
+  function recordListedShow(chName) {
+    if (!chName) return
+    if (root.isChannelRecording(chName)) {
+      root.toggleRecord(chName)
+      return
+    }
+    var ch = null
+    var list = root.channelsData || []
+    var i
+    for (i = 0; i < list.length; i++) {
+      var item = list[i]
+      if (!item) continue
+      if (item.tune_name === chName || item.name === chName) {
+        ch = item
+        break
+      }
+    }
+    var row = ch ? root.getProgram(ch) : null
+    var now = Model.minutesNow()
+    var prog = row ? Model.currentProgram(row, now) : null
+    if (prog && Model.showIsOn(prog, now)) {
+      var dur = Model.recordDurationArg(prog, now)
+      var title = (prog.title || "").toString()
+      dvrProc.running = false
+      var cmd = [root.binPath, "record", "start", chName]
+      if (dur) cmd.push(dur)
+      if (title) {
+        cmd.push("--title")
+        cmd.push(title)
+      }
+      dvrProc.command = cmd
+      dvrProc.running = true
+      return
+    }
+    root.toggleRecord(chName)
   }
 
   function cursorChannelIdent() {
@@ -689,9 +752,6 @@ BarWidget {
   function applyFavorites(jsonText) {
     try {
       root.favoritesData = JSON.parse(jsonText || "[]")
-      if (!root.filterInitialized) {
-        root.setChannelFilter((root.favoritesData && root.favoritesData.length > 0) ? "favorites" : "all")
-      }
     } catch (e) {
       root.favoritesData = []
     }
@@ -1036,6 +1096,29 @@ BarWidget {
     }
   }
 
+  property string tunePhase: ""
+  property string tuneMessage: ""
+  property string tuneSnr: ""
+  property string tuneName: ""
+  property string tuneDisplay: ""
+
+  function applyTuneStatus(raw) {
+    try {
+      var text = (raw || "").trim()
+      if (!text) return
+      var s = JSON.parse(text)
+      root.tunePhase = s.phase || ""
+      root.tuneMessage = s.message || ""
+      root.tuneName = s.tune_name || ""
+      root.tuneDisplay = s.display_name || ""
+      if (s.snr_db === null || s.snr_db === undefined || s.snr_db === "")
+        root.tuneSnr = ""
+      else
+        root.tuneSnr = Number(s.snr_db).toFixed(1) + " dB"
+    } catch (e) {
+    }
+  }
+
   function applyPlayerState(jsonText) {
     try {
       var raw = (jsonText || "").trim()
@@ -1065,6 +1148,23 @@ BarWidget {
     onFileChanged: reload()
   }
 
+  FileView {
+    id: tuneStatusFile
+    path: (Quickshell.env("HOME") || "") + "/.config/omarchy/tv/tune_status.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applyTuneStatus(text())
+    onFileChanged: reload()
+  }
+
+  Timer {
+    id: tuneStatusTimer
+    interval: 400
+    running: tuneProc.running
+    repeat: true
+    onTriggered: tuneStatusFile.reload()
+  }
+
   Timer {
     id: scanPollTimer
     interval: 500
@@ -1077,7 +1177,10 @@ BarWidget {
   Process {
     id: tuneProc
     command: []
-    onExited: playerStateFile.reload()
+    onExited: {
+      playerStateFile.reload()
+      tuneStatusFile.reload()
+    }
   }
 
   Process {
@@ -1133,7 +1236,7 @@ BarWidget {
     id: guideClockTimer
     interval: 30000
     repeat: true
-    running: root.guideModalOpen
+    running: root.popupOpen || root.guideModalOpen
     onTriggered: root.guideClockMin = Model.minutesNow()
   }
 
@@ -1221,9 +1324,7 @@ BarWidget {
         if (!(avail > 0)) return popup.fittedContentWidth(Style.space(1600))
         return popup.fittedContentWidth(avail)
       }
-      if (!(avail > 0)) return popup.fittedContentWidth(Style.space(520))
-      var third = Math.round(avail * 0.34)
-      return popup.fittedContentWidth(Math.max(Style.space(480), Math.min(Style.space(780), third)))
+      return root.flyoutContentWidth()
     }
     contentHeight: {
       if (root.guideModalOpen) {
@@ -1231,7 +1332,7 @@ BarWidget {
         if (!(availH > 0)) return popup.fittedContentHeight(Style.space(720))
         return popup.cappedContentHeight(Math.round(availH * 0.92))
       }
-      return popup.fittedContentHeight(mainCol.implicitHeight, Style.space(560))
+      return popup.fittedContentHeight(mainCol.implicitHeight)
     }
     margin: Style.gapsOut * 2
 
@@ -1290,6 +1391,11 @@ BarWidget {
         visible: !root.guideModalOpen && !root.libraryModalOpen
         width: parent.width
         spacing: Style.space(12)
+
+        Column {
+          id: remoteChrome
+          width: parent.width
+          spacing: Style.space(12)
 
         Item {
           width: parent.width
@@ -1552,12 +1658,36 @@ BarWidget {
         id: nowPlayingCard
         visible: root.activeChannelName !== ""
         readonly property var activeProg: root.getActiveProgram()
-        readonly property string showLine: (activeProg && activeProg.title) ? activeProg.title : ""
+        readonly property var onNow: activeProg ? Model.currentProgram(activeProg, root.guideClockMin) : null
+        readonly property string showLine: {
+          if (tuneProc.running) return root.tuneSnr
+          var same = root.tuneDisplay === root.getActiveDisplayName() || root.tuneName === root.activeChannelName
+          if (root.tunePhase === "failed" && root.tuneMessage && same) return root.tuneMessage
+          return (onNow && onNow.title) ? onNow.title : ""
+        }
+        property bool tuneHot: false
         width: parent.width
         implicitHeight: watchRow.implicitHeight + Style.space(12)
         radius: Style.spacing.labelGap
-        color: Style.selectedFillFor(root.bar.foreground, Color.accent)
+        color: tuneHot
+          ? Style.hoverFillFor(root.bar.foreground, Color.accent)
+          : Style.selectedFillFor(root.bar.foreground, Color.accent)
         borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
+
+        MouseArea {
+          id: tuneAgainArea
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onEntered: nowPlayingCard.tuneHot = true
+          onExited: nowPlayingCard.tuneHot = false
+          onClicked: root.playChannel(root.activeChannelName)
+          PanelToolTip {
+            visible: tuneAgainArea.containsMouse
+            text: "Tune again"
+            fontFamily: root.bar.fontFamily
+          }
+        }
 
         Item {
           id: watchRow
@@ -1614,7 +1744,7 @@ BarWidget {
               width: Math.max(0, watchLine.width - watchChannel.width - watchDot.width - watchLine.spacing * 2)
               textFormat: Text.PlainText
               text: nowPlayingCard.showLine
-              color: Color.accent
+              color: (!tuneProc.running && root.tunePhase === "failed" && nowPlayingCard.showLine === root.tuneMessage) ? Color.urgent : Color.accent
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
               elide: Text.ElideRight
@@ -1861,17 +1991,20 @@ BarWidget {
           }
         }
       }
+      }
 
       // Channel List Scroll Area
       Item {
         id: channelScrollContainer
         visible: root.showChannelBrowser && root.displayChannels.length > 0
         width: parent.width
+        implicitHeight: height
         height: {
-          var cap = Math.max(Style.space(260), Math.round((popup.availableCardHeight || Style.space(520)) * 0.50))
+          if (!visible) return 0
+          var room = root.roomFor(remoteChrome.implicitHeight + mainCol.spacing)
           var content = channelListView.implicitHeight
-          if (content > 0 && content < cap) return content
-          return cap
+          if (content > 0) return Math.min(content, room)
+          return Math.min(Style.space(160), room)
         }
         clip: true
 
@@ -1898,16 +2031,25 @@ BarWidget {
                 required property int index
                 readonly property bool isCurrent: root.activeChannelName === modelData.name || root.activeChannelName === modelData.tune_name
                 readonly property var program: root.getProgram(modelData)
+                readonly property var onNow: Model.currentProgram(program, root.guideClockMin)
                 readonly property string channelBadge: Model.getChannelBadge(modelData)
                 readonly property string netColor: Model.networkColor(modelData.network, Color.accent)
                 readonly property bool isFav: root.isFavorite(modelData.name) || (modelData.tune_name && root.isFavorite(modelData.tune_name))
 
                 width: channelListView.width
-                height: Style.space(48)
+                height: Math.max(Style.space(36), chLine.implicitHeight + Style.space(12))
                 foreground: root.bar.foreground
                 accent: Color.accent
                 hasCursor: !root.guideModalOpen && root.cursorActive && root.cursorIndex === index
                 current: isCurrent
+
+                Rectangle {
+                  anchors.left: parent.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
+                  width: Style.space(3)
+                  color: chItem.netColor
+                }
 
                 MouseArea {
                   anchors.fill: parent
@@ -1921,106 +2063,77 @@ BarWidget {
                   onWheel: function(wheel) { wheel.accepted = false }
                 }
 
-                Row {
-                  anchors.left: parent.left
+                PanelActionButton {
+                  id: favBtn
                   anchors.right: parent.right
+                  anchors.rightMargin: Style.space(6)
                   anchors.verticalCenter: parent.verticalCenter
-                  anchors.leftMargin: Style.space(8)
+                  size: Style.space(20)
+                  fontSize: Style.font.bodySmall
+                  iconText: chItem.isFav ? "★" : "☆"
+                  tooltipText: chItem.isFav ? "Remove favorite" : "Add favorite"
+                  foreground: chItem.isFav ? Color.accent : Qt.darker(root.bar.foreground, 1.8)
+                  fontFamily: root.bar.fontFamily
+                  onClicked: root.toggleFavorite(chItem.modelData.tune_name || chItem.modelData.name)
+                }
+
+                Row {
+                  id: chLine
+                  anchors.left: parent.left
+                  anchors.right: favBtn.left
+                  anchors.leftMargin: Style.space(10)
                   anchors.rightMargin: Style.space(8)
-                  spacing: Style.space(8)
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(4)
 
-                  BorderSurface {
-                    width: Style.space(46)
-                    height: Style.space(26)
-                    radius: Style.spacing.labelGap
-                    color: chItem.isCurrent ? Style.selectedFillFor(root.bar.foreground, Color.accent) : Style.normalFillFor(root.bar.foreground, Color.accent)
+                  Text {
+                    id: chNum
+                    textFormat: Text.PlainText
+                    text: chItem.channelBadge
+                    color: chItem.isCurrent ? Color.accent : root.bar.foreground
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                    width: Math.max(implicitWidth, Style.space(40))
                     anchors.verticalCenter: parent.verticalCenter
-
-                    Text {
-                      anchors.centerIn: parent
-                      textFormat: Text.PlainText
-                      text: chItem.channelBadge
-                      color: chItem.isCurrent ? Color.accent : root.bar.foreground
-                      font.family: root.bar.fontFamily
-                      font.pixelSize: Style.font.caption
-                      font.bold: true
-                    }
                   }
 
-                  Column {
-                    width: parent.width - Style.space(46) - Style.space(16)
-                    spacing: Style.space(2)
+                  Text {
+                    id: chName
+                    textFormat: Text.PlainText
+                    text: Model.getDisplayTitle(chItem.modelData)
+                    color: root.bar.foreground
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: chItem.isCurrent
                     anchors.verticalCenter: parent.verticalCenter
+                  }
 
-                    Row {
-                      width: parent.width
-                      spacing: Style.space(4)
+                  Text {
+                    id: chDot
+                    visible: !!chItem.onNow
+                    textFormat: Text.PlainText
+                    text: "·"
+                    color: Color.accent
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    anchors.verticalCenter: parent.verticalCenter
+                  }
 
-                      Text {
-                        id: chTitle
-                        textFormat: Text.PlainText
-                        text: Model.getDisplayTitle(chItem.modelData)
-                        color: root.bar.foreground
-                        font.family: root.bar.fontFamily
-                        font.pixelSize: Style.font.bodySmall
-                        font.bold: chItem.isCurrent
-                        elide: Text.ElideRight
-                        width: Math.min(
-                          implicitWidth,
-                          Math.max(
-                            Style.space(48),
-                            parent.width
-                              - (netBadge.visible ? netBadge.width + Style.space(4) : 0)
-                              - favBtn.width
-                              - Style.space(4)
-                          )
-                        )
-                      }
-
-                      BorderSurface {
-                        id: netBadge
-                        visible: chItem.modelData.network !== undefined && chItem.modelData.network !== "" && chItem.modelData.network !== "OTA"
-                        height: Style.space(16)
-                        width: netBadgeText.implicitWidth + Style.space(8)
-                        radius: 3
-                        color: "transparent"
-                        borderSpec: Border.controlSpec("normal", chItem.netColor, chItem.netColor)
-                        anchors.verticalCenter: parent.verticalCenter
-
-                        Text {
-                          id: netBadgeText
-                          anchors.centerIn: parent
-                          textFormat: Text.PlainText
-                          text: Model.networkShort(chItem.modelData.network)
-                          color: chItem.netColor
-                          font.family: root.bar.fontFamily
-                          font.pixelSize: Style.font.caption
-                          font.bold: true
-                        }
-                      }
-
-                      PanelActionButton {
-                        id: favBtn
-                        anchors.verticalCenter: parent.verticalCenter
-                        size: Style.space(20)
-                        fontSize: Style.font.bodySmall
-                        iconText: chItem.isFav ? "★" : "☆"
-                        tooltipText: chItem.isFav ? "Remove favorite" : "Add favorite"
-                        foreground: chItem.isFav ? Color.accent : Qt.darker(root.bar.foreground, 1.8)
-                        fontFamily: root.bar.fontFamily
-                        onClicked: root.toggleFavorite(chItem.modelData.tune_name || chItem.modelData.name)
-                      }
+                  Text {
+                    visible: !!chItem.onNow
+                    width: {
+                      var used = chNum.width + chName.width + chLine.spacing * 2
+                      if (chDot.visible) used += chDot.width + chLine.spacing
+                      return Math.max(0, chLine.width - used)
                     }
-
-                    Text {
-                      textFormat: Text.PlainText
-                      text: chItem.program ? ("󰥔 " + chItem.program.title) : (Model.formatFreq(chItem.modelData.frequency) + (chItem.modelData.band ? (" · " + chItem.modelData.band) : ""))
-                      color: chItem.program ? (chItem.isCurrent ? Color.accent : Qt.darker(root.bar.foreground, 1.4)) : Qt.darker(root.bar.foreground, 1.7)
-                      font.family: root.bar.fontFamily
-                      font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
-                      width: parent.width
-                    }
+                    textFormat: Text.PlainText
+                    text: chItem.onNow ? chItem.onNow.title : ""
+                    color: chItem.isCurrent ? Color.accent : Qt.darker(root.bar.foreground, 1.4)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    elide: Text.ElideRight
+                    anchors.verticalCenter: parent.verticalCenter
                   }
                 }
               }
@@ -2057,6 +2170,7 @@ BarWidget {
         spacing: Style.space(10)
 
         Item {
+          id: guideHeader
           width: parent.width
           height: Math.max(Style.space(36), guideBackBtn.implicitHeight)
 
@@ -2151,6 +2265,7 @@ BarWidget {
         }
 
         Flickable {
+          id: guideKindFlick
           width: parent.width
           height: guideKindRow.implicitHeight
           contentWidth: guideKindRow.implicitWidth
@@ -2185,6 +2300,7 @@ BarWidget {
         }
 
         Item {
+          id: guideSlotNav
           width: parent.width
           visible: !root.guideSearchActive
           height: visible ? Math.max(Style.space(32), guidePrevBtn.implicitHeight) : 0
@@ -2509,7 +2625,8 @@ BarWidget {
           id: guideGridClip
           visible: !root.guideSearchActive
           width: parent.width
-          height: visible ? Math.max(Style.space(200), Math.round((popup.availableCardHeight || Style.space(720)) * 0.72) - (root.guideDetailOpen ? (guideDetailCard.implicitHeight + Style.space(10)) : 0)) : 0
+          implicitHeight: height
+          height: visible ? root.guideBodyHeight() : 0
           clip: true
 
           Flickable {
@@ -2696,9 +2813,8 @@ BarWidget {
           id: guideSearchFlick
           visible: root.guideSearchActive
           width: parent.width
-          height: visible
-            ? Math.max(Style.space(200), Math.round((popup.availableCardHeight || Style.space(720)) * 0.72) - (root.guideDetailOpen ? (guideDetailCard.implicitHeight + Style.space(10)) : 0))
-            : 0
+          implicitHeight: height
+          height: visible ? root.guideBodyHeight() : 0
           contentWidth: width
           contentHeight: guideSearchCol.implicitHeight
           clip: true
@@ -2835,7 +2951,9 @@ BarWidget {
         spacing: Style.space(10)
 
         Item {
+          id: libraryHeader
           width: parent.width
+          implicitHeight: height
           height: Math.max(Style.space(36), libraryBackBtn.implicitHeight)
 
           BorderSurface {
@@ -2927,9 +3045,17 @@ BarWidget {
         }
 
         Item {
+          id: libraryList
           visible: root.recordingsData.length > 0
           width: parent.width
-          height: Math.min(Math.max(Style.space(280), Math.round((popup.availableCardHeight || Style.space(520)) * 0.58)), Math.max(Style.space(120), recCol.implicitHeight))
+          implicitHeight: height
+          height: {
+            if (!visible) return 0
+            var content = recCol.implicitHeight
+            var room = root.roomFor(libraryHeader.height + mainCol.spacing + Style.space(24))
+            if (content > 0) return Math.min(content, room)
+            return Math.min(Style.space(120), room)
+          }
           clip: true
 
           Flickable {

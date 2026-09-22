@@ -11,6 +11,7 @@ and the sidecar. This is not a library recording and not dvb:// cache.
 
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -20,6 +21,7 @@ import time
 from typing import Any, Dict, Optional
 
 from engine.paths import (
+    CHANNELS_JSON_PATH,
     FOLLOW_SOCKET_PATH,
     MPV_CHANNELS_CONF,
     TIMESHIFT_ACTIVE_PATH,
@@ -29,6 +31,7 @@ from engine.paths import (
     TIMESHIFT_NEXT_SOCKET_PATH,
     TIMESHIFT_SOCKET_PATH,
     TUNE_LOCK_PATH,
+    TUNE_STATUS_PATH,
 )
 
 FOLLOW_TS_PY = os.path.join(os.path.dirname(os.path.realpath(__file__)), "follow_ts.py")
@@ -320,6 +323,78 @@ class Timeshift:
         os.replace(tmp, TIMESHIFT_ACTIVE_PATH)
 
     @classmethod
+    def load_tune_status(cls) -> Dict[str, Any]:
+        try:
+            with open(TUNE_STATUS_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    @classmethod
+    def _write_tune_status(cls, payload: Dict[str, Any]) -> None:
+        os.makedirs(os.path.dirname(TUNE_STATUS_PATH), exist_ok=True)
+        tmp = f"{TUNE_STATUS_PATH}.tmp.{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, TUNE_STATUS_PATH)
+
+    @classmethod
+    def patch_tune_status(cls, **fields: Any) -> None:
+        data = cls.load_tune_status()
+        data.update(fields)
+        cls._write_tune_status(data)
+
+    @classmethod
+    def begin_tune(cls, tune_name: str, display_name: str = "") -> None:
+        cls._write_tune_status({
+            "phase": "tuning",
+            "tune_name": tune_name,
+            "display_name": display_name or tune_name,
+            "snr_db": None,
+            "message": "",
+        })
+
+    @classmethod
+    def fail_tune(cls, tune_name: str, display_name: str = "") -> None:
+        prior = cls.load_tune_status()
+        label = (display_name or tune_name or "That station").strip()
+        cls._write_tune_status({
+            "phase": "failed",
+            "tune_name": tune_name,
+            "display_name": label,
+            "snr_db": prior.get("snr_db"),
+            "message": f"{label} did not come up",
+        })
+
+    @classmethod
+    def finish_tune(cls) -> None:
+        cls._write_tune_status({
+            "phase": "ok",
+            "tune_name": "",
+            "display_name": "",
+            "snr_db": None,
+            "message": "",
+        })
+
+    @classmethod
+    def _snr_db_from_log(cls, log_path: str) -> Optional[float]:
+        """Last SNR in an mpv dump log. This tuner reports tenths of a dB."""
+        try:
+            with open(log_path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - 80000))
+                text = f.read().decode("utf-8", "replace")
+        except OSError:
+            return None
+        found = None
+        for match in re.finditer(r"SNR:\s*(\d+)", text):
+            found = int(match.group(1))
+        if found is None:
+            return None
+        return round(found / 10.0, 1)
+
+    @classmethod
     def _clear_state(cls) -> None:
         cls._write_state({"running": False, "updated_at": time.time()})
 
@@ -499,10 +574,41 @@ class Timeshift:
     @classmethod
     def wipe(cls) -> None:
         cls.stop_http()
+        cls._reap_orphan_http()
         cls.stop_follow()
         cls.stop_dump()
         cls._reap_orphan_dumps()
         cls._remove_files()
+
+    @classmethod
+    def _reap_orphan_http(cls) -> None:
+        """Stops leftover loopback servers Close lost track of.
+
+        Match the module name. A path match also hits the picture
+        (--log-file=.../hud.log).
+        """
+        try:
+            out = subprocess.check_output(
+                ["pgrep", "-a", "-f", "engine.timeshift_http"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except Exception:
+            return
+        for line in out.splitlines():
+            parts = line.split(None, 1)
+            if len(parts) < 2:
+                continue
+            cmd = parts[1]
+            if "pgrep" in cmd or "engine.timeshift_http" not in cmd:
+                continue
+            try:
+                pid = int(parts[0])
+            except ValueError:
+                continue
+            if pid <= 1 or pid == os.getpid():
+                continue
+            cls._kill_pid(pid)
 
     @classmethod
     def _reap_orphan_dumps(cls, keep_pid: int = 0) -> None:
@@ -552,6 +658,167 @@ class Timeshift:
             time.sleep(0.03)
 
     @classmethod
+    def _conf_needs_full_mux(cls, tune_name: str) -> bool:
+        video, audio = cls._conf_pids(tune_name)
+        return video <= 0 or audio <= 0
+
+    @classmethod
+    def _conf_pids(cls, tune_name: str) -> tuple:
+        name = (tune_name or "").strip()
+        try:
+            with open(MPV_CHANNELS_CONF, encoding="utf-8") as f:
+                for line in f:
+                    parts = line.strip().split(":")
+                    if len(parts) >= 6 and parts[0] == name:
+                        return int(parts[3] or 0), int(parts[4] or 0)
+        except (OSError, ValueError):
+            pass
+        return 0, 0
+
+    @classmethod
+    def _remember_pids(cls, dump_path: str) -> bool:
+        """Learn video and audio IDs from a full-mux dump and save them."""
+        try:
+            with open(dump_path, "rb") as f:
+                if f.read(1) != b"\x47":
+                    return False
+        except OSError:
+            return False
+        sample = os.path.join(os.path.dirname(dump_path), "pids.ts")
+        try:
+            with open(dump_path, "rb") as src, open(sample, "wb") as dst:
+                dst.write(src.read(1024 * 1024))
+            probe = subprocess.run(
+                ["ffprobe", "-v", "fatal", "-show_programs", "-of", "json", sample],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            data = json.loads(probe.stdout or "{}")
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            return False
+        finally:
+            try:
+                os.remove(sample)
+            except OSError:
+                pass
+        learned = {}
+        for program in data.get("programs") or []:
+            try:
+                sid = int(program.get("program_id"))
+            except (TypeError, ValueError):
+                continue
+            video = audio = 0
+            for stream in program.get("streams") or []:
+                try:
+                    pid = int(str(stream.get("id")), 16)
+                except (TypeError, ValueError):
+                    continue
+                kind = stream.get("codec_type")
+                if kind == "video" and video <= 0:
+                    video = pid
+                elif kind == "audio" and audio <= 0:
+                    audio = pid
+            if sid > 0 and video > 0 and audio > 0:
+                learned[sid] = (video, audio)
+        if not learned:
+            return False
+        cls._write_learned_pids(learned)
+        return True
+
+    @classmethod
+    def _write_learned_pids(cls, learned: Dict[int, tuple]) -> None:
+        try:
+            with open(MPV_CHANNELS_CONF, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            lines = []
+        changed = False
+        out = []
+        for line in lines:
+            parts = line.split(":")
+            if len(parts) >= 6:
+                try:
+                    sid = int(parts[5])
+                except ValueError:
+                    sid = -1
+                if sid in learned:
+                    video, audio = learned[sid]
+                    if int(parts[3] or 0) <= 0 or int(parts[4] or 0) <= 0:
+                        parts[3] = str(video)
+                        parts[4] = str(audio)
+                        line = ":".join(parts)
+                        changed = True
+            out.append(line)
+        if changed:
+            tmp = f"{MPV_CHANNELS_CONF}.tmp.{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("\n".join(out) + ("\n" if out else ""))
+            os.replace(tmp, MPV_CHANNELS_CONF)
+        try:
+            with open(CHANNELS_JSON_PATH, encoding="utf-8") as f:
+                payload = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return
+        channels = payload.get("channels") if isinstance(payload, dict) else None
+        if not isinstance(channels, list):
+            return
+        touched = False
+        for ch in channels:
+            if not isinstance(ch, dict):
+                continue
+            try:
+                sid = int(ch.get("service_id"))
+            except (TypeError, ValueError):
+                continue
+            if sid not in learned:
+                continue
+            video, audio = learned[sid]
+            if int(ch.get("video_pid") or 0) <= 0 or int(ch.get("audio_pid") or 0) <= 0:
+                ch["video_pid"] = video
+                ch["audio_pid"] = audio
+                touched = True
+        if not touched:
+            return
+        tmp = f"{CHANNELS_JSON_PATH}.tmp.{os.getpid()}"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, CHANNELS_JSON_PATH)
+
+    @classmethod
+    def _capture_dump(
+        cls,
+        name: str,
+        adapter_id: int,
+        dest: str,
+        sock: str,
+        log_name: str,
+    ) -> Optional[subprocess.Popen]:
+        needs_full = cls._conf_needs_full_mux(name)
+        proc = cls._spawn_dump(name, adapter_id, dest, sock, log_name=log_name)
+        if proc is None:
+            return None
+        log_path = os.path.join(TIMESHIFT_DIR, log_name)
+        if not cls._wait_dump_playable(proc, dest, log_path):
+            cls._kill_pid(proc.pid)
+            return None
+        if not needs_full or not cls._remember_pids(dest):
+            return proc
+        cls._kill_pid(proc.pid)
+        try:
+            if os.path.isfile(dest):
+                os.remove(dest)
+        except OSError:
+            pass
+        proc = cls._spawn_dump(name, adapter_id, dest, sock, log_name=log_name)
+        if proc is None:
+            return None
+        if cls._wait_dump_playable(proc, dest, log_path):
+            return proc
+        cls._kill_pid(proc.pid)
+        return None
+
+    @classmethod
     def _spawn_dump(
         cls,
         name: str,
@@ -576,8 +843,12 @@ class Timeshift:
             f"--dvbin-file={MPV_CHANNELS_CONF}",
             "--idle=no",
             f"--log-file={os.path.join(TIMESHIFT_DIR, log_name)}",
-            f"dvb://{name}",
         ]
+        # A 0:0 lineup filters only the program tables, so the file never
+        # becomes a picture. The whole mux still has the video.
+        if cls._conf_needs_full_mux(name):
+            cmd.append("--dvbin-full-transponder=yes")
+        cmd.append(f"dvb://{name}")
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -589,12 +860,19 @@ class Timeshift:
         return proc
 
     @classmethod
-    def _wait_dump_playable(cls, proc: subprocess.Popen, dest: str) -> bool:
+    def _wait_dump_playable(cls, proc: subprocess.Popen, dest: str, log_path: Optional[str] = None) -> bool:
         deadline = time.time() + DUMP_WAIT_SECS
         last_size = 0
+        next_note = 0.0
         while time.time() < deadline:
             if isinstance(proc.poll(), int):
                 return False
+            now = time.time()
+            if log_path and now >= next_note:
+                next_note = now + 0.4
+                snr = cls._snr_db_from_log(log_path)
+                if snr is not None:
+                    cls.patch_tune_status(snr_db=snr)
             try:
                 size = os.path.getsize(dest) if os.path.isfile(dest) else 0
             except OSError:
@@ -675,7 +953,7 @@ class Timeshift:
         cls._reap_orphan_dumps()
         cls._wait_frontend_free(timeout=0.8, adapter_id=adapter_id)
         sock = TIMESHIFT_SOCKET_PATH
-        proc = cls._spawn_dump(name, adapter_id, TIMESHIFT_FILE, sock)
+        proc = cls._capture_dump(name, adapter_id, TIMESHIFT_FILE, sock, "dump.log")
         if proc is None:
             if keep_follow:
                 cls._write_state({
@@ -706,11 +984,7 @@ class Timeshift:
             payload["follow_pid"] = follow_pid
             payload["follow_socket"] = follow_socket
         cls._write_state(payload)
-
-        if cls._wait_dump_playable(proc, TIMESHIFT_FILE):
-            return TIMESHIFT_FILE
-        cls.stop_dump(keep_follow=keep_follow)
-        return None
+        return TIMESHIFT_FILE
 
     @classmethod
     def retune_keep_window(cls, tune_name: str) -> Optional[str]:
@@ -746,14 +1020,14 @@ class Timeshift:
                 if live_sock == TIMESHIFT_NEXT_SOCKET_PATH
                 else TIMESHIFT_NEXT_SOCKET_PATH
             )
-            proc = cls._spawn_dump(
+            proc = cls._capture_dump(
                 name,
                 other.adapter_id,
                 TIMESHIFT_NEXT_FILE,
                 next_sock,
-                log_name="dump-next.log",
+                "dump-next.log",
             )
-            if proc is not None and cls._wait_dump_playable(proc, TIMESHIFT_NEXT_FILE):
+            if proc is not None:
                 cls.stop_dump(keep_follow=True)
                 cls._reap_orphan_dumps(keep_pid=proc.pid)
                 try:
@@ -786,6 +1060,12 @@ class Timeshift:
                     os.remove(TIMESHIFT_NEXT_FILE)
             except OSError:
                 pass
+            try:
+                have = os.path.getsize(TIMESHIFT_FILE) if os.path.isfile(TIMESHIFT_FILE) else 0
+            except OSError:
+                have = 0
+            if have >= MIN_PLAYABLE_BYTES:
+                return None
 
         cls.send_follow_pause()
         return cls.start_dump(name, keep_follow=True)

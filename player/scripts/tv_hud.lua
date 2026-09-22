@@ -847,7 +847,7 @@ local function is_favorite(ch)
 end
 
 local function surf_pool()
-    local filter = tostring((cached_prefs and cached_prefs.channel_filter) or "all")
+    local filter = tostring((cached_prefs and cached_prefs.channel_filter) or "favorites")
     local want_favs = filter == "favorites" or filter == "favs" or filter == "fav"
     local show_dupes = cached_prefs and cached_prefs.show_translators == true
     local pool = {}

@@ -1,5 +1,6 @@
 """Live pause buffer: growing MPEG-TS dump, not dvb:// cache."""
 
+import json
 import os
 import socket
 import tempfile
@@ -34,6 +35,29 @@ class TestTimeshift(unittest.TestCase):
             self.assertFalse(os.path.exists(junk))
             self.assertFalse(os.path.exists(nested))
             self.assertTrue(os.path.isdir(tmp_dir))
+
+    def test_remove_files_keeps_the_two_logs(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            for name in ("hud.log", "dump.log", "dump-next.log", "live.ts"):
+                with open(os.path.join(tmp_dir, name), "wb") as f:
+                    f.write(b"x")
+            with patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
+                Timeshift._remove_files()
+            self.assertTrue(os.path.exists(os.path.join(tmp_dir, "hud.log")))
+            self.assertTrue(os.path.exists(os.path.join(tmp_dir, "dump.log")))
+            self.assertFalse(os.path.exists(os.path.join(tmp_dir, "dump-next.log")))
+            self.assertFalse(os.path.exists(os.path.join(tmp_dir, "live.ts")))
+
+    def test_reap_orphan_http_skips_the_player(self):
+        listing = "\n".join([
+            "111 python3 -m engine.timeshift_http /cache/omarchy/tv/timeshift/live.ts",
+            "222 mpv --log-file=/cache/omarchy/tv/timeshift/hud.log http://127.0.0.1/live.ts",
+            "333 pgrep -a -f engine.timeshift_http",
+        ])
+        with patch("engine.timeshift.subprocess.check_output", return_value=listing), \
+             patch.object(Timeshift, "_kill_pid") as kill:
+            Timeshift._reap_orphan_http()
+        kill.assert_called_once_with(111)
 
     def test_is_timeshift_path(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -218,6 +242,7 @@ class TestTimeshift(unittest.TestCase):
                  patch.object(Timeshift, "stop_dump"), \
                  patch.object(Timeshift, "stop_follow"), \
                  patch.object(Timeshift, "_reap_orphan_dumps"), \
+                 patch.object(Timeshift, "_reap_orphan_http"), \
                  patch.object(Timeshift, "_remove_files"):
                 Timeshift.start_http()
                 pid = int(Timeshift.load_state().get("http_pid") or 0)
@@ -273,6 +298,7 @@ class TestTimeshift(unittest.TestCase):
                 self.assertIn("--stream-dump=" + live, cmd)
                 self.assertTrue(any(str(a).startswith("--log-file=") for a in cmd))
                 self.assertIn("dvb://FOX", cmd)
+                self.assertIn("--dvbin-full-transponder=yes", cmd)
                 self.assertIn("--dvbin-card=0", cmd)
                 self.assertIn("--vo=null", cmd)
                 data = Timeshift.load_state()
@@ -585,6 +611,111 @@ class TestTimeshift(unittest.TestCase):
                 data = Timeshift.load_state()
             self.assertEqual(data["socket"], sock)
             self.assertEqual(data["pid"], 9999)
+
+    def test_retune_keep_window_keeps_the_picture_when_the_side_dump_fails(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            nxt = os.path.join(tmp_dir, "live.next.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            sock = os.path.join(tmp_dir, "dump.sock")
+            next_sock = os.path.join(tmp_dir, "dump-next.sock")
+            follow_sock = os.path.join(tmp_dir, "follow.sock")
+            proc = MagicMock()
+            proc.pid = 8888
+            proc.poll.return_value = None
+
+            def fake_popen(*_args, **_kwargs):
+                with open(nxt, "wb") as f:
+                    f.write(b"short")
+                return proc
+
+            with patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
+                 patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_NEXT_FILE", nxt), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
+                 patch("engine.timeshift.TIMESHIFT_NEXT_SOCKET_PATH", next_sock), \
+                 patch("engine.timeshift.FOLLOW_SOCKET_PATH", follow_sock), \
+                 patch("engine.timeshift.MPV_CHANNELS_CONF", os.path.join(tmp_dir, "channels.conf")), \
+                 patch("engine.tuner.TunerManager.get_available_tuner") as mock_tuner, \
+                 patch.object(Timeshift, "send_follow_pause") as pause, \
+                 patch.object(Timeshift, "start_dump") as start, \
+                 patch.object(Timeshift, "_wait_dump_playable", return_value=False), \
+                 patch.object(Timeshift, "_kill_pid") as kill, \
+                 patch("subprocess.Popen", side_effect=fake_popen):
+                mock_tuner.return_value = MagicMock(adapter_id=1)
+                Timeshift._write_state({
+                    "running": True,
+                    "pid": 1111,
+                    "adapter_id": 0,
+                    "follow_pid": 2222,
+                    "follow_socket": follow_sock,
+                })
+                with open(live, "wb") as f:
+                    f.write(b"x" * (256 * 1024))
+                path = Timeshift.retune_keep_window("WBNX-HD")
+                self.assertIsNone(path)
+                start.assert_not_called()
+                pause.assert_not_called()
+                kill.assert_called_with(8888)
+                self.assertFalse(os.path.exists(nxt))
+                with open(live, "rb") as f:
+                    self.assertEqual(len(f.read()), 256 * 1024)
+                data = Timeshift.load_state()
+                self.assertEqual(data["pid"], 1111)
+                self.assertEqual(data["adapter_id"], 0)
+
+    def test_snr_db_from_log_is_tenths(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            log = os.path.join(tmp_dir, "dump-next.log")
+            with open(log, "w", encoding="utf-8") as f:
+                f.write("SNR: 100\nSNR: 223\n")
+            self.assertEqual(Timeshift._snr_db_from_log(log), 22.3)
+
+    def test_fail_tune_keeps_the_signal_and_names_the_station(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            status = os.path.join(tmp_dir, "tune_status.json")
+            with patch("engine.timeshift.TUNE_STATUS_PATH", status):
+                Timeshift.begin_tune("WBNX-HD", "CW 55 (WBNX)")
+                Timeshift.patch_tune_status(snr_db=22.3)
+                Timeshift.fail_tune("WBNX-HD", "CW 55 (WBNX)")
+                data = Timeshift.load_tune_status()
+            self.assertEqual(data["phase"], "failed")
+            self.assertEqual(data["snr_db"], 22.3)
+            self.assertEqual(data["message"], "CW 55 (WBNX) did not come up")
+
+    def test_remember_pids_writes_the_lineup(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            conf = os.path.join(tmp_dir, "channels.conf")
+            listed = os.path.join(tmp_dir, "channels.json")
+            dump = os.path.join(tmp_dir, "live.ts")
+            with open(conf, "w", encoding="utf-8") as f:
+                f.write("WEWSHD:479028615:8VSB:0:0:3\n5.1:479028615:8VSB:0:0:3\n")
+            with open(listed, "w", encoding="utf-8") as f:
+                json.dump({"channels": [{"name": "WEWSHD", "service_id": 3, "video_pid": 0, "audio_pid": 0}]}, f)
+            with open(dump, "wb") as f:
+                f.write(b"\x47" + b"\x00" * 200)
+            probe = json.dumps({
+                "programs": [{
+                    "program_id": 3,
+                    "streams": [
+                        {"codec_type": "video", "id": "0x31", "codec_name": "mpeg2video"},
+                        {"codec_type": "audio", "id": "0x34", "codec_name": "ac3"},
+                    ],
+                }]
+            })
+            with patch("engine.timeshift.MPV_CHANNELS_CONF", conf), \
+                 patch("engine.timeshift.CHANNELS_JSON_PATH", listed), \
+                 patch("subprocess.run", return_value=MagicMock(stdout=probe)):
+                self.assertTrue(Timeshift._remember_pids(dump))
+                self.assertFalse(Timeshift._conf_needs_full_mux("WEWSHD"))
+            with open(conf, encoding="utf-8") as f:
+                text = f.read()
+            self.assertIn("WEWSHD:479028615:8VSB:49:52:3", text)
+            with open(listed, encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertEqual(saved["channels"][0]["video_pid"], 49)
+            self.assertEqual(saved["channels"][0]["audio_pid"], 52)
 
 
 if __name__ == "__main__":

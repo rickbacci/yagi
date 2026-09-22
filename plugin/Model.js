@@ -19,6 +19,13 @@ function bandColor(band, accent, foreground) {
 }
 
 function networkColor(network, fallback) {
+  var n = String(network || "").toUpperCase()
+  if (n === "NBC" || n === "CW") return "#A6E3A1"
+  if (n === "ABC") return "#F9E2AF"
+  if (n === "FOX") return "#B489FA"
+  if (n === "CBS") return "#CBA6F7"
+  if (n === "PBS") return "#94E2D5"
+  if (n === "UNIVISION") return "#F38BA8"
   return fallback
 }
 
@@ -180,6 +187,11 @@ function programsFor(item) {
   if (item && item.next_title)
     out.push({ start: item.end_time || "", end: "", title: item.next_title })
   return out
+}
+
+function currentProgram(item, nowMin) {
+  var now = (nowMin === undefined || nowMin === null || nowMin < 0) ? minutesNow() : nowMin
+  return coveringProgram(programsFor(item), formatSlot(now))
 }
 
 function coveringProgram(programs, slotLabel) {

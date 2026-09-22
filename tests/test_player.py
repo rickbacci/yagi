@@ -187,11 +187,17 @@ class TestMpvPlayerController(unittest.TestCase):
         self.lock_path = os.path.join(self.tmp_dir.name, "tune.lock")
         self._lock_patcher = patch("engine.timeshift.TUNE_LOCK_PATH", self.lock_path)
         self._lock_patcher.start()
+        self._tune_status_patcher = patch(
+            "engine.timeshift.TUNE_STATUS_PATH",
+            os.path.join(self.tmp_dir.name, "tune_status.json"),
+        )
+        self._tune_status_patcher.start()
         self._reap_patcher = patch.object(MpvController, "_reap_stale_window")
         self._reap_patcher.start()
 
     def tearDown(self):
         self._reap_patcher.stop()
+        self._tune_status_patcher.stop()
         self._lock_patcher.stop()
         self._state_patcher.stop()
         self._prefs_patcher.stop()
@@ -436,6 +442,11 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self.lock_path = os.path.join(self.tmp_dir.name, "tune.lock")
         self._lock_patcher = patch("engine.timeshift.TUNE_LOCK_PATH", self.lock_path)
         self._lock_patcher.start()
+        self._tune_status_patcher = patch(
+            "engine.timeshift.TUNE_STATUS_PATH",
+            os.path.join(self.tmp_dir.name, "tune_status.json"),
+        )
+        self._tune_status_patcher.start()
         self._reap_patcher = patch.object(MpvController, "_reap_stale_window")
         self._reap_patcher.start()
         self.server = FakeMpvIpc(self.controller.socket_path, path_value=self.dump_path)
@@ -444,6 +455,7 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
     def tearDown(self):
         self.server.stop()
         self._reap_patcher.stop()
+        self._tune_status_patcher.stop()
         self._lock_patcher.stop()
         self._wipe_patcher.stop()
         self._ts_path_patcher.stop()
@@ -801,6 +813,22 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("visible: root.guideRefreshing", src)
         self.assertIn("text: \"Updating the Guide\"", src)
         self.assertIn("useListedChannel", src)
+        self.assertIn("function recordListedShow", src)
+        self.assertIn("Model.currentProgram(program, root.guideClockMin)", src)
+        self.assertIn("chItem.onNow", src)
+        self.assertIn("text: chItem.onNow ? chItem.onNow.title : \"\"", src)
+        self.assertIn("function roomFor", src)
+        self.assertIn("function flyoutContentWidth", src)
+        self.assertIn("function guideBodyHeight", src)
+        self.assertIn("property string channelFilter: \"favorites\"", src)
+        self.assertIn("property bool showTranslators: false", src)
+        self.assertIn("text: \"Tune again\"", src)
+        self.assertIn("root.playChannel(root.activeChannelName)", src)
+        self.assertIn("tune_status.json", src)
+        self.assertIn("root.tuneDisplay", src)
+        self.assertIn("root.tunePhase === \"failed\"", src)
+        self.assertIn("color: chItem.netColor", src)
+        self.assertIn("Model.recordDurationArg", src)
         self.assertIn("isLiveSession", src)
         self.assertIn("isLibraryPlayback", src)
         self.assertNotIn("Seek back 15 seconds", src)
@@ -846,6 +874,8 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("function guidePlayIdent", js)
         self.assertIn("function showIsOn", js)
         self.assertIn("function recordDurationArg", js)
+        self.assertIn("function currentProgram", js)
+        self.assertIn("#F9E2AF", js)
         self.assertIn("function searchGuide", js)
         self.assertIn("function channelKind", js)
         self.assertIn("guideKind", src)

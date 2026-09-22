@@ -25,6 +25,7 @@ TIMESHIFT_DIR = os.path.join(_XDG_CACHE, "omarchy", "tv", "timeshift")
 TIMESHIFT_FILE = os.path.join(TIMESHIFT_DIR, "live.ts")
 TIMESHIFT_NEXT_FILE = os.path.join(TIMESHIFT_DIR, "live.next.ts")
 TIMESHIFT_ACTIVE_PATH = os.path.join(CONFIG_DIR, "timeshift_active.json")
+TUNE_STATUS_PATH = os.path.join(CONFIG_DIR, "tune_status.json")
 
 
 def get_runtime_socket(name: str) -> str:
