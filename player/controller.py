@@ -952,6 +952,80 @@ class MpvController:
         update_player_state(False)
 
 
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def _wait_while(still, timeout: float) -> bool:
+    """True once `still()` is false. False if it stays true through the timeout."""
+    deadline = time.time() + max(0.0, float(timeout))
+    while still():
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.05)
+    return True
+
+
+def reap_after_exit(pid: int, pid_wait: float = 8.0, lock_wait: float = 90.0) -> bool:
+    """After this window pid is gone and no tune holds the lock, reconcile.
+
+    True means the dump was kept: the window was still alive, a tune was
+    still locking, or a player is up. False means the pause file was deleted.
+    """
+    if not _wait_while(lambda: _pid_alive(pid), pid_wait):
+        return True
+    if not _wait_while(Timeshift.tune_lock_held, lock_wait):
+        return True
+    return MpvController().reconcile()
+
+
+def _detach_stdio() -> None:
+    try:
+        fd = os.open(os.devnull, os.O_RDWR)
+    except OSError:
+        return
+    try:
+        os.dup2(fd, 0)
+        os.dup2(fd, 1)
+        os.dup2(fd, 2)
+    finally:
+        if fd > 2:
+            os.close(fd)
+
+
+def spawn_reap(pid: int) -> None:
+    """Leave the closing window's process and reap once that pid is dead.
+
+    The parent returns immediately. Super+W runs this from inside mpv, so
+    waiting here would sit on the process that has to exit.
+    """
+    if pid <= 1:
+        return
+    try:
+        if os.fork() > 0:
+            return
+    except OSError:
+        return
+    try:
+        os.setsid()
+        if os.fork() > 0:
+            os._exit(0)
+    except OSError:
+        os._exit(1)
+    try:
+        os.chdir("/")
+        _detach_stdio()
+        reap_after_exit(pid)
+    finally:
+        os._exit(0)
+
+
 if __name__ == "__main__":
     controller = MpvController()
     print("MPV Running:", controller.is_running())

@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import unittest
 import tempfile
 from unittest.mock import patch, MagicMock
@@ -21,6 +22,8 @@ from player.controller import (
     channel_index,
     _toggle_omarchy_fullscreen,
     OMARCHY_FULLSCREEN_LUA,
+    reap_after_exit,
+    spawn_reap,
 )
 from engine.paths import FOLLOW_FIFO_PATH
 from engine.enrichment import enrich_and_sort_channels, load_station_map
@@ -405,6 +408,69 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertTrue(data["running"])
         self.assertEqual(data["channel"], "WKYC-HD")
 
+    def test_reap_after_exit_wipes_when_window_is_gone(self):
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        with patch.object(MpvController, "reconcile", return_value=False) as mock_rec:
+            kept = reap_after_exit(dead.pid, pid_wait=0.3, lock_wait=0.2)
+        self.assertFalse(kept)
+        mock_rec.assert_called_once()
+
+    def test_reap_after_exit_keeps_dump_while_window_lives(self):
+        with patch.object(MpvController, "reconcile", return_value=False) as mock_rec:
+            kept = reap_after_exit(os.getpid(), pid_wait=0.15, lock_wait=0.1)
+        self.assertTrue(kept)
+        mock_rec.assert_not_called()
+
+    def test_reap_after_exit_keeps_dump_while_tune_lock_held(self):
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        Timeshift.acquire_tune_lock()
+        try:
+            with patch.object(MpvController, "reconcile", return_value=False) as mock_rec:
+                kept = reap_after_exit(dead.pid, pid_wait=0.2, lock_wait=0.15)
+            self.assertTrue(kept)
+            mock_rec.assert_not_called()
+        finally:
+            Timeshift.release_tune_lock()
+
+    def test_reap_after_exit_wipes_once_tune_lock_clears(self):
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        Timeshift.acquire_tune_lock()
+
+        def release():
+            time.sleep(0.12)
+            Timeshift.release_tune_lock()
+
+        threading.Thread(target=release, daemon=True).start()
+        with patch.object(MpvController, "reconcile", return_value=False) as mock_rec:
+            kept = reap_after_exit(dead.pid, pid_wait=0.2, lock_wait=2.0)
+        self.assertFalse(kept)
+        mock_rec.assert_called_once()
+
+    def test_spawn_reap_parent_returns_without_waiting(self):
+        with patch("player.controller.os.fork", return_value=1) as mock_fork, \
+             patch("player.controller.reap_after_exit") as mock_reap:
+            spawn_reap(4321)
+            spawn_reap(0)
+        mock_fork.assert_called_once()
+        mock_reap.assert_not_called()
+
+    def test_spawn_reap_grandchild_detaches_then_reaps(self):
+        with patch("player.controller.os.fork", side_effect=[0, 0]), \
+             patch("player.controller.os.setsid") as mock_setsid, \
+             patch("player.controller.os.chdir") as mock_chdir, \
+             patch("player.controller._detach_stdio") as mock_detach, \
+             patch("player.controller.os._exit") as mock_exit, \
+             patch("player.controller.reap_after_exit") as mock_reap:
+            spawn_reap(4321)
+        mock_setsid.assert_called_once()
+        mock_chdir.assert_called_once_with("/")
+        mock_detach.assert_called_once()
+        mock_reap.assert_called_once_with(4321)
+        mock_exit.assert_called_with(0)
+
     @patch("player.controller.update_player_state")
     @patch.object(MpvController, "send_command", return_value=None)
     def test_is_running_does_not_clear_state_on_ipc_failure(self, mock_send, mock_update):
@@ -734,6 +800,8 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertNotIn("Projects/personal", src)
         self.assertIn("debug.getinfo(1, \"S\")", src)
         self.assertIn("/bin/omarchy-tv", src)
+        self.assertIn('args = {cli, "sync", "--reap", pid}', src)
+        self.assertIn("detach = true", src)
 
 
 class TestOmarchyFullscreen(unittest.TestCase):

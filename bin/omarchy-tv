@@ -357,6 +357,11 @@ def cmd_stop(args):
 
 
 def cmd_sync(args):
+    pid = int(getattr(args, "reap", 0) or 0)
+    if pid > 1:
+        from player.controller import spawn_reap
+        spawn_reap(pid)
+        return
     MpvController().reconcile()
 
 
@@ -611,7 +616,9 @@ def main():
     subparsers.add_parser("next", help="Tune next channel").set_defaults(func=cmd_next)
     subparsers.add_parser("prev", help="Tune previous channel").set_defaults(func=cmd_prev)
     subparsers.add_parser("stop", help="Close TV player").set_defaults(func=cmd_stop)
-    subparsers.add_parser("sync", help="Clear now-playing if the TV window is already gone").set_defaults(func=cmd_sync)
+    p_sync = subparsers.add_parser("sync", help="Clear now-playing if the TV window is already gone")
+    p_sync.add_argument("--reap", type=int, default=0, help=argparse.SUPPRESS)
+    p_sync.set_defaults(func=cmd_sync)
 
     # record / dvr
     p_rec = subparsers.add_parser("record", aliases=["dvr", "rec"], help="DVR recording control")

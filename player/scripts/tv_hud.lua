@@ -1034,10 +1034,12 @@ mp.register_event("shutdown", function()
     pcall(write_player_state, false, "", "")
     local cli = tv_cli()
     if cli and cli ~= "" then
+        local pid = tostring(mp.get_property_number("pid", 0) or 0)
         mp.command_native_async({
             name = "subprocess",
             playback_only = false,
-            args = {cli, "sync"},
+            detach = true,
+            args = {cli, "sync", "--reap", pid},
         }, function() end)
     end
 end)
