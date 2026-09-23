@@ -29,6 +29,41 @@ def cmd_status(args):
         print(f"  [{t.adapter_id}] {t.name} ({status}) - Systems: {t.delivery_systems}")
 
 
+def _print_signal(adapter_id: int) -> None:
+    reading = TunerManager.read_signal(adapter_id)
+    if reading is None:
+        print(f"Tuner {adapter_id} has no reading")
+        return
+    if not reading["locked"] or reading["snr_db"] is None:
+        print(f"Tuner {adapter_id}  no lock")
+        return
+    print(f"Tuner {adapter_id}  {reading['snr_db']:.1f} dB  strength {reading['strength_pct']:.0f}%")
+
+
+def _print_signal_plain(adapter_id: int) -> None:
+    reading = TunerManager.read_signal(adapter_id)
+    if reading is None or not reading["locked"] or reading["snr_db"] is None:
+        print("none")
+        return
+    print(f"{reading['snr_db']:.1f}")
+
+
+def cmd_signal(args):
+    adapter_id = args.adapter
+    if args.plain:
+        _print_signal_plain(adapter_id)
+        return
+    if args.action != "watch":
+        _print_signal(adapter_id)
+        return
+    try:
+        while True:
+            _print_signal(adapter_id)
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print()
+
+
 def cmd_scan(args):
     print("=" * 60)
     mode = "Fast Scan (VHF-High + UHF: 30 frequencies)" if args.quick else "Full Scan (All 68 frequencies)"
@@ -675,6 +710,12 @@ def main():
     # status
     p_status = subparsers.add_parser("status", help="Show tuner and playback status")
     p_status.set_defaults(func=cmd_status)
+
+    p_signal = subparsers.add_parser("signal", help="Show SNR and strength for the picture tuner")
+    p_signal.add_argument("action", nargs="?", choices=["watch"], help="Print a new reading each second")
+    p_signal.add_argument("--plain", action="store_true", help=argparse.SUPPRESS)
+    p_signal.add_argument("--adapter", type=int, default=0, help="0 is the picture, 1 is scan and record")
+    p_signal.set_defaults(func=cmd_signal)
 
     # scan
     p_scan = subparsers.add_parser("scan", help="Scan for ATSC broadcast channels")

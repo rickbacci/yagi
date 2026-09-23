@@ -3,7 +3,7 @@ Unit tests for TunerManager and TunerAdapter.
 """
 
 import unittest
-from engine.tuner import LIVE_ADAPTER, TunerManager, WORK_ADAPTER
+from engine.tuner import LIVE_ADAPTER, TunerManager, WORK_ADAPTER, decode_frontend
 
 
 def _has_atsc_tuner() -> bool:
@@ -32,6 +32,15 @@ class TestTuner(unittest.TestCase):
         if tuner:
             self.assertTrue(tuner.supports_atsc)
             self.assertFalse(tuner.is_busy)
+
+    def test_decode_frontend_snr_is_tenths_of_a_db(self):
+        reading = decode_frontend(0x1F, 55704, 200)
+        self.assertTrue(reading["locked"])
+        self.assertEqual(reading["snr_db"], 20.0)
+        self.assertEqual(reading["strength_pct"], 85.0)
+        quiet = decode_frontend(0, None, None)
+        self.assertFalse(quiet["locked"])
+        self.assertIsNone(quiet["snr_db"])
 
     def test_job_adapters_are_pinned(self):
         self.assertEqual(LIVE_ADAPTER, 0)

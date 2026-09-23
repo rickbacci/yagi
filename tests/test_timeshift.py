@@ -1023,6 +1023,29 @@ class TestTimeshift(unittest.TestCase):
                 self.assertFalse(Timeshift._conf_needs_full_mux("FOX"))
                 self.assertEqual(Timeshift.service_id("WUAB"), 4)
 
+    def test_shared_tune_name_uses_the_channel_number(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            conf = os.path.join(tmp_dir, "channels.conf")
+            with open(conf, "w", encoding="utf-8") as f:
+                f.write(
+                    "KONV-LD:527028615:8VSB:0:0:1001\n"
+                    "28.1:527028615:8VSB:0:0:1001\n"
+                    "KONV-LD:527028615:8VSB:0:0:1002\n"
+                    "28.2:527028615:8VSB:0:0:1002\n"
+                    "WKYC-HD:503028615:8VSB:49:52:1\n"
+                    "3.1:503028615:8VSB:49:52:1\n"
+                )
+            with patch("engine.timeshift.MPV_CHANNELS_CONF", conf):
+                self.assertEqual(Timeshift.conf_name({
+                    "tune_name": "KONV-LD", "channel_number": "28.1",
+                }), "28.1")
+                self.assertEqual(Timeshift.conf_name({
+                    "tune_name": "KONV-LD", "channel_number": "28.2",
+                }), "28.2")
+                self.assertEqual(Timeshift.conf_name({
+                    "tune_name": "WKYC-HD", "channel_number": "3.1",
+                }), "WKYC-HD")
+
     def test_learned_pid_replaces_a_copy_on_that_tower_only(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             conf = os.path.join(tmp_dir, "channels.conf")

@@ -290,7 +290,12 @@ BarWidget {
       return
     }
     var ch = root.displayChannels[root.cursorIndex]
-    if (ch) root.useListedChannel(ch.tune_name || ch.name)
+    if (ch) root.useListedChannel(root.listedKey(ch))
+  }
+
+  function listedKey(ch) {
+    if (!ch) return ""
+    return ch.channel_number || ch.tune_name || ch.name || ""
   }
 
   function useListedChannel(chName) {
@@ -503,14 +508,14 @@ BarWidget {
     var idx = -1
     for (var i = 0; i < list.length; i++) {
       var ch = list[i]
-      if ((ch.name || "").toLowerCase() === q || (ch.tune_name || "").toLowerCase() === q) {
+      if ((ch.channel_number || "").toLowerCase() === q || (ch.name || "").toLowerCase() === q || (ch.tune_name || "").toLowerCase() === q) {
         idx = i
         break
       }
     }
     var next = idx < 0 ? (delta > 0 ? 0 : list.length - 1) : ((idx + delta + list.length) % list.length)
     var target = list[next]
-    root.playChannel(target.tune_name || target.name)
+    root.playChannel(root.listedKey(target))
   }
 
   function channelUp() {
@@ -1061,6 +1066,8 @@ BarWidget {
   property string tunePhase: ""
   property string tuneMessage: ""
   property string tuneSnr: ""
+  property string liveSnr: ""
+  property string liveSnrTone: ""
   property string tuneName: ""
   property string tuneDisplay: ""
 
@@ -1081,6 +1088,25 @@ BarWidget {
     }
   }
 
+  function applyLiveSnr(raw) {
+    var line = String(raw || "").trim()
+    if (!root.isLiveSession) {
+      root.liveSnr = ""
+      root.liveSnrTone = ""
+      return
+    }
+    var n = Number(line)
+    if (!line || line === "none" || isNaN(n)) {
+      root.liveSnr = "No lock"
+      root.liveSnrTone = "low"
+      return
+    }
+    root.liveSnr = Math.round(n) + " dB"
+    if (n < 18) root.liveSnrTone = "low"
+    else if (n < 25) root.liveSnrTone = "mid"
+    else root.liveSnrTone = "high"
+  }
+
   function applyPlayerState(jsonText) {
     try {
       var raw = (jsonText || "").trim()
@@ -1095,6 +1121,8 @@ BarWidget {
         if (s.last_live) root.lastLiveChannel = s.last_live
       } else if (s.running === false) {
         root.pauseKept = false
+        root.liveSnr = ""
+        root.liveSnrTone = ""
         root.activeChannelName = ""
         root.playerMode = "live"
         if (s.last_live) root.lastLiveChannel = s.last_live
@@ -1247,6 +1275,28 @@ BarWidget {
     id: syncProc
     command: [root.binPath, "sync"]
     onExited: playerStateFile.reload()
+  }
+
+  Timer {
+    id: signalTimer
+    interval: 2000
+    running: root.isLiveSession && !tuneProc.running
+    repeat: true
+    triggeredOnStart: true
+    onTriggered: {
+      if (signalProc.running) return
+      signalProc.command = [root.binPath, "signal", "--plain"]
+      signalProc.running = true
+    }
+  }
+
+  Process {
+    id: signalProc
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyLiveSnr(text)
+    }
   }
 
   Timer {
@@ -1691,6 +1741,17 @@ BarWidget {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(6)
+
+            Text {
+              visible: root.isLiveSession && root.liveSnr !== ""
+              textFormat: Text.PlainText
+              text: root.liveSnr
+              color: root.liveSnrTone === "low" ? Color.urgent : (root.liveSnrTone === "high" ? Color.accent : root.bar.foreground)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              anchors.verticalCenter: parent.verticalCenter
+            }
 
             Button {
               id: npKeepBtn
@@ -2225,7 +2286,7 @@ BarWidget {
                 id: chItem
                 required property var modelData
                 required property int index
-                readonly property bool isCurrent: root.activeChannelName === modelData.name || root.activeChannelName === modelData.tune_name
+                readonly property bool isCurrent: root.activeChannelName === modelData.channel_number || root.activeChannelName === modelData.name || root.activeChannelName === modelData.tune_name
                 readonly property var program: root.getProgram(modelData)
                 readonly property var onNow: Model.currentProgram(program, root.guideClockMin)
                 readonly property var onNext: Model.nextProgram(program, root.guideClockMin)
@@ -2263,7 +2324,7 @@ BarWidget {
                     root.cursorActive = true
                     root.cursorIndex = chItem.index
                   }
-                  onClicked: root.useListedChannel(chItem.modelData.tune_name || chItem.modelData.name)
+                  onClicked: root.useListedChannel(root.listedKey(chItem.modelData))
                   onWheel: function(wheel) { wheel.accepted = false }
                 }
 

@@ -825,6 +825,26 @@ class Timeshift:
         return 0
 
     @classmethod
+    def _conf_name_shared(cls, tune_name: str) -> bool:
+        name = (tune_name or "").strip()
+        if not name:
+            return False
+        return sum(1 for row in cls._conf_rows() if row["name"] == name) > 1
+
+    @classmethod
+    def conf_name(cls, channel: Dict[str, Any]) -> str:
+        """The channels.conf line for this service.
+
+        A repeated tune name is only the first row. The channel number line
+        is the one that selects 28.2 instead of 28.1.
+        """
+        tune = str(channel.get("tune_name") or channel.get("name") or "").strip()
+        number = str(channel.get("channel_number") or "").strip()
+        if number and cls._conf_name_shared(tune):
+            return number
+        return tune or number
+
+    @classmethod
     def _remember_pids(cls, dump_path: str, frequency: Optional[int] = None) -> bool:
         """Learn video and audio IDs from a full-mux dump and save them."""
         try:

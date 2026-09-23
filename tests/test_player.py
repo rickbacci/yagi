@@ -286,6 +286,41 @@ class TestMpvPlayerController(unittest.TestCase):
         active = self.controller.get_active_channel_name()
         self.assertIsNone(active)
 
+    def test_tune_shared_name_opens_that_subchannel(self):
+        rows = [
+            {
+                "name": "KONV-LD",
+                "tune_name": "KONV-LD",
+                "channel_number": "28.1",
+                "service_id": 1001,
+                "display_name": "KONV-LD 1",
+            },
+            {
+                "name": "KONV-LD",
+                "tune_name": "KONV-LD",
+                "channel_number": "28.2",
+                "service_id": 1002,
+                "display_name": "KONV-LD 2",
+            },
+        ]
+        self.controller._load_channels = MagicMock(return_value=rows)
+        conf = os.path.join(self.tmp_dir.name, "channels.conf")
+        with open(conf, "w", encoding="utf-8") as handle:
+            handle.write(
+                "KONV-LD:527028615:8VSB:0:0:1001\n"
+                "28.1:527028615:8VSB:0:0:1001\n"
+                "KONV-LD:527028615:8VSB:0:0:1002\n"
+                "28.2:527028615:8VSB:0:0:1002\n"
+            )
+        with patch("engine.timeshift.MPV_CHANNELS_CONF", conf), \
+             patch.object(self.controller, "is_running", return_value=False), \
+             patch("player.controller.Timeshift.start_dump", return_value=os.path.join(self.tmp_dir.name, "live.ts")) as dump, \
+             patch.object(self.controller, "launch_file", return_value=True), \
+             patch("player.controller.Timeshift.finish_tune"), \
+             patch("player.controller.update_player_state"):
+            self.assertTrue(self.controller.tune("28.2"))
+        self.assertEqual(dump.call_args[0][0], "28.2")
+
     @patch("player.controller.is_timeshift_path", return_value=True)
     @patch("player.controller.Timeshift.start_http", return_value=18765)
     @patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=0")
@@ -808,6 +843,14 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn('mp.add_forced_key_binding("y", "tv_keep_pause"', src)
         self.assertNotIn("surf_preview", src)
         self.assertNotIn("local function surf(", src)
+        self.assertIn("ch.channel_number == tune_name", src)
+        self.assertIn("Prev (j)    Back 10s", src)
+        self.assertIn("Ahead 10s (→)    Next (k)", src)
+        self.assertIn('"signal", "--plain"', src)
+        self.assertIn("%d dB", src)
+        self.assertIn("signal_color", src)
+        self.assertIn("Muted", src)
+        self.assertNotIn("}Muted\\n", src)
         self.assertIn('mp.add_forced_key_binding("LEFT", "tv_seek_back"', src)
         self.assertIn('mp.add_forced_key_binding("RIGHT", "tv_seek_fwd"', src)
         self.assertIn('mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)', src)
@@ -956,6 +999,10 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("record\", \"later\"", src)
         self.assertNotIn("record\", \"due\"", src)
         self.assertIn("status === \"missed\"", src)
+        self.assertIn("function listedKey", src)
+        self.assertIn("root.listedKey(chItem.modelData)", src)
+        self.assertIn("root.liveSnr", src)
+        self.assertIn("\"signal\", \"--plain\"", src)
         self.assertIn("useListedChannel", src)
         listed = src[src.index("function useListedChannel"):src.index("function startRecord")]
         self.assertIn("selectChannel", listed)

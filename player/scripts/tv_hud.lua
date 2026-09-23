@@ -26,6 +26,8 @@ local function make_overlay(z)
 end
 
 local overlay = make_overlay(10)
+local signal_label = ""
+local signal_bgr = "&Hc8d0e0&"
 
 local pointer_in = false
 local hud_visible = false
@@ -566,7 +568,7 @@ local function get_active_info()
     if tune_name and tune_name ~= "" then
         local matched_ch = nil
         for _, ch in ipairs(cached_channels) do
-            if ch.name == tune_name or ch.tune_name == tune_name or ch.raw_name == tune_name then
+            if ch.channel_number == tune_name or ch.name == tune_name or ch.tune_name == tune_name or ch.raw_name == tune_name then
                 matched_ch = ch
                 break
             end
@@ -724,6 +726,14 @@ local function render_hud()
         "{\\an9\\pos(1252,28)\\bord0\\shad0\\fnSans-Serif\\b1\\fs18\\1c%s}%s\n",
         status_col, ass_escape(status)
     )
+    local side_y = 52
+    if signal_label ~= "" and not is_library then
+        ass = ass .. string.format(
+            "{\\an9\\pos(1252,52)\\bord0\\shad0\\fnSans-Serif\\b1\\fs18\\1c%s}%s\n",
+            signal_bgr, ass_escape(signal_label)
+        )
+        side_y = 74
+    end
     if is_recording or any_rec then
         local rec_label = "REC"
         if any_rec and not is_recording then
@@ -731,11 +741,9 @@ local function render_hud()
             rec_label = "REC " .. tostring(r0.channel_number or r0.station or "")
         end
         ass = ass .. string.format(
-            "{\\an9\\pos(1252,52)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16\\1c&H6a6af0&}%s\n",
-            clip(rec_label, 16)
+            "{\\an9\\pos(1252,%d)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16\\1c&H6a6af0&}%s\n",
+            side_y, clip(rec_label, 16)
         )
-    elseif is_muted then
-        ass = ass .. "{\\an9\\pos(1252,52)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16\\1c&Hc8d0e0&}Muted\n"
     end
     if paused or delayed then
         local frac = 0
@@ -757,12 +765,12 @@ local function render_hud()
     end
 
     local vol = math.floor(mp.get_property_number("volume", 100) or 100)
-    local vol_label = "Vol " .. tostring(vol)
+    local vol_label = is_muted and "{\\1c&H3333F0&\\b1}Muted{\\1c&Hcdd6f4&\\b0}" or ("Vol " .. tostring(vol))
     local action = paused and "Play (Space)" or "Pause (Space)"
     local record = is_recording and "Stop (r)" or "Record (r)"
     local hints
     if is_library or is_ts or delayed then
-        hints = string.format("Back 10s (←)    %s    Ahead 10s (→)    Keep (y)    Live (l)    Mute (m)    %s", action, vol_label)
+        hints = string.format("Prev (j)    Back 10s (←)    %s    Ahead 10s (→)    Next (k)    Keep (y)    Live (l)    Mute (m)    %s", action, vol_label)
     else
         hints = string.format("Prev (j)    %s    Next (k)    Keep (y)    %s    Live (l)    Mute (m)    %s", action, record, vol_label)
     end
@@ -1083,6 +1091,53 @@ end)
 mp.observe_property("path", "string", function(_, path)
     show_hud()
 end)
+
+local signal_busy = false
+
+local function signal_color(db)
+    if db < 18 then return "&H3333F0&" end
+    if db < 25 then return "&H30C0F0&" end
+    return "&H50D070&"
+end
+
+local function note_signal(text, bgr)
+    signal_label = text or ""
+    signal_bgr = bgr or "&Hc8d0e0&"
+    if hud_visible then pcall(render_hud) end
+end
+
+local function poll_signal()
+    if is_library_playback() then
+        note_signal("")
+        return
+    end
+    if signal_busy then return end
+    signal_busy = true
+    mp.command_native_async({
+        name = "subprocess",
+        playback_only = false,
+        args = {tv_cli(), "signal", "--plain"},
+        capture_stdout = true,
+    }, function(success, result)
+        signal_busy = false
+        if success == false or not result then
+            return
+        end
+        if result.status and result.status ~= 0 then
+            return
+        end
+        local line = (result.stdout or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        local db = tonumber(line)
+        if not db then
+            note_signal("No lock", "&H3333F0&")
+            return
+        end
+        note_signal(string.format("%d dB", math.floor(db + 0.5)), signal_color(db))
+    end)
+end
+
+mp.add_periodic_timer(2, poll_signal)
+poll_signal()
 
 mp.register_event("shutdown", function()
     pcall(write_player_state, false, "", "")

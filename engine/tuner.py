@@ -3,14 +3,33 @@ Omarchy TV - Tuner Hardware Manager
 Detects, queries, and allocates Linux DVB adapters for ATSC OTA television.
 """
 
-import os
+import fcntl
 import glob
+import os
 import subprocess
 from typing import List, Dict, Optional, Any, Set
+
+# linux/dvb/frontend.h _IOR('o', nr, size). SNR on this stick is tenths of a dB.
+_FE_READ_STATUS = (2 << 30) | (4 << 16) | (ord("o") << 8) | 69
+_FE_READ_SIGNAL_STRENGTH = (2 << 30) | (2 << 16) | (ord("o") << 8) | 71
+_FE_READ_SNR = (2 << 30) | (2 << 16) | (ord("o") << 8) | 72
+_FE_HAS_LOCK = 0x10
 
 # DualHD jobs: 0 is the picture, 1 is scan / Guide / library record.
 LIVE_ADAPTER = 0
 WORK_ADAPTER = 1
+
+
+def decode_frontend(status: int, strength: Optional[int], snr_raw: Optional[int]) -> Dict[str, Any]:
+    """Turn a frontend reading into lock, dB, and a strength percent."""
+    snr_db = None if snr_raw is None else round(snr_raw / 10.0, 1)
+    pct = None if strength is None else round(100.0 * strength / 65535.0, 1)
+    return {
+        "locked": bool(status & _FE_HAS_LOCK),
+        "snr_db": snr_db,
+        "strength": strength,
+        "strength_pct": pct,
+    }
 
 
 class TunerAdapter:
@@ -102,6 +121,40 @@ class TunerManager:
             except ValueError:
                 continue
         return adapters
+
+    @classmethod
+    def read_signal(cls, adapter_id: int = LIVE_ADAPTER) -> Optional[Dict[str, Any]]:
+        """SNR and strength for a frontend that is already tuned. None if it is missing."""
+        path = f"/dev/dvb/adapter{adapter_id}/frontend0"
+        if not os.path.exists(path):
+            return None
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            return None
+        try:
+            status_buf = bytearray(4)
+            try:
+                fcntl.ioctl(fd, _FE_READ_STATUS, status_buf, True)
+            except OSError:
+                return decode_frontend(0, None, None)
+            strength = None
+            snr_raw = None
+            strength_buf = bytearray(2)
+            snr_buf = bytearray(2)
+            try:
+                fcntl.ioctl(fd, _FE_READ_SIGNAL_STRENGTH, strength_buf, True)
+                strength = int.from_bytes(strength_buf, "little")
+            except OSError:
+                pass
+            try:
+                fcntl.ioctl(fd, _FE_READ_SNR, snr_buf, True)
+                snr_raw = int.from_bytes(snr_buf, "little")
+            except OSError:
+                pass
+            return decode_frontend(int.from_bytes(status_buf, "little"), strength, snr_raw)
+        finally:
+            os.close(fd)
 
     @classmethod
     def get_adapter(cls, adapter_id: int) -> Optional[TunerAdapter]:

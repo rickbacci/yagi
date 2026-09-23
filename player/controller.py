@@ -516,7 +516,7 @@ class MpvController:
         try:
             self.channels = self._load_channels()
             matched = match_channel(channel_name, self.channels)
-            target_name = (matched.get("tune_name") or matched.get("name")) if matched else channel_name
+            target_name = Timeshift.conf_name(matched) if matched else channel_name
             station = matched.get("display_name", "") if matched else ""
             Timeshift.begin_tune(target_name, station)
 
