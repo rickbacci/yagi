@@ -764,7 +764,7 @@ local function render_hud()
     if is_library or is_ts or delayed then
         hints = string.format("Back 10s (←)    %s    Ahead 10s (→)    Live (l)    Mute (m)    %s", action, vol_label)
     else
-        hints = string.format("%s    %s    Live (l)    Mute (m)    %s", action, record, vol_label)
+        hints = string.format("Prev (j)    %s    Next (k)    %s    Live (l)    Mute (m)    %s", action, record, vol_label)
     end
     ass = ass .. box(0, 676, 1280, 44, "&H12141C&", "18")
     ass = ass .. string.format(
@@ -1147,6 +1147,22 @@ local function recording_for_channel(ch)
     end
     return nil
 end
+
+local function change_channel(direction)
+    if is_library_playback() then return end
+    local cli = tv_cli()
+    mp.command_native_async({
+        name = "subprocess",
+        playback_only = false,
+        args = {cli, direction}
+    }, function()
+        reload_data()
+        show_hud()
+    end)
+end
+
+mp.add_forced_key_binding("j", "tv_surf_prev_j", function() change_channel("prev") end)
+mp.add_forced_key_binding("k", "tv_surf_next_k", function() change_channel("next") end)
 
 mp.add_forced_key_binding("r", "tv_record_toggle", function()
     reload_data()

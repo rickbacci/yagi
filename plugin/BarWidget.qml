@@ -71,77 +71,8 @@ BarWidget {
   property bool cursorActive: false
   property int cursorIndex: 0
   property bool guideRefreshing: false
-  readonly property var guideBlocks: {
-    var _tick = root.guideClockMin
-    return Model.guideHourBlocks(root.guideList, Math.floor(Date.now() / 1000))
-  }
-  property int guideBlockIndex: 0
-  readonly property int guideNameCol: Style.space(168)
-  readonly property int guideHourCol: {
-    var w = guideStripCol.width
-    if (!(w > 0)) w = Style.space(840)
-    var later = laterBtn.width > 0 ? laterBtn.width : Style.space(72)
-    var gaps = Style.space(6) * 4
-    return Math.max(Style.space(120), Math.floor((w - root.guideNameCol - later - gaps) / 3))
-  }
-  readonly property var guideHourLabels: {
-    var blocks = root.guideBlocks || []
-    var start = Number(blocks[root.guideBlockIndex] || 0)
-    if (start <= 0) return ["", "", ""]
-    return [
-      root.clockLabel(start),
-      root.clockLabel(start + 3600),
-      root.clockLabel(start + 7200)
-    ]
-  }
-  readonly property var guideStripRows: {
-    var blocks = root.guideBlocks || []
-    var start = Number(blocks[root.guideBlockIndex] || 0)
-    if (start <= 0) return []
-    var nowSec = Math.floor(Date.now() / 1000)
-    var list = root.guideList || []
-    var out = []
-    var i, j, h, programs, prog, unix, dur, hourStart, cells, cover
-    for (i = 0; i < list.length; i++) {
-      programs = list[i].programs || []
-      cells = []
-      for (h = 0; h < 3; h++) {
-        hourStart = start + h * 3600
-        cover = null
-        for (j = 0; j < programs.length; j++) {
-          prog = programs[j]
-          unix = Model.programUnix(prog)
-          dur = Number(prog.duration_sec) || 0
-          if (unix <= 0 || dur <= 0) continue
-          if (unix < hourStart + 3600 && (unix + dur) > hourStart) {
-            if (!cover || unix >= cover.unix) cover = { prog: prog, unix: unix, dur: dur }
-          }
-        }
-        if (!cover) {
-          cells.push({ title: "" })
-        } else {
-          cells.push({
-            tune_name: list[i].tune_name || "",
-            display_name: list[i].display_name || list[i].tune_name || "",
-            title: cover.prog.title || "",
-            start: cover.prog.start || "",
-            end: cover.prog.end || "",
-            gps_start: Number(cover.prog.gps_start) || 0,
-            duration_sec: cover.dur,
-            unix: cover.unix,
-            on_now: cover.unix <= nowSec && (cover.unix + cover.dur) > nowSec
-          })
-        }
-      }
-      out.push({
-        tune_name: list[i].tune_name || "",
-        display_name: list[i].display_name || list[i].tune_name || "",
-        network: list[i].network || "",
-        cells: cells
-      })
-    }
-    return out
-  }
+  property var slotItems: []
+  readonly property var guideStripRows: root.slotItems
   property var scheduleItems: []
   readonly property string scheduleLine: {
     var items = root.scheduleItems || []
@@ -150,7 +81,8 @@ BarWidget {
       var one = items[0]
       var who = one.display_name || one.tune_name || ""
       var when = one.clock || ""
-      return who + (one.title ? " · " + one.title : "") + (when ? " · " + when : "")
+      var missed = one.status === "missed" ? "Missed · " : ""
+      return missed + who + (one.title ? " · " + one.title : "") + (when ? " · " + when : "")
     }
     return items.length + " scheduled"
   }
@@ -195,21 +127,45 @@ BarWidget {
     return h + ":" + (min < 10 ? "0" : "") + min + " " + (h24 >= 12 ? "PM" : "AM")
   }
 
-  function shiftGuideBlock(delta) {
-    var n = (root.guideBlocks || []).length
-    if (n <= 0) return
-    root.guideBlockIndex = Math.max(0, Math.min(n - 1, root.guideBlockIndex + delta))
+  function applySlots(raw) {
+    var days = ["Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"]
+    try {
+      var data = JSON.parse(raw || "{}")
+      var usual = data.usual || []
+      var out = []
+      var i, slot, weeks
+      for (i = 0; i < usual.length; i++) {
+        slot = usual[i] || {}
+        weeks = slot.weeks || []
+        if (!(weeks.length >= 2 || slot.manual || slot.record)) continue
+        out.push({
+          id: slot.id || "",
+          title: slot.title || "",
+          clock: slot.clock || "",
+          day: days[Number(slot.weekday)] || "",
+          tune: slot.tune_name || slot.channel || "",
+          minutes: Math.max(1, Math.round((Number(slot.duration_sec) || 0) / 60)),
+          record: !!slot.record
+        })
+      }
+      root.slotItems = out
+    } catch (e) {
+      root.slotItems = []
+    }
   }
 
-  function snapGuideBlock() {
-    var blocks = root.guideBlocks || []
-    var now = Math.floor(Date.now() / 1000)
-    var idx = 0
-    var i
-    for (i = 0; i < blocks.length; i++) {
-      if (Number(blocks[i]) <= now) idx = i
-    }
-    root.guideBlockIndex = idx
+  function markSlot(id, record) {
+    if (!id) return
+    slotProc.running = false
+    slotProc.command = [root.binPath, "guide", "slot", record ? "record" : "unrecord", "--id", id]
+    slotProc.running = true
+  }
+
+  function removeSlot(id) {
+    if (!id) return
+    slotProc.running = false
+    slotProc.command = [root.binPath, "guide", "slot", "delete", "--id", id]
+    slotProc.running = true
   }
 
   function applySchedule(raw) {
@@ -270,7 +226,6 @@ BarWidget {
     root.guideSearchText = ""
     guideStripSearch.text = ""
     root.guideClockMin = Model.minutesNow()
-    root.snapGuideBlock()
     root.guideStripOpen = true
   }
 
@@ -981,7 +936,6 @@ BarWidget {
     function guide(): void {
       root.libraryModalOpen = false
       root.guideClockMin = Model.minutesNow()
-      root.snapGuideBlock()
       root.guideStripOpen = true
       root.open()
     }
@@ -1149,28 +1103,29 @@ BarWidget {
   }
 
   FileView {
+    id: historyFile
+    path: root.tvConfigDir + "/guide_history.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applySlots(text())
+    onFileChanged: reload()
+  }
+
+  Process {
+    id: slotProc
+    command: []
+    onExited: function(code) {
+      historyFile.reload()
+    }
+  }
+
+  FileView {
     id: scheduleFile
     path: root.tvConfigDir + "/schedule.json"
     watchChanges: true
     printErrors: false
     onLoaded: root.applySchedule(text())
     onFileChanged: reload()
-  }
-
-  Timer {
-    interval: 30000
-    running: true
-    repeat: true
-    onTriggered: dueProc.running = true
-  }
-
-  Process {
-    id: dueProc
-    command: [root.binPath, "record", "due"]
-    onExited: function(code) {
-      scheduleFile.reload()
-      recordingsActiveFile.reload()
-    }
   }
 
   Process {
@@ -1367,10 +1322,6 @@ BarWidget {
         else root.close()
       }
       onMoveRequested: function(dx, dy) {
-        if (dx !== 0 && root.guideStripOpen) {
-          root.shiftGuideBlock(dx)
-          return
-        }
         if (dy !== 0) root.moveCursor(dy)
       }
       onActivateRequested: root.activateCursor()
@@ -1900,10 +1851,7 @@ BarWidget {
 
           MouseArea {
             anchors.fill: parent
-            onClicked: {
-              root.guideStripOpen = true
-              root.snapGuideBlock()
-            }
+            onClicked: root.guideStripOpen = true
           }
 
           Text {
@@ -1936,68 +1884,11 @@ BarWidget {
           onTextChanged: root.guideSearchText = text
         }
 
-        Item {
-          id: guideBlockNav
-          visible: !root.guideSearchActive && root.guideStripRows.length > 0
-          width: parent.width
-          height: Math.max(earlierBtn.implicitHeight, laterBtn.implicitHeight)
-
-          Button {
-            id: earlierBtn
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Earlier"
-            enabled: root.guideBlockIndex > 0
-            fontSize: Style.font.caption
-            foreground: root.bar.foreground
-            onClicked: root.shiftGuideBlock(-1)
-          }
-
-          Item {
-            id: hourHead
-            anchors.left: parent.left
-            anchors.leftMargin: root.guideNameCol + Style.space(6)
-            anchors.right: laterBtn.left
-            anchors.rightMargin: Style.space(6)
-            anchors.verticalCenter: parent.verticalCenter
-            height: parent.height
-
-            Repeater {
-              model: root.guideHourLabels
-              delegate: Text {
-                required property string modelData
-                required property int index
-                x: index * (root.guideHourCol + Style.space(6))
-                y: Math.max(0, (hourHead.height - implicitHeight) / 2)
-                width: root.guideHourCol
-                textFormat: Text.PlainText
-                text: modelData
-                color: root.bar.foreground
-                font.family: root.bar.fontFamily
-                font.pixelSize: Style.font.caption
-                horizontalAlignment: Text.AlignHCenter
-                elide: Text.ElideRight
-              }
-            }
-          }
-
-          Button {
-            id: laterBtn
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Later"
-            enabled: root.guideBlockIndex < (root.guideBlocks.length - 1)
-            fontSize: Style.font.caption
-            foreground: root.bar.foreground
-            onClicked: root.shiftGuideBlock(1)
-          }
-        }
-
         Text {
           visible: root.guideStripOpen && !root.guideSearchActive && root.guideStripRows.length === 0
           width: parent.width
           textFormat: Text.PlainText
-          text: "Nothing listed in these hours."
+          text: "No repeated shows yet."
           color: Qt.darker(root.bar.foreground, 1.4)
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.caption
@@ -2022,66 +1913,40 @@ BarWidget {
 
             Repeater {
               model: root.guideStripRows
-              delegate: Item {
-                id: stripRow
+              delegate: Row {
                 required property var modelData
-                required property int index
                 width: stripShowsCol.width
-                implicitHeight: Math.max(stripName.implicitHeight + Style.space(10), Style.space(32))
-                height: implicitHeight
-
-                Rectangle {
-                  anchors.left: parent.left
-                  anchors.top: parent.top
-                  anchors.bottom: parent.bottom
-                  width: Style.space(3)
-                  color: Model.networkColor(modelData.network, Color.accent)
-                }
+                spacing: Style.space(6)
 
                 Text {
-                  id: stripName
-                  anchors.left: parent.left
-                  anchors.leftMargin: Style.space(8)
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: root.guideNameCol - Style.space(8)
+                  width: Math.max(0, parent.width - slotRecord.width - slotDrop.width - parent.spacing * 2)
                   textFormat: Text.PlainText
-                  text: modelData.display_name || modelData.tune_name || ""
+                  text: (modelData.day || "")
+                        + (modelData.clock ? " · " + modelData.clock : "")
+                        + " · " + (modelData.title || "")
+                        + (modelData.minutes ? " · " + modelData.minutes + "m" : "")
+                        + (modelData.tune ? " · " + modelData.tune : "")
                   color: root.bar.foreground
                   font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: true
+                  font.pixelSize: Style.font.caption
                   elide: Text.ElideRight
+                  anchors.verticalCenter: parent.verticalCenter
                 }
 
-                Repeater {
-                  model: modelData.cells
-                  delegate: Item {
-                    required property var modelData
-                    required property int index
-                    x: root.guideNameCol + Style.space(6) + index * (root.guideHourCol + Style.space(6))
-                    width: root.guideHourCol
-                    height: stripRow.height
+                Button {
+                  id: slotRecord
+                  text: modelData.record ? "Clear" : "Record"
+                  fontSize: Style.font.caption
+                  foreground: root.bar.foreground
+                  onClicked: root.markSlot(modelData.id, !modelData.record)
+                }
 
-                    MouseArea {
-                      anchors.fill: parent
-                      enabled: (modelData.title || "") !== ""
-                      hoverEnabled: enabled
-                      cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                      onClicked: root.useStripShow(modelData)
-                    }
-
-                    Text {
-                      anchors.left: parent.left
-                      anchors.right: parent.right
-                      anchors.verticalCenter: parent.verticalCenter
-                      textFormat: Text.PlainText
-                      text: modelData.title || ""
-                      color: root.bar.foreground
-                      font.family: root.bar.fontFamily
-                      font.pixelSize: Style.font.caption
-                      elide: Text.ElideRight
-                    }
-                  }
+                Button {
+                  id: slotDrop
+                  text: "Remove"
+                  fontSize: Style.font.caption
+                  foreground: root.bar.foreground
+                  onClicked: root.removeSlot(modelData.id)
                 }
               }
             }
@@ -2155,7 +2020,8 @@ BarWidget {
             Text {
               width: Math.max(0, parent.width - stripRemove.width - parent.spacing)
               textFormat: Text.PlainText
-              text: (modelData.display_name || modelData.tune_name || "")
+              text: (modelData.status === "missed" ? "Missed · " : "")
+                    + (modelData.display_name || modelData.tune_name || "")
                     + " · " + (modelData.title || "")
                     + (modelData.clock ? " · " + modelData.clock : "")
               color: Color.accent
@@ -2325,6 +2191,14 @@ BarWidget {
                 readonly property bool isCurrent: root.activeChannelName === modelData.name || root.activeChannelName === modelData.tune_name
                 readonly property var program: root.getProgram(modelData)
                 readonly property var onNow: Model.currentProgram(program, root.guideClockMin)
+                readonly property var onNext: Model.nextProgram(program, root.guideClockMin)
+                readonly property string nowNextLine: {
+                  var now = chItem.onNow && chItem.onNow.title ? chItem.onNow.title : ""
+                  var nxt = chItem.onNext && chItem.onNext.title ? chItem.onNext.title : ""
+                  if (!now) return ""
+                  if (!nxt || nxt === now) return now
+                  return now + " · " + nxt
+                }
                 readonly property string channelBadge: Model.getChannelBadge(modelData)
                 readonly property string netColor: Model.networkColor(modelData.network, Color.accent)
                 readonly property bool isFav: root.isFavorite(modelData.name) || (modelData.tune_name && root.isFavorite(modelData.tune_name))
@@ -2437,7 +2311,7 @@ BarWidget {
                       return Math.max(0, chLine.width - used)
                     }
                     textFormat: Text.PlainText
-                    text: chItem.onNow ? chItem.onNow.title : ""
+                    text: chItem.nowNextLine
                     color: chItem.isCurrent ? Color.accent : Qt.darker(root.bar.foreground, 1.4)
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.bodySmall

@@ -5,7 +5,14 @@ import tempfile
 import time
 import unittest
 
-from engine.schedule import add_later, due_items, load_schedule, remove_later, unix_from_gps
+from engine.schedule import (
+    add_later,
+    due_items,
+    load_schedule,
+    pick_due,
+    remove_later,
+    unix_from_gps,
+)
 
 
 class TestSchedule(unittest.TestCase):
@@ -46,14 +53,46 @@ class TestSchedule(unittest.TestCase):
             self.assertEqual([row["tune_name"] for row in ready], ["WEWSHD"])
             self.assertEqual(len(load_schedule(path)), 2)
 
-    def test_due_drops_a_show_that_already_ended(self):
+    def test_due_starts_a_minute_early(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "schedule.json")
+            now = time.time()
+            gps = int(now) - (315964800 - 18) + 30
+            add_later("WEWSHD", "News 5", gps, 3600, path=path)
+            ready = due_items(now, path)
+            self.assertEqual([row["tune_name"] for row in ready], ["WEWSHD"])
+
+    def test_extra_end_keeps_a_game_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "schedule.json")
+            now = time.time()
+            gps = int(now) - (315964800 - 18) - 300
+            add_later("WEWSHD", "Football", gps, 60, extra_end_sec=180, path=path)
+            self.assertEqual(len(due_items(now, path)), 1)
+
+    def test_due_keeps_a_show_that_never_started(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "schedule.json")
             now = time.time()
             gps = int(now) - (315964800 - 18) - 7200
             add_later("WEWSHD", "Old", gps, 60, path=path)
             self.assertEqual(due_items(now, path), [])
-            self.assertEqual(load_schedule(path), [])
+            rows = load_schedule(path)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["status"], "missed")
+
+    def test_pick_due_runs_one_show(self):
+        ready = [{"id": "a", "title": "First"}, {"id": "b", "title": "Second"}]
+        self.assertEqual(pick_due(ready, False)["id"], "a")
+        self.assertIsNone(pick_due(ready, True))
+        self.assertEqual(len(ready), 2)
+
+    def test_schedule_file_is_private(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "tv", "schedule.json")
+            add_later("WEWSHD", "News 5", 1000, 3600, path=path)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+            self.assertEqual(os.stat(os.path.dirname(path)).st_mode & 0o777, 0o700)
 
 
 if __name__ == "__main__":

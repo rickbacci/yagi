@@ -1,0 +1,6 @@
+[Unit]
+Description=Start and stop Omarchy TV recordings
+
+[Service]
+Type=oneshot
+ExecStart=/home/richardb/Projects/personal/omarchy-tv/bin/omarchy-tv record due

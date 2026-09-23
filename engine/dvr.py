@@ -11,13 +11,10 @@ import time
 import socket
 import signal
 import threading
-import sys
 import subprocess
 import shutil
 from datetime import datetime
 from typing import List, Dict, Optional, Any, Set
-
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 from engine.paths import (
     CHANNELS_JSON_PATH,
@@ -57,7 +54,6 @@ KEEP_FREE_GIB = 8
 # A locked ATSC dump passes this quickly. PAT/PMT alone does not.
 GROW_BYTES = 32 * 1024
 GROW_WAIT_SECS = 20.0
-WATCH_INTERVAL_SECS = 10.0
 
 
 def load_ui_prefs(prefs_path: Optional[str] = None) -> Dict[str, Any]:
@@ -382,50 +378,30 @@ class DvrManager:
         return False
 
     @classmethod
-    def watch_recording(
-        cls,
-        session_id: str,
-        active_path: Optional[str] = None,
-        end_unix: Optional[float] = None,
-        interval: float = WATCH_INTERVAL_SECS,
-    ) -> None:
-        """Stop this recording at its end time, or when free space hits the floor."""
-        while True:
-            sessions = cls.load_active_sessions(active_path)
-            match = next((s for s in sessions if s.session_id == session_id and s.is_active()), None)
-            if match is None:
-                return
-            reason = stop_reason(match.file_path, time.time(), end_unix)
-            if reason:
-                if reason == "disk":
-                    patch_sidecar(match.file_path, stopped_reason="disk")
-                cls.stop_recording(session_id, active_path=active_path)
-                return
-            time.sleep(interval)
-
-    @classmethod
-    def _spawn_watcher(
-        cls,
-        session_id: str,
-        active_path: str,
-        end_unix: Optional[float],
-    ) -> None:
-        code = (
-            "import sys; sys.path.insert(0, {root});"
-            "from engine.dvr import DvrManager;"
-            "DvrManager.watch_recording({sid}, active_path={act}, end_unix={end})"
-        ).format(
-            root=repr(PROJECT_ROOT),
-            sid=repr(session_id),
-            act=repr(active_path),
-            end=repr(end_unix),
-        )
-        subprocess.Popen(
-            [sys.executable, "-c", code],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+    def sweep_active(cls, active_path: Optional[str] = None) -> List["DvrSession"]:
+        """Stop recordings whose end has passed, or whose disk is under the floor."""
+        stopped: List[DvrSession] = []
+        for session in cls.load_active_sessions(active_path):
+            if not session.is_active():
+                continue
+            side = read_sidecar(session.file_path)
+            planned = side.get("planned_end")
+            end_unix = None
+            if planned not in (None, ""):
+                try:
+                    end_unix = float(planned)
+                except (TypeError, ValueError):
+                    end_unix = None
+            if end_unix is None and session.duration_seconds:
+                end_unix = float(session.start_time) + float(session.duration_seconds)
+            reason = stop_reason(session.file_path, time.time(), end_unix)
+            if not reason:
+                continue
+            if reason == "disk":
+                patch_sidecar(session.file_path, stopped_reason="disk")
+            cls.stop_recording(session.session_id, active_path=active_path)
+            stopped.append(session)
+        return stopped
 
     @classmethod
     def start_recording(
@@ -601,9 +577,6 @@ class DvrManager:
         cls.save_active_sessions(current_sessions, act_path)
         if os.path.realpath(rec_dir) == os.path.realpath(RECORDINGS_DIR):
             cls.refresh_library_index(recordings_dir=rec_dir)
-
-        end_unix = float(side["planned_end"]) if side.get("planned_end") else None
-        cls._spawn_watcher(session.session_id, act_path, end_unix)
 
         return session
 

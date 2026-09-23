@@ -84,9 +84,114 @@ def cmd_list(args):
 
 
 def cmd_guide(args):
-    from engine.guide import format_guide_updated, load_guide, refresh_guide, search_guide
+    from engine.guide import (
+        _WEEKDAY_NAMES,
+        _load_history,
+        add_slot,
+        delete_airing,
+        delete_slot,
+        format_guide_updated,
+        listed_slots,
+        load_guide,
+        refresh_guide,
+        rename_slot,
+        search_guide,
+        set_slot_aliases,
+        set_slot_clock,
+        set_slot_length,
+        set_slot_record,
+    )
     from engine.psip import collect_guide_events
-    if getattr(args, "action", None) == "search":
+    action = getattr(args, "action", None)
+    if action == "slots":
+        rows = listed_slots(_load_history())
+        if not rows:
+            print("No repeated shows yet.")
+            return
+        for slot in rows:
+            day = _WEEKDAY_NAMES[int(slot.get("weekday") or 0)]
+            minutes = max(1, int(slot.get("duration_sec") or 0) // 60)
+            mark = "record" if slot.get("record") else "watch"
+            aliases = slot.get("aliases") or []
+            extra = f"  also {', '.join(aliases)}" if aliases else ""
+            print(
+                f"{slot.get('id')}  {mark}  {day} {slot.get('clock')}  "
+                f"{slot.get('title')}  {minutes}m  {slot.get('tune_name') or slot.get('channel')}{extra}"
+            )
+        return
+    if action == "forget":
+        query = getattr(args, "query", None) or []
+        if len(query) < 2 or not delete_airing(query[0], int(query[1])):
+            print("Name the channel and the start time. Example: omarchy-tv guide forget 5.1 1726964100")
+            sys.exit(1)
+        print("Removed that airing.")
+        return
+    if action == "slot":
+        query = getattr(args, "query", None) or []
+        verb = query[0] if query else ""
+        ident = getattr(args, "id", "") or ""
+        try:
+            if verb == "add":
+                slot = add_slot(
+                    getattr(args, "channel", "") or "",
+                    getattr(args, "title", "") or "",
+                    int(getattr(args, "weekday", -1)),
+                    getattr(args, "clock", "") or "",
+                    parse_duration_str(getattr(args, "length", "") or "") or 0,
+                    tune_name=getattr(args, "tune", "") or "",
+                )
+                print(f"Added {slot['title']} ({slot['id']}).")
+                return
+            if verb == "rename":
+                if not rename_slot(ident, getattr(args, "title", "") or ""):
+                    raise ValueError("That slot is not in the list.")
+                print("Renamed.")
+                return
+            if verb == "clock":
+                if not set_slot_clock(ident, getattr(args, "clock", "") or ""):
+                    raise ValueError("That slot is not in the list.")
+                print("Clock moved.")
+                return
+            if verb == "length":
+                length = parse_duration_str(getattr(args, "length", "") or "") or 0
+                if not set_slot_length(ident, length):
+                    raise ValueError("That slot is not in the list.")
+                print("Length set.")
+                return
+            if verb == "delete":
+                if not delete_slot(ident):
+                    raise ValueError("That slot is not in the list.")
+                print("Removed from the list.")
+                return
+            if verb == "alias":
+                alias = getattr(args, "alias", "") or ""
+                from engine.guide import _load_history as load_hist
+                current = next((row for row in load_hist()["usual"] if str(row.get("id") or "") == ident), None)
+                if current is None:
+                    raise ValueError("That slot is not in the list.")
+                names = list(current.get("aliases") or [])
+                if alias and alias not in names:
+                    names.append(alias)
+                if not set_slot_aliases(ident, names):
+                    raise ValueError("That slot is not in the list.")
+                print("Alias kept.")
+                return
+            if verb == "record":
+                if not set_slot_record(ident, True):
+                    raise ValueError("That slot is not in the list.")
+                print("That show will record each week.")
+                return
+            if verb == "unrecord":
+                if not set_slot_record(ident, False):
+                    raise ValueError("That slot is not in the list.")
+                print("Weekly record cleared. The slot stays.")
+                return
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
+        print("Use add, rename, clock, length, delete, alias, record, or unrecord.")
+        sys.exit(1)
+    if action == "search":
         guide = load_guide()
         query = " ".join(getattr(args, "query", None) or [])
         print(format_guide_updated(guide.get("updated_at")))
@@ -367,6 +472,24 @@ def parse_duration_str(d_str):
         return int(float(d))
 
 
+def _grab_guide_if_due():
+    """A few times a day, when Tuner 1 is not recording."""
+    try:
+        from engine.guide import epg_tuner_held, guide_grab_due, load_guide, refresh_guide
+        guide = load_guide()
+        if not guide_grab_due(time.time(), guide.get("updated_at"), epg_tuner_held()):
+            return
+        from engine.psip import collect_guide_events
+        result = refresh_guide(grabber=collect_guide_events)
+    except Exception as exc:
+        print(f"Guide left alone. {exc}")
+        return
+    if result.get("skipped"):
+        print("Guide left alone — Tuner 1 is recording.")
+    else:
+        print("Guide refreshed.")
+
+
 def cmd_record(args):
     from engine.dvr import DvrManager, MIN_PLAYABLE_BYTES
     action = args.action or "list"
@@ -462,6 +585,7 @@ def cmd_record(args):
             print("Error: Name the station. Example: omarchy-tv record later WEWSHD 3600s --title \"News 5\" --gps 1 --clock \"11:00 PM\"")
             sys.exit(1)
         try:
+            extra = parse_duration_str(getattr(args, "extra", "") or "") or 0
             item = add_later(
                 args.target,
                 getattr(args, "title", "") or "",
@@ -470,6 +594,7 @@ def cmd_record(args):
                 clock=getattr(args, "clock", "") or "",
                 end_clock=getattr(args, "end_clock", "") or "",
                 display_name=getattr(args, "display_name", "") or "",
+                extra_end_sec=extra,
             )
         except ValueError as exc:
             print(f"Error: {exc}")
@@ -485,25 +610,37 @@ def cmd_record(args):
 
     elif action == "due":
         from engine.dvr import DvrManager
-        from engine.schedule import drop_item, due_items
+        from engine.schedule import drop_item, due_items, item_window, pick_due
+        for session in DvrManager.sweep_active():
+            print(f"Stopped {session.station} ({session.channel_number}).")
+        from engine.guide import arm_weekly_slots
+        for item in arm_weekly_slots():
+            print(f"Queued {item.get('title')} for this week.")
         ready = due_items()
-        if not ready:
-            return
-        for item in ready:
-            now = time.time()
-            remaining = int(item.get("start_unix") or 0) + int(item.get("duration_sec") or 0) - int(now)
-            remaining = max(60, remaining)
+        busy = bool(DvrManager.load_active_sessions())
+        chosen = pick_due(ready, busy)
+        if chosen is None:
+            for item in ready:
+                print(f"Waiting. {item.get('title') or 'That show'} stays listed. Tuner 1 is busy.")
+        else:
+            for item in ready:
+                if item.get("id") == chosen.get("id"):
+                    continue
+                print(f"Waiting. {item.get('title') or 'That show'} stays listed. Tuner 1 is busy.")
+            _end = item_window(chosen)[1]
+            remaining = max(60, int(_end - time.time()))
             try:
                 DvrManager.start_recording(
-                    item.get("tune_name") or "",
+                    chosen.get("tune_name") or "",
                     duration=remaining,
-                    program_title=item.get("title") or "",
+                    program_title=chosen.get("title") or "",
                 )
             except Exception as exc:
-                print(f"Waiting. {item.get('title') or 'That show'} did not start: {exc}")
-                continue
-            drop_item(str(item.get("id") or ""))
-            print(f"Recording {item.get('title')} ({remaining // 60}m).")
+                print(f"Waiting. {chosen.get('title') or 'That show'} did not start: {exc}")
+            else:
+                drop_item(str(chosen.get("id") or ""))
+                print(f"Recording {chosen.get('title')} ({remaining // 60}m).")
+        _grab_guide_if_due()
 
     elif action == "list":
         recordings = DvrManager.refresh_library_index()
@@ -542,8 +679,16 @@ def main():
 
     # guide / epg
     p_guide = subparsers.add_parser("guide", aliases=["epg"], help="Show electronic program guide schedules")
-    p_guide.add_argument("action", nargs="?", choices=["refresh", "search"], help="Refresh the lineup, or search show titles")
-    p_guide.add_argument("query", nargs="*", help="Words to find in show titles")
+    p_guide.add_argument("action", nargs="?", choices=["refresh", "search", "slots", "forget", "slot"], help="Refresh, search, or edit the repeated-show list")
+    p_guide.add_argument("query", nargs="*", help="Search words, or a slot command")
+    p_guide.add_argument("--title", default="", help="Show title")
+    p_guide.add_argument("--clock", default="", help="Start clock, e.g. 8:15 PM")
+    p_guide.add_argument("--length", default="", help="Show length, e.g. 30m")
+    p_guide.add_argument("--weekday", type=int, default=-1, help="0 is Monday")
+    p_guide.add_argument("--channel", default="", help="Channel number")
+    p_guide.add_argument("--tune", default="", help="Tune name")
+    p_guide.add_argument("--alias", default="", help="Another title for this slot")
+    p_guide.add_argument("--id", default="", help="Slot id")
     p_guide.set_defaults(func=cmd_guide)
 
     # favorite
@@ -612,6 +757,7 @@ def main():
     p_rec.add_argument("--clock", default="", help="Start clock label")
     p_rec.add_argument("--end-clock", dest="end_clock", default="", help="End clock label")
     p_rec.add_argument("--display-name", dest="display_name", default="", help="Station line")
+    p_rec.add_argument("--extra", default="", help="Extra time after the show, e.g. 30m")
     p_rec.set_defaults(func=cmd_record)
 
     args = parser.parse_args()

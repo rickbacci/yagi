@@ -8,11 +8,18 @@ import os
 import json
 import re
 import time
+import uuid
 from datetime import datetime
 from typing import Dict, Any, Optional, List, Callable, Tuple
 from zoneinfo import ZoneInfo
 
-from engine.paths import GUIDE_JSON_PATH, GUIDE_HISTORY_PATH, CHANNELS_JSON_PATH
+from engine.paths import (
+    CHANNELS_JSON_PATH,
+    GUIDE_HISTORY_PATH,
+    GUIDE_JSON_PATH,
+    chmod_private_file,
+    ensure_private_dir,
+)
 
 _EASTERN = ZoneInfo("America/New_York")
 
@@ -25,11 +32,12 @@ EVENING_SLOTS = [
 
 
 def _write_guide(payload: Dict[str, Any], target: str) -> None:
-    os.makedirs(os.path.dirname(target), exist_ok=True)
+    ensure_private_dir(os.path.dirname(target))
     tmp = f"{target}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     os.replace(tmp, target)
+    chmod_private_file(target)
 
 
 _TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})\s*(AM|PM)$", re.IGNORECASE)
@@ -53,31 +61,71 @@ def _now_minutes() -> int:
     return local.tm_hour * 60 + local.tm_min
 
 
+def _program_span(prog: Dict[str, Any]) -> Optional[Tuple[int, int]]:
+    """Unix start and end when the airing has a GPS time. Clock text is not a date."""
+    from engine.psip import GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
+
+    raw = prog.get("gps_start")
+    if raw is None or raw == "":
+        return None
+    try:
+        gps = int(raw)
+    except (TypeError, ValueError):
+        return None
+    if gps <= 0:
+        return None
+    start = gps + GPS_UNIX_OFFSET - GPS_LEAP_SECONDS
+    try:
+        dur = int(prog.get("duration_sec") or 0)
+    except (TypeError, ValueError):
+        dur = 0
+    if dur <= 0:
+        dur = 30 * 60
+    return start, start + dur
+
+
+def _clock_covers(prog: Dict[str, Any], clock: int) -> bool:
+    start = parse_minutes(str(prog.get("start") or prog.get("start_time") or ""))
+    end = parse_minutes(str(prog.get("end") or prog.get("end_time") or ""))
+    if start < 0:
+        return False
+    when = clock
+    if end < 0:
+        end = start + 30
+    if end <= start:
+        end += 24 * 60
+        if when < start:
+            when += 24 * 60
+    return start <= when < end
+
+
 def now_and_next(
     programs: Optional[List[Dict[str, Any]]],
     now_minutes: Optional[int] = None,
+    now_unix: Optional[float] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
-    """Program covering now_minutes, then the following block."""
+    """Program covering now, then the following block.
+
+    An airing with gps_start matches that instant. The clock is only for a
+    block that has no date, so yesterday's 8:15 PM does not cover tonight.
+    """
     rows = [p for p in (programs or []) if isinstance(p, dict)]
     if not rows:
         return None, None
+    stamp = time.time() if now_unix is None else float(now_unix)
     clock = _now_minutes() if now_minutes is None else int(now_minutes)
+    spans = [_program_span(prog) for prog in rows]
     covering_idx = None
-    for i, prog in enumerate(rows):
-        start = parse_minutes(str(prog.get("start") or prog.get("start_time") or ""))
-        end = parse_minutes(str(prog.get("end") or prog.get("end_time") or ""))
-        if start < 0:
-            continue
-        when = clock
-        if end < 0:
-            end = start + 30
-        if end <= start:
-            end += 24 * 60
-            if when < start:
-                when += 24 * 60
-        if start <= when < end:
-            covering_idx = i
-            break
+    if any(spans):
+        for i, span in enumerate(spans):
+            if span is not None and span[0] <= stamp < span[1]:
+                covering_idx = i
+                break
+    else:
+        for i, prog in enumerate(rows):
+            if _clock_covers(prog, clock):
+                covering_idx = i
+                break
     if covering_idx is None:
         return None, None
     nxt = rows[covering_idx + 1] if covering_idx + 1 < len(rows) else None
@@ -87,19 +135,34 @@ def now_and_next(
 def program_is_on(
     program: Optional[Dict[str, Any]],
     now_minutes: Optional[int] = None,
+    now_unix: Optional[float] = None,
 ) -> bool:
-    """True when this program block covers now_minutes."""
-    covering, _ = now_and_next([program] if isinstance(program, dict) else [], now_minutes)
+    """True when this program block covers now."""
+    covering, _ = now_and_next(
+        [program] if isinstance(program, dict) else [],
+        now_minutes,
+        now_unix=now_unix,
+    )
     return covering is not None
 
 
 def remaining_record_minutes(
     program: Optional[Dict[str, Any]],
     now_minutes: Optional[int] = None,
+    now_unix: Optional[float] = None,
 ) -> Optional[int]:
     """Minutes from now (or the start, if later) until this block ends."""
     if not isinstance(program, dict):
         return None
+    span = _program_span(program)
+    if span is not None:
+        stamp = time.time() if now_unix is None else float(now_unix)
+        start, end = span
+        if stamp >= end:
+            return None
+        if stamp < start:
+            return max(1, int(round((end - start) / 60)))
+        return max(1, int(round((end - stamp) / 60)))
     clock = _now_minutes() if now_minutes is None else int(now_minutes)
     start = parse_minutes(str(program.get("start") or program.get("start_time") or ""))
     end = parse_minutes(str(program.get("end") or program.get("end_time") or ""))
@@ -195,9 +258,14 @@ def current_program_title(
     """Title of the block on now, not a stale channel-level leftover."""
     if not isinstance(channel_row, dict):
         return "Live Broadcast"
-    now_prog, _ = now_and_next(channel_row.get("programs"), now_minutes)
-    title = (now_prog or {}).get("title") or channel_row.get("title") or ""
-    title = str(title).strip()
+    programs = channel_row.get("programs")
+    now_prog, _ = now_and_next(programs, now_minutes)
+    if now_prog:
+        title = str(now_prog.get("title") or "").strip()
+        return title or "Live Broadcast"
+    if any(_program_span(prog) for prog in (programs or []) if isinstance(prog, dict)):
+        return "Live Broadcast"
+    title = str(channel_row.get("title") or "").strip()
     return title or "Live Broadcast"
 
 
@@ -221,10 +289,19 @@ def _row_from_scan(channel: Dict[str, Any], prior: Optional[Dict[str, Any]] = No
     else:
         programs = []
     now_prog, next_prog = now_and_next(programs)
-    title = (now_prog or {}).get("title") or prior.get("title") or "Live"
-    start = (now_prog or {}).get("start") or prior.get("start_time") or ""
-    end = (now_prog or {}).get("end") or prior.get("end_time") or ""
-    next_title = (next_prog or {}).get("title") or prior.get("next_title") or ""
+    dated = any(_program_span(prog) for prog in programs if isinstance(prog, dict))
+    if now_prog:
+        title = now_prog.get("title") or "Live"
+        start = now_prog.get("start") or ""
+        end = now_prog.get("end") or ""
+        next_title = (next_prog or {}).get("title") or ""
+    elif dated:
+        title, start, end, next_title = "Live", "", "", ""
+    else:
+        title = prior.get("title") or "Live"
+        start = prior.get("start_time") or ""
+        end = prior.get("end_time") or ""
+        next_title = prior.get("next_title") or ""
     return {
         "network": channel.get("network") or prior.get("network") or "",
         "station": channel.get("callsign") or prior.get("station") or "",
@@ -271,8 +348,15 @@ def apply_program_events(channels: Dict[str, Any], events: Dict[str, List[Dict[s
             channels[number]["start_time"] = now_prog.get("start") or ""
             channels[number]["end_time"] = now_prog.get("end") or ""
             channels[number]["synopsis"] = now_prog.get("synopsis") or ""
+        elif any(_program_span(prog) for prog in channels[number]["programs"]):
+            channels[number]["title"] = "Live"
+            channels[number]["start_time"] = ""
+            channels[number]["end_time"] = ""
+            channels[number]["synopsis"] = ""
         if next_prog:
             channels[number]["next_title"] = next_prog.get("title") or ""
+        elif not now_prog:
+            channels[number]["next_title"] = ""
 
 
 def epg_tuner_held(sessions: Optional[List[Any]] = None) -> bool:
@@ -314,12 +398,47 @@ _WEEKDAY_NAMES = (
     "Saturdays",
     "Sundays",
 )
-_HISTORY_RAW_SEC = 10 * 24 * 3600
+_HISTORY_RAW_SEC = 31 * 24 * 3600
 _HISTORY_USUAL_SEC = 120 * 24 * 3600
+GUIDE_GRAB_GAP_SEC = 6 * 3600
 
 
 def _fold_title(title: str) -> str:
-    return " ".join(str(title or "").casefold().split())
+    """Case, spaces, and punctuation, so MASH and M*A*S*H are one name."""
+    chars = []
+    for ch in str(title or "").casefold():
+        if ch.isalnum():
+            chars.append(ch)
+        elif ch.isspace():
+            chars.append(" ")
+    return " ".join("".join(chars).split())
+
+
+def _slot_names(slot: Dict[str, Any]) -> set:
+    names = {_fold_title(str(slot.get("title") or ""))}
+    for alias in slot.get("aliases") or []:
+        folded = _fold_title(str(alias))
+        if folded:
+            names.add(folded)
+    names.discard("")
+    return names
+
+
+def _airing_duration(prog: Dict[str, Any]) -> int:
+    """Seconds the airing ran. Clock end wins over a missing duration."""
+    try:
+        dur = int(prog.get("duration_sec") or 0)
+    except (TypeError, ValueError):
+        dur = 0
+    if dur > 0:
+        return dur
+    start = parse_minutes(str(prog.get("start") or prog.get("start_time") or ""))
+    end = parse_minutes(str(prog.get("end") or prog.get("end_time") or ""))
+    if start < 0 or end < 0:
+        return 0
+    if end <= start:
+        end += 24 * 60
+    return (end - start) * 60
 
 
 def _program_when(prog: Dict[str, Any]) -> Optional[datetime]:
@@ -351,11 +470,12 @@ def _load_history(path: str) -> Dict[str, Any]:
 
 
 def _save_history(payload: Dict[str, Any], path: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    ensure_private_dir(os.path.dirname(path))
     tmp = f"{path}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
     os.replace(tmp, path)
+    chmod_private_file(path)
 
 
 def _usual_line(slot: Dict[str, Any]) -> str:
@@ -376,7 +496,7 @@ def remember_guide_history(
     history_path: Optional[str] = None,
     now: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Keep about 10 days of real airings, and the weekly slot after it repeats."""
+    """Keep about a month of real airings, and the weekly slot after it repeats."""
     path = history_path or GUIDE_HISTORY_PATH
     now_ts = time.time() if now is None else float(now)
     history = _load_history(path)
@@ -398,6 +518,7 @@ def remember_guide_history(
                 "station": str(row.get("station") or row.get("callsign") or ""),
                 "title": title,
                 "start": int(when.timestamp()),
+                "duration_sec": _airing_duration(prog),
                 "weekday": when.weekday(),
                 "clock": clock,
                 "before": str((before or {}).get("title") or ""),
@@ -440,24 +561,45 @@ def remember_guide_history(
         when = datetime.fromtimestamp(item["start"], tz=_EASTERN)
         iso = when.isocalendar()
         week = f"{iso.year}-W{iso.week:02d}"
-        key = (item["channel"], _fold_title(item["title"]), item["weekday"], item["clock"])
+        folded = _fold_title(item["title"])
+        key = (item["channel"], folded, item["weekday"], item["clock"])
         slot = slots.get(key)
         if slot is None:
+            for existing in history["usual"]:
+                if (
+                    str(existing.get("channel") or "") == item["channel"]
+                    and int(existing.get("weekday") or 0) == item["weekday"]
+                    and str(existing.get("clock") or "") == item["clock"]
+                    and folded in _slot_names(existing)
+                ):
+                    slot = existing
+                    break
+        if slot is None:
             slot = {
+                "id": uuid.uuid4().hex[:12],
                 "channel": item["channel"],
+                "tune_name": item.get("station") or item["channel"],
                 "title": item["title"],
                 "weekday": item["weekday"],
                 "clock": item["clock"],
+                "duration_sec": int(item.get("duration_sec") or 0),
+                "aliases": [],
                 "weeks": [],
                 "last_start": item["start"],
             }
             history["usual"].append(slot)
             slots[key] = slot
+        elif key not in slots:
+            slots[key] = slot
         weeks = slot.setdefault("weeks", [])
         if week not in weeks:
             weeks.append(week)
-        slot["title"] = item["title"]
+        if not slot.get("title_locked"):
+            slot["title"] = item["title"]
         slot["last_start"] = max(int(slot.get("last_start") or 0), item["start"])
+        learned = int(item.get("duration_sec") or 0)
+        if learned > 0 and not slot.get("length_locked"):
+            slot["duration_sec"] = learned
 
     usual_cut = now_ts - _HISTORY_USUAL_SEC
     history["usual"] = [
@@ -489,23 +631,230 @@ def remember_guide_history(
             line = _usual_line(slot) if slot else ""
             if line:
                 prog["usual"] = line
-            others: List[str] = []
-            for air in history["airings"]:
-                if str(air.get("channel")) == str(number):
-                    continue
-                air_day = air.get("weekday")
-                if air_day is None or int(air_day) != when.weekday() or str(air.get("clock") or "") != clock:
-                    continue
-                label = f"{air.get('channel')} {air.get('title')}".strip()
-                if label and label not in others:
-                    others.append(label)
-                if len(others) == 2:
-                    break
-            if others:
-                prog["also"] = f"Also at {clock}: " + ", ".join(others)
 
+    for slot in history["usual"]:
+        if isinstance(slot, dict) and not slot.get("id"):
+            slot["id"] = uuid.uuid4().hex[:12]
     _save_history({"airings": history["airings"], "usual": history["usual"]}, path)
     return history
+
+
+def delete_airing(
+    channel: str,
+    start: int,
+    history_path: Optional[str] = None,
+) -> bool:
+    """Drop one remembered airing. The rest of the log stays as it was."""
+    path = history_path or GUIDE_HISTORY_PATH
+    history = _load_history(path)
+    ident = (str(channel or "").strip(), int(start))
+    kept = [
+        item for item in history["airings"]
+        if not (
+            isinstance(item, dict)
+            and (str(item.get("channel") or ""), int(item.get("start") or 0)) == ident
+        )
+    ]
+    if len(kept) == len(history["airings"]):
+        return False
+    history["airings"] = kept
+    _save_history(history, path)
+    return True
+
+
+def guide_grab_due(
+    now: float,
+    updated_at: Any,
+    tuner_busy: bool,
+    gap: int = GUIDE_GRAB_GAP_SEC,
+) -> bool:
+    """A few times a day, and only when Tuner 1 is free."""
+    if tuner_busy:
+        return False
+    try:
+        updated = float(updated_at or 0)
+    except (TypeError, ValueError):
+        updated = 0.0
+    if updated <= 0:
+        return True
+    return float(now) - updated >= gap
+
+
+def listed_slots(history: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Repeated shows, plus any slot you added or marked to record."""
+    out = []
+    for slot in history.get("usual") or []:
+        if not isinstance(slot, dict):
+            continue
+        weeks = slot.get("weeks") or []
+        if len(weeks) >= 2 or slot.get("manual") or slot.get("record"):
+            out.append(slot)
+    out.sort(key=lambda slot: (int(slot.get("weekday") or 0), str(slot.get("clock") or ""), str(slot.get("title") or "")))
+    return out
+
+
+def _edit_slot(slot_id: str, path: str, change) -> Optional[Dict[str, Any]]:
+    history = _load_history(path)
+    ident = (slot_id or "").strip()
+    for slot in history["usual"]:
+        if isinstance(slot, dict) and str(slot.get("id") or "") == ident:
+            change(slot)
+            _save_history(history, path)
+            return slot
+    return None
+
+
+def add_slot(
+    channel: str,
+    title: str,
+    weekday: int,
+    clock: str,
+    duration_sec: int,
+    tune_name: str = "",
+    history_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    path = history_path or GUIDE_HISTORY_PATH
+    name = (title or "").strip()
+    when = (clock or "").strip()
+    if not (channel or "").strip() or not name or not when:
+        raise ValueError("A station, a title, and a clock are required.")
+    if parse_minutes(when) < 0:
+        raise ValueError("Clock looks like 8:15 PM.")
+    if int(weekday) < 0 or int(weekday) > 6:
+        raise ValueError("Weekday is 0 for Monday through 6 for Sunday.")
+    history = _load_history(path)
+    slot = {
+        "id": uuid.uuid4().hex[:12],
+        "channel": str(channel).strip(),
+        "tune_name": (tune_name or channel).strip(),
+        "title": name,
+        "title_locked": True,
+        "weekday": int(weekday),
+        "clock": when,
+        "duration_sec": max(60, int(duration_sec or 0)),
+        "length_locked": True,
+        "aliases": [],
+        "weeks": [],
+        "manual": True,
+        "last_start": int(time.time()),
+    }
+    history["usual"].append(slot)
+    _save_history(history, path)
+    return slot
+
+
+def rename_slot(slot_id: str, title: str, history_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    name = (title or "").strip()
+    if not name:
+        raise ValueError("A title is required.")
+
+    def change(slot):
+        slot["title"] = name
+        slot["title_locked"] = True
+
+    return _edit_slot(slot_id, history_path or GUIDE_HISTORY_PATH, change)
+
+
+def set_slot_clock(slot_id: str, clock: str, history_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    when = (clock or "").strip()
+    if parse_minutes(when) < 0:
+        raise ValueError("Clock looks like 8:15 PM.")
+
+    def change(slot):
+        slot["clock"] = when
+
+    return _edit_slot(slot_id, history_path or GUIDE_HISTORY_PATH, change)
+
+
+def set_slot_length(slot_id: str, duration_sec: int, history_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    length = max(60, int(duration_sec or 0))
+
+    def change(slot):
+        slot["duration_sec"] = length
+        slot["length_locked"] = True
+
+    return _edit_slot(slot_id, history_path or GUIDE_HISTORY_PATH, change)
+
+
+def delete_slot(slot_id: str, history_path: Optional[str] = None) -> bool:
+    path = history_path or GUIDE_HISTORY_PATH
+    history = _load_history(path)
+    ident = (slot_id or "").strip()
+    kept = [slot for slot in history["usual"] if str(slot.get("id") or "") != ident]
+    if len(kept) == len(history["usual"]):
+        return False
+    history["usual"] = kept
+    _save_history(history, path)
+    return True
+
+
+def set_slot_aliases(slot_id: str, aliases: List[str], history_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    names = []
+    for alias in aliases:
+        text = str(alias or "").strip()
+        if text and text not in names:
+            names.append(text)
+
+    def change(slot):
+        slot["aliases"] = names
+
+    return _edit_slot(slot_id, history_path or GUIDE_HISTORY_PATH, change)
+
+
+def set_slot_record(slot_id: str, record: bool, history_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def change(slot):
+        slot["record"] = bool(record)
+
+    return _edit_slot(slot_id, history_path or GUIDE_HISTORY_PATH, change)
+
+
+def arm_weekly_slots(
+    now: Optional[float] = None,
+    history_path: Optional[str] = None,
+    schedule_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Queue this week's airing for every slot marked to record. A miss keeps the mark."""
+    from engine.psip import GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
+    from engine.schedule import add_later, load_schedule
+
+    stamp = time.time() if now is None else float(now)
+    local = datetime.fromtimestamp(stamp, tz=_EASTERN)
+    history = _load_history(history_path or GUIDE_HISTORY_PATH)
+    queued = load_schedule(schedule_path)
+    added = []
+    for slot in history.get("usual") or []:
+        if not isinstance(slot, dict) or not slot.get("record"):
+            continue
+        if int(slot.get("weekday") or 0) != local.weekday():
+            continue
+        minutes = parse_minutes(str(slot.get("clock") or ""))
+        if minutes < 0:
+            continue
+        start = local.replace(hour=minutes // 60, minute=minutes % 60, second=0, microsecond=0)
+        start_unix = int(start.timestamp())
+        duration = max(60, int(slot.get("duration_sec") or 0))
+        if stamp < start_unix - 60 or stamp >= start_unix + duration + 180:
+            continue
+        slot_id = str(slot.get("id") or "")
+        if any(
+            str(row.get("slot_id") or "") == slot_id and int(row.get("start_unix") or 0) == start_unix
+            for row in queued
+        ):
+            continue
+        gps = start_unix - GPS_UNIX_OFFSET + GPS_LEAP_SECONDS
+        item = add_later(
+            str(slot.get("tune_name") or slot.get("channel") or ""),
+            str(slot.get("title") or "Scheduled"),
+            gps,
+            duration,
+            clock=str(slot.get("clock") or ""),
+            display_name=str(slot.get("tune_name") or slot.get("channel") or ""),
+            slot_id=slot_id,
+            path=schedule_path,
+        )
+        queued.append(item)
+        added.append(item)
+    return added
 
 
 def refresh_guide(

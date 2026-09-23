@@ -239,6 +239,30 @@ class TestGuide(unittest.TestCase):
             self.assertEqual(data["channels"]["8.1"]["programs"][0]["title"], "PSIP Night")
             self.assertEqual(data["channels"]["8.1"]["source"], "psip")
 
+    def test_now_and_next_ignores_yesterdays_clock(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from engine.guide import now_and_next, program_is_on, remaining_record_minutes
+
+        game = {
+            "title": "Monday Night Football",
+            "start": "8:15 PM",
+            "end": "11:15 PM",
+            "gps_start": 1474071318,
+            "duration_sec": 10800,
+        }
+        eastern = ZoneInfo("America/New_York")
+        during = datetime(2026, 9, 21, 22, 50, tzinfo=eastern).timestamp()
+        tonight = datetime(2026, 9, 22, 22, 54, tzinfo=eastern).timestamp()
+        now, _nxt = now_and_next([game], now_minutes=22 * 60 + 54, now_unix=during)
+        self.assertEqual(now["title"], "Monday Night Football")
+        self.assertTrue(program_is_on(game, now_unix=during))
+        later, _nxt = now_and_next([game], now_minutes=22 * 60 + 54, now_unix=tonight)
+        self.assertIsNone(later)
+        self.assertFalse(program_is_on(game, now_minutes=22 * 60 + 54, now_unix=tonight))
+        self.assertIsNone(remaining_record_minutes(game, now_minutes=22 * 60 + 54, now_unix=tonight))
+
     def test_now_and_next_wraps_midnight(self):
         from engine.guide import now_and_next
 
@@ -352,7 +376,7 @@ class TestGuide(unittest.TestCase):
         from datetime import datetime
         from zoneinfo import ZoneInfo
         from engine.psip import GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
-        from engine.guide import remember_guide_history
+        from engine.guide import _load_history, delete_airing, remember_guide_history
 
         eastern = ZoneInfo("America/New_York")
 
@@ -380,7 +404,7 @@ class TestGuide(unittest.TestCase):
 
         first = datetime(2026, 9, 14, 20, 15, tzinfo=eastern)
         second = datetime(2026, 9, 21, 20, 15, tzinfo=eastern)
-        stale = datetime(2026, 9, 1, 20, 15, tzinfo=eastern)
+        stale = datetime(2026, 7, 1, 20, 15, tzinfo=eastern)
         now = datetime(2026, 9, 21, 21, 0, tzinfo=eastern).timestamp()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -403,9 +427,10 @@ class TestGuide(unittest.TestCase):
             history = remember_guide_history(again, path, now=now)
             show = again["5.1"]["programs"][1]
             self.assertEqual(show["usual"], "Usually Mondays at 8:15 PM")
-            self.assertIn("19.1 Evening News", show["also"])
+            self.assertNotIn("also", show)
             slot = next(item for item in history["usual"] if item["title"] == "Monday Night Football")
             self.assertEqual(len(slot["weeks"]), 2)
+            self.assertEqual(slot["duration_sec"], 3 * 3600)
 
             remembered = remember_guide_history({"5.1": football(second)}, path, now=now)
             slot = next(item for item in remembered["usual"] if item["title"] == "Monday Night Football")
@@ -425,6 +450,97 @@ class TestGuide(unittest.TestCase):
                 now=now,
             )
             self.assertNotIn("Ancient Show", [item["title"] for item in aged["airings"]])
+            month_old = datetime(2026, 9, 1, 20, 15, tzinfo=eastern)
+            kept = remember_guide_history(
+                {"5.1": {"station": "WEWSHD", "programs": [{
+                    "title": "Still Here",
+                    "start": "8:15 PM",
+                    "end": "9:15 PM",
+                    "gps_start": gps(month_old),
+                }]}},
+                path,
+                now=now,
+            )
+            self.assertIn("Still Here", [item["title"] for item in kept["airings"]])
+            self.assertTrue(delete_airing("5.1", int(month_old.timestamp()), path))
+            left = _load_history(path)
+            self.assertNotIn("Still Here", [item["title"] for item in left["airings"]])
+            self.assertIn("Monday Night Football", [item["title"] for item in left["airings"]])
+
+    def test_mash_titles_share_a_slot_and_a_mark_records_once(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from engine.psip import GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
+        from engine.guide import (
+            _fold_title,
+            _load_history,
+            add_slot,
+            arm_weekly_slots,
+            delete_slot,
+            listed_slots,
+            remember_guide_history,
+            rename_slot,
+            set_slot_aliases,
+            set_slot_clock,
+            set_slot_length,
+            set_slot_record,
+        )
+        from engine.schedule import load_schedule
+
+        self.assertEqual(_fold_title("M*A*S*H"), "mash")
+        self.assertEqual(_fold_title("MASH"), "mash")
+        eastern = ZoneInfo("America/New_York")
+
+        def gps(when):
+            return int(when.timestamp()) - GPS_UNIX_OFFSET + GPS_LEAP_SECONDS
+
+        def show(when, title):
+            return {"5.1": {"station": "WEWSHD", "programs": [{
+                "title": title,
+                "start": "8:15 PM",
+                "end": "8:45 PM",
+                "gps_start": gps(when),
+            }]}}
+
+        first = datetime(2026, 9, 14, 20, 15, tzinfo=eastern)
+        second = datetime(2026, 9, 21, 20, 15, tzinfo=eastern)
+        now = second.timestamp()
+        with tempfile.TemporaryDirectory() as tmp:
+            hist = os.path.join(tmp, "guide_history.json")
+            sched = os.path.join(tmp, "schedule.json")
+            remember_guide_history(show(first, "M*A*S*H"), hist, now=now)
+            history = remember_guide_history(show(second, "MASH"), hist, now=now)
+            mash = [slot for slot in history["usual"] if _fold_title(slot["title"]) == "mash"]
+            self.assertEqual(len(mash), 1)
+            self.assertEqual(mash[0]["duration_sec"], 30 * 60)
+            self.assertEqual(len(listed_slots(history)), 1)
+            renamed = rename_slot(mash[0]["id"], "MASH", hist)
+            self.assertEqual(renamed["title"], "MASH")
+            moved = set_slot_clock(mash[0]["id"], "8:00 PM", hist)
+            self.assertEqual(moved["clock"], "8:00 PM")
+            sized = set_slot_length(mash[0]["id"], 1800, hist)
+            self.assertEqual(sized["duration_sec"], 1800)
+            self.assertTrue(sized["length_locked"])
+            set_slot_aliases(mash[0]["id"], ["MNF"], hist)
+            set_slot_record(mash[0]["id"], True, hist)
+            added = add_slot("8.1", "News", 0, "6:00 PM", 1800, tune_name="WJW-HD", history_path=hist)
+            self.assertTrue(any(slot["id"] == added["id"] for slot in listed_slots(_load_history(hist))))
+            queued = arm_weekly_slots(now, hist, sched)
+            self.assertEqual(len(queued), 1)
+            self.assertEqual(queued[0]["slot_id"], mash[0]["id"])
+            self.assertEqual(arm_weekly_slots(now, hist, sched), [])
+            self.assertTrue(_load_history(hist)["usual"][0]["record"])
+            self.assertEqual(len(load_schedule(sched)), 1)
+            self.assertTrue(delete_slot(added["id"], hist))
+
+    def test_guide_grab_waits_for_a_free_tuner_and_a_few_hours(self):
+        from engine.guide import guide_grab_due
+
+        now = 1_000_000.0
+        self.assertFalse(guide_grab_due(now, now - 100, True))
+        self.assertFalse(guide_grab_due(now, now - 100, False))
+        self.assertTrue(guide_grab_due(now, now - 6 * 3600, False))
+        self.assertTrue(guide_grab_due(now, 0, False))
 
 
 if __name__ == "__main__":

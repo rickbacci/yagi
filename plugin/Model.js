@@ -101,15 +101,44 @@ function programsFor(item) {
   return out
 }
 
+function airingCoversNow(prog, nowUnix) {
+  var start = programUnix(prog)
+  if (start <= 0) return null
+  var dur = Number(prog && prog.duration_sec) || 0
+  if (dur <= 0) dur = 30 * 60
+  var now = Number(nowUnix) || (Date.now() / 1000)
+  return now >= start && now < start + dur
+}
+
 function currentProgram(item, nowMin) {
   var now = (nowMin === undefined || nowMin === null || nowMin < 0) ? minutesNow() : nowMin
   return coveringProgram(programsFor(item), formatSlot(now))
 }
 
+function nextProgram(item, nowMin) {
+  var programs = programsFor(item)
+  var now = currentProgram(item, nowMin)
+  if (!now) return null
+  var i
+  for (i = 0; i < programs.length; i++) {
+    if (programs[i] === now) return programs[i + 1] || null
+  }
+  return null
+}
+
 function coveringProgram(programs, slotLabel) {
+  var dated = false
+  var i
+  for (i = 0; i < programs.length; i++) {
+    if (programUnix(programs[i]) > 0) {
+      dated = true
+      if (airingCoversNow(programs[i])) return programs[i]
+    }
+  }
+  if (dated) return null
   var t = parseMinutes(slotLabel)
   if (t < 0) return null
-  for (var i = 0; i < programs.length; i++) {
+  for (i = 0; i < programs.length; i++) {
     var p = programs[i]
     var a = parseMinutes(p.start || p.start_time)
     var b = parseMinutes(p.end || p.end_time)
@@ -127,6 +156,7 @@ function coveringProgram(programs, slotLabel) {
 
 function showIsOn(block, nowMin) {
   if (!block || block.empty) return false
+  if (programUnix(block) > 0) return !!airingCoversNow(block)
   if (block.now) return true
   var now = (nowMin === undefined || nowMin === null) ? minutesNow() : nowMin
   var a = parseMinutes(block.start || block.start_time)
@@ -143,6 +173,15 @@ function showIsOn(block, nowMin) {
 
 function recordDurationArg(block, nowMin) {
   if (!block) return ""
+  if (programUnix(block) > 0) {
+    var start = programUnix(block)
+    var dur = Number(block.duration_sec) || 0
+    if (dur <= 0) dur = 30 * 60
+    var stamp = Date.now() / 1000
+    if (stamp >= start + dur) return ""
+    var remainSec = (stamp < start) ? dur : (start + dur - stamp)
+    return Math.max(1, Math.round(remainSec / 60)) + "m"
+  }
   var now = (nowMin === undefined || nowMin === null) ? minutesNow() : nowMin
   var a = parseMinutes(block.start || block.start_time)
   var b = parseMinutes(block.end || block.end_time)

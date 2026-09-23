@@ -254,8 +254,7 @@ class TestDvrEngine(unittest.TestCase):
             self.assertEqual(side["channel"], "8.1")
             self.assertEqual(side["status"], "recording")
             self.assertIsNone(side["end"])
-            watcher = mock_popen.call_args_list[1][0][0]
-            self.assertIn("watch_recording", watcher[2])
+            self.assertEqual(mock_popen.call_count, 1)
 
             # Second concurrent recording of same channel must raise RuntimeError
             with self.assertRaises(RuntimeError):
@@ -413,6 +412,58 @@ class TestDvrEngine(unittest.TestCase):
             self.assertEqual(records[0]["status"], "failed")
             self.assertFalse(records[0]["playable"])
             self.assertTrue(os.path.exists(rec_file))
+
+    def test_sweep_stops_a_recording_past_its_end(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            active = os.path.join(tmp_dir, "active.json")
+            rec = os.path.join(tmp_dir, "show.ts")
+            with open(rec, "wb") as f:
+                f.write(b"x" * 1024)
+            session = DvrSession(
+                session_id="s1",
+                channel_number="8.1",
+                station="FOX",
+                tune_name="WJW-HD",
+                program_title="Game",
+                start_time=time.time() - 500,
+                duration_seconds=60,
+                adapter_id=1,
+                file_path=rec,
+                socket_path="",
+                pid=os.getpid(),
+            )
+            DvrManager.save_active_sessions([session], active)
+            with patch.object(DvrManager, "stop_recording", return_value=[session]) as stop:
+                stopped = DvrManager.sweep_active(active_path=active)
+            self.assertEqual(len(stopped), 1)
+            stop.assert_called_once_with("s1", active_path=active)
+
+    def test_sweep_leaves_a_recording_that_is_still_inside_its_window(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            active = os.path.join(tmp_dir, "active.json")
+            rec = os.path.join(tmp_dir, "show.ts")
+            with open(rec, "wb") as f:
+                f.write(b"x" * 1024)
+            session = DvrSession(
+                session_id="s2",
+                channel_number="8.1",
+                station="FOX",
+                tune_name="WJW-HD",
+                program_title="Game",
+                start_time=time.time(),
+                duration_seconds=3600,
+                adapter_id=1,
+                file_path=rec,
+                socket_path="",
+                pid=os.getpid(),
+            )
+            DvrManager.save_active_sessions([session], active)
+            with patch("engine.dvr.disk_below_floor", return_value=False), patch.object(
+                DvrManager, "stop_recording"
+            ) as stop:
+                stopped = DvrManager.sweep_active(active_path=active)
+            self.assertEqual(stopped, [])
+            stop.assert_not_called()
 
 
 if __name__ == "__main__":
