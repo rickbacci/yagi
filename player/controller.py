@@ -713,6 +713,9 @@ class MpvController:
                 "--keep-open=yes",
                 "--keep-open-pause=no",
                 "--cache-pause=no",
+                "--cache=no",
+                "--demuxer-readahead-secs=1",
+                "--demuxer-max-bytes=1572864",
                 "--ytdl=no",
             ])
         else:
@@ -1006,7 +1009,9 @@ class MpvController:
                 hop = abs(delta)
                 byte = align_ts(max(0, int(Timeshift.dump_bytes() - hop * rate)))
                 return self._seek_cursor(byte, paused=False)
-            pos = int(state.get("playhead_byte") or Timeshift.playhead_now())
+            pos = Timeshift.follow_pos()
+            if pos is None:
+                pos = int(state.get("playhead_byte") or Timeshift.playhead_now())
             if delta > 0:
                 hop = Timeshift.fwd_hop(remain)
                 if hop <= 0 or (remain - hop) <= LIVE_SLACK:

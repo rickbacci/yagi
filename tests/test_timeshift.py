@@ -352,12 +352,69 @@ class TestTimeshift(unittest.TestCase):
                         playhead_byte=0,
                         rate_byte=mark,
                         rate_t=t0,
-                        mux_bps=824_000,
+                        mux_bps=0,
                     )
                     rate = Timeshift.write_rate()
                     self.assertAlmostEqual(rate, grown / 10.0, delta=50_000)
                     self.assertNotAlmostEqual(rate, ATSC_BPS / 8.0, delta=100_000)
-                    self.assertNotAlmostEqual(rate, 824_000, delta=100_000)
+
+    def test_write_rate_nudges_a_known_mux(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            mark = 1880
+            with open(live, "wb") as f:
+                f.write(b"x" * (mark + 12_000_000))
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
+                Timeshift.patch_state(
+                    rate_byte=mark,
+                    rate_t=time.time() - 10.0,
+                    mux_bps=800_000,
+                )
+                rate = Timeshift.write_rate()
+            self.assertGreater(rate, 800_000)
+            self.assertLess(rate, 900_000)
+
+    def test_write_rate_ignores_a_short_spike(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            with open(live, "wb") as f:
+                f.write(b"x" * (1880 + 8_000_000))
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
+                Timeshift.patch_state(
+                    rate_byte=1880,
+                    rate_t=time.time() - 1.0,
+                    mux_bps=800_000,
+                )
+                self.assertEqual(Timeshift.write_rate(), 800_000)
+
+    def test_pace_waits_out_the_whole_lead(self):
+        from engine.follow_ts import TsFollower
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            with open(live, "wb") as f:
+                f.write(b"x" * 188)
+            follower = TsFollower(live, 0, os.path.join(tmp_dir, "follow.sock"))
+            follower._paced = True
+            follower._pace_bps = 1000.0
+            follower._pace_origin_t = time.monotonic()
+            follower._pace_origin_pos = 0
+            follower.pos = 10_000
+            slept = []
+
+            def fake_sleep(seconds):
+                slept.append(seconds)
+                follower._pace_origin_t -= seconds
+
+            with patch("engine.follow_ts.time.sleep", side_effect=fake_sleep):
+                follower._pace_wait()
+            self.assertGreater(sum(slept), 9.0)
+            self.assertLess(max(slept), 0.2)
 
     def test_write_rate_falls_back_to_atsc_when_unpaused(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

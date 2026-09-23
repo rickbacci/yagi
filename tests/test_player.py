@@ -359,6 +359,9 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertNotIn("scan_all_pmts=1", joined)
         mock_follow.assert_called_with(0)
         self.assertIn("--cache-pause=no", cmd)
+        self.assertGreater(cmd.index("--cache=no"), cmd.index("--cache=yes"))
+        self.assertIn("--demuxer-readahead-secs=1", cmd)
+        self.assertIn("--demuxer-max-bytes=1572864", cmd)
         self.assertIn("--ytdl=no", cmd)
         self.assertIn("--mute=yes", cmd)
         self.assertIn("--sub-create-cc-track=yes", cmd)
@@ -827,6 +830,22 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         mock_seek.assert_called_with(376)
         mock_popen.assert_not_called()
 
+    def test_seek_back_while_delayed_uses_the_live_cursor(self):
+        self.server.path_value = FOLLOW_FIFO_PATH
+        with patch("player.controller.Timeshift.load_state", return_value={"view": "delayed", "paused": False, "skip_busy": False, "playhead_byte": 1880, "follow_socket": "/run/user/1000/omarchy-tv-follow.sock"}), \
+             patch("player.controller.Timeshift.follow_pos", return_value=37_600_000), \
+             patch("player.controller.Timeshift.delay_sec", return_value=30.0), \
+             patch("player.controller.Timeshift.send_follow_seek", return_value=True) as mock_seek, \
+             patch("player.controller.Timeshift.send_follow_play", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_pace", return_value=True), \
+             patch("player.controller.Timeshift.write_rate", return_value=1_880_000), \
+             patch("player.controller.Timeshift.dump_bytes", return_value=94_000_000), \
+             patch("player.controller.Timeshift.patch_state"), \
+             patch("player.controller.subprocess.Popen") as mock_popen:
+            self.assertTrue(self.controller.seek(-10))
+        mock_seek.assert_called_with(18_800_000)
+        mock_popen.assert_not_called()
+
     def test_seek_fwd_on_live_is_noop(self):
         self.server.path_value = FOLLOW_FIFO_PATH
         with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False, "skip_busy": False}), \
@@ -909,7 +928,7 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("Super+F", src)
         self.assertIn("function program_on_now", src)
         self.assertIn("function picture_ready", src)
-        self.assertIn("dump_held", src)
+        self.assertIn("cached_timeshift.mux_bps", src)
         record_key = src[src.index('mp.add_forced_key_binding("r"'):]
         self.assertIn("recording_for_channel(ch)", record_key)
         self.assertNotIn("cached_recordings[1]", record_key)

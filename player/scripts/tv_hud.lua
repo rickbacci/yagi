@@ -363,6 +363,7 @@ end
 
 local function measured_rate()
     local saved = tonumber(cached_timeshift.mux_bps) or 0
+    if saved >= 1000 then return saved end
     local size = file_bytes()
     local now = mp.get_time()
     if not rate_mark_t then
@@ -370,19 +371,16 @@ local function measured_rate()
         rate_mark_t = now
     else
         local elapsed = now - rate_mark_t
-        if elapsed >= 0.5 and size > (rate_mark_byte or 0) then
+        if elapsed >= 5 and size > (rate_mark_byte or 0) then
             local rate = (size - rate_mark_byte) / elapsed
             if rate >= 1000 then
                 mux_bps = rate
-                if elapsed >= 5 then
-                    rate_mark_byte = size
-                    rate_mark_t = now
-                end
+                rate_mark_byte = size
+                rate_mark_t = now
             end
         end
     end
     if mux_bps >= 1000 then return mux_bps end
-    if saved >= 1000 then return saved end
     return ATSC_BPS / 8
 end
 
@@ -398,13 +396,6 @@ local function timeshift_delay()
         f_ts:close()
         local data = utils.parse_json(content)
         if type(data) == "table" then cached_timeshift = data end
-    end
-    local view = tostring(cached_timeshift.view or "live")
-    local paused = cached_timeshift.paused == true
-    local held = cached_timeshift.dump_held == true
-    if view == "live" and not paused and not held then
-        behind_clock = 0
-        return 0
     end
     local size = file_bytes()
     local pos = read_follow_cursor()

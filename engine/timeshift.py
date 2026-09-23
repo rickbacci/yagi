@@ -267,11 +267,18 @@ class Timeshift:
         else:
             elapsed = now - mark_t
             grown = size - mark_b
-            if elapsed >= 0.5 and grown > 0:
+            # A short window is a spike. Once a rate is known, a new window only nudges it,
+            # or the behind clock jumps while the picture stays put.
+            if elapsed >= 5 and grown > 0:
                 measured = grown / elapsed
                 if measured >= 1000:
-                    if elapsed >= 5:
-                        cls.patch_state(rate_byte=size, rate_t=now, mux_bps=measured)
+                    try:
+                        prev = float(state.get("mux_bps") or 0)
+                    except (TypeError, ValueError):
+                        prev = 0.0
+                    if prev >= 1000:
+                        measured = prev * 0.85 + measured * 0.15
+                    cls.patch_state(rate_byte=size, rate_t=now, mux_bps=measured)
                     return measured
         try:
             bps = float(cls.load_state().get("mux_bps") or 0)

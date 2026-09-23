@@ -190,14 +190,15 @@ class TsFollower:
         self._pace_origin_pos = self.pos
 
     def _pace_wait(self) -> None:
-        if not self._paced or self._pace_bps <= 0:
-            return
-        elapsed = time.monotonic() - self._pace_origin_t
-        allowed = self._pace_origin_pos + elapsed * self._pace_bps
-        if self.pos <= allowed:
-            return
-        extra = (self.pos - allowed) / self._pace_bps
-        time.sleep(min(max(0.0, extra), 0.25))
+        """Block until the cursor is allowed. A capped nap lets a slow pace leak."""
+        while self._running and self._paced and self._pace_bps > 0 and not self._paused:
+            with self._lock:
+                elapsed = time.monotonic() - self._pace_origin_t
+                allowed = self._pace_origin_pos + elapsed * self._pace_bps
+                if self.pos <= allowed:
+                    return
+                extra = (self.pos - allowed) / self._pace_bps
+            time.sleep(min(max(0.0, extra), 0.05))
 
     def _publish_pos(self, force: bool = False) -> None:
         now = time.monotonic()
