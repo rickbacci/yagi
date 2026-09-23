@@ -404,6 +404,74 @@ class DvrManager:
         return stopped
 
     @classmethod
+    def keep_pause(
+        cls,
+        station: str = "",
+        recordings_dir: Optional[str] = None,
+        state: Optional[Dict[str, Any]] = None,
+        dump_path: Optional[str] = None,
+    ) -> str:
+        """Copy the paused span of the live dump into the library. Tuner 1 stays free."""
+        from engine.timeshift import TIMESHIFT_FILE, Timeshift
+
+        live = state if state is not None else Timeshift.load_state()
+        if not live.get("running"):
+            raise RuntimeError("Nothing is on.")
+        tune = str(live.get("tune_name") or live.get("channel") or "").strip()
+        asked = (station or "").strip()
+        if asked and asked != tune:
+            raise RuntimeError("That station is no longer the pause file.")
+        if not tune:
+            raise RuntimeError("Nothing is on.")
+        source = dump_path or str(live.get("path") or "") or TIMESHIFT_FILE
+        if dump_path is None and os.path.realpath(source) != os.path.realpath(TIMESHIFT_FILE):
+            raise RuntimeError("That station is no longer the pause file.")
+        if not os.path.isfile(source):
+            raise RuntimeError("The pause file is gone.")
+        size = os.path.getsize(source)
+        start = int(live.get("playhead_byte") or 0)
+        if start < 0:
+            start = 0
+        if size - start < MIN_PLAYABLE_BYTES:
+            raise RuntimeError("That pause is too short to keep.")
+
+        rec_dir = recordings_dir or RECORDINGS_DIR
+        ensure_private_dir(rec_dir)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = os.path.join(rec_dir, f"{sanitize_filename(tune)}_pause_{stamp}.ts")
+        with open(source, "rb") as src, open(dest, "wb") as out:
+            src.seek(start)
+            left = size - start
+            while left > 0:
+                chunk = src.read(min(1024 * 1024, left))
+                if not chunk:
+                    break
+                out.write(chunk)
+                left -= len(chunk)
+        chmod_private_file(dest)
+        try:
+            service = int(live.get("service_id") or 0)
+        except (TypeError, ValueError):
+            service = 0
+        if service <= 0:
+            service = Timeshift.service_id(tune)
+        write_sidecar(dest, {
+            "title": tune,
+            "station": tune,
+            "channel": str(live.get("channel") or tune),
+            "tune_name": tune,
+            "service_id": service,
+            "full_mux": bool(live.get("full_mux")),
+            "start": int(time.time()),
+            "end": int(time.time()),
+            "status": "complete",
+            "kept_from": "pause",
+        })
+        if os.path.realpath(rec_dir) == os.path.realpath(RECORDINGS_DIR):
+            cls.refresh_library_index(recordings_dir=rec_dir)
+        return dest
+
+    @classmethod
     def start_recording(
         cls,
         channel_query: str,

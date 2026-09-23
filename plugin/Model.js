@@ -11,22 +11,20 @@ function cleanChannelName(name) {
   return name.replace(/_/g, " ").trim();
 }
 
-function bandColor(band, accent, foreground) {
-  if (band === "UHF") return accent;
-  if (band === "VHF-High") return "#89b4fa"; // Soft Blue
-  if (band === "VHF-Low") return "#f9e2af";  // Soft Amber
-  return foreground;
+function bandColor(band, accent, foreground, muted) {
+  if (band === "UHF") return accent
+  if (band === "VHF-High") return muted || foreground
+  if (band === "VHF-Low") return foreground
+  return foreground
 }
 
-function networkColor(network, fallback) {
+function networkColor(network, accent, urgent, muted, foreground) {
   var n = String(network || "").toUpperCase()
-  if (n === "NBC" || n === "CW") return "#A6E3A1"
-  if (n === "ABC") return "#F9E2AF"
-  if (n === "FOX") return "#B489FA"
-  if (n === "CBS") return "#CBA6F7"
-  if (n === "PBS") return "#94E2D5"
-  if (n === "UNIVISION") return "#F38BA8"
-  return fallback
+  if (n === "NBC" || n === "CW" || n === "PBS") return accent
+  if (n === "FOX" || n === "UNIVISION") return urgent
+  if (n === "CBS") return muted || foreground
+  if (n === "ABC") return foreground
+  return accent
 }
 
 function minutesNow() {

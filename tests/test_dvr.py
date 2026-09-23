@@ -465,6 +465,37 @@ class TestDvrEngine(unittest.TestCase):
             self.assertEqual(stopped, [])
             stop.assert_not_called()
 
+    def test_keep_copies_the_pause_and_leaves_the_dump(self):
+        from engine.dvr import MIN_PLAYABLE_BYTES, read_sidecar
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dump = os.path.join(tmp_dir, "live.ts")
+            library = os.path.join(tmp_dir, "lib")
+            payload = b"a" * (MIN_PLAYABLE_BYTES + 4096)
+            with open(dump, "wb") as handle:
+                handle.write(payload)
+            state = {
+                "running": True,
+                "tune_name": "WEWSHD",
+                "channel": "WEWSHD",
+                "playhead_byte": 4096,
+                "full_mux": True,
+                "service_id": 4,
+                "path": dump,
+            }
+            dest = DvrManager.keep_pause(recordings_dir=library, state=state, dump_path=dump)
+            self.assertEqual(os.path.getsize(dump), len(payload))
+            self.assertEqual(os.path.getsize(dest), len(payload) - 4096)
+            side = read_sidecar(dest)
+            self.assertEqual(side["kept_from"], "pause")
+            self.assertEqual(side["service_id"], 4)
+            self.assertTrue(side["full_mux"])
+            with self.assertRaises(RuntimeError):
+                DvrManager.keep_pause("WJW-HD", recordings_dir=library, state=state, dump_path=dump)
+            short = dict(state)
+            short["playhead_byte"] = len(payload) - 100
+            with self.assertRaises(RuntimeError):
+                DvrManager.keep_pause(recordings_dir=library, state=short, dump_path=dump)
+
 
 if __name__ == "__main__":
     unittest.main()

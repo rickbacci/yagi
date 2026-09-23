@@ -443,6 +443,16 @@ def cmd_prev(args):
     print("Channel Down")
 
 
+def cmd_keep(args):
+    from engine.dvr import DvrManager
+    try:
+        path = DvrManager.keep_pause(getattr(args, "station", "") or "")
+    except Exception as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+    print(f"Kept {os.path.basename(path)}")
+
+
 def cmd_stop(args):
     player = MpvController()
     player.stop()
@@ -742,6 +752,9 @@ def main():
     # next / prev / stop
     subparsers.add_parser("next", help="Tune next channel").set_defaults(func=cmd_next)
     subparsers.add_parser("prev", help="Tune previous channel").set_defaults(func=cmd_prev)
+    p_keep = subparsers.add_parser("keep", help="Copy the current pause into the library")
+    p_keep.add_argument("station", nargs="?", default="", help="Only if this station is still the pause file")
+    p_keep.set_defaults(func=cmd_keep)
     subparsers.add_parser("stop", help="Close TV player").set_defaults(func=cmd_stop)
     p_sync = subparsers.add_parser("sync", help="Clear now-playing if the TV window is already gone")
     p_sync.add_argument("--reap", type=int, default=0, help=argparse.SUPPRESS)

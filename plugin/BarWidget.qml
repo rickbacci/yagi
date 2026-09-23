@@ -65,6 +65,7 @@ BarWidget {
   property var hiddenData: []
   property string playerMode: "live"
   property string lastLiveChannel: ""
+  property bool pauseKept: false
   readonly property bool isLibraryPlayback: root.playerMode === "recording"
   readonly property bool isLiveSession: root.playerMode === "live" || root.playerMode === "timeshift"
   readonly property bool isPlayback: root.isLibraryPlayback || root.playerMode === "timeshift"
@@ -520,7 +521,14 @@ BarWidget {
     root.cycleListed(-1)
   }
 
+  function keepPause() {
+    if (root.pauseKept || keepProc.running) return
+    keepProc.command = [root.binPath, "keep"]
+    keepProc.running = true
+  }
+
   function stopPlayer() {
+    root.pauseKept = false
     root.activeChannelName = ""
     root.playerMode = "live"
     stopProc.command = [root.binPath, "stop"]
@@ -1079,10 +1087,14 @@ BarWidget {
       if (!raw) return
       var s = JSON.parse(raw)
       if (s.running === true) {
+        var nextMode = s.mode || ((s.station === "Recording") ? "recording" : "live")
+        if (s.channel && s.channel !== root.activeChannelName) root.pauseKept = false
+        if (nextMode === "timeshift" && root.playerMode !== "timeshift") root.pauseKept = false
         if (s.channel) root.activeChannelName = s.channel
-        root.playerMode = s.mode || ((s.station === "Recording") ? "recording" : "live")
+        root.playerMode = nextMode
         if (s.last_live) root.lastLiveChannel = s.last_live
       } else if (s.running === false) {
+        root.pauseKept = false
         root.activeChannelName = ""
         root.playerMode = "live"
         if (s.last_live) root.lastLiveChannel = s.last_live
@@ -1220,6 +1232,15 @@ BarWidget {
     id: stopProc
     command: [root.binPath, "stop"]
     onExited: playerStateFile.reload()
+  }
+
+  Process {
+    id: keepProc
+    command: []
+    onExited: function(code) {
+      if (code === 0) root.pauseKept = true
+      recordingsFile.reload()
+    }
   }
 
   Process {
@@ -1438,7 +1459,7 @@ BarWidget {
                   ? (root.listedChannelCount + " channels · " + (root.favoritesData ? root.favoritesData.length : 0) + " favorites")
                   : "No channels scanned"
               }
-              color: root.isScanning ? Color.accent : Qt.darker(root.bar.foreground, 1.4)
+              color: root.isScanning ? Color.accent : Color.muted
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
@@ -1534,7 +1555,7 @@ BarWidget {
                 Text {
                   textFormat: Text.PlainText
                   text: Model.formatFreq(root.scanFreq)
-                  color: Qt.darker(root.bar.foreground, 1.5)
+                  color: Color.muted
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.caption
                 }
@@ -1550,7 +1571,7 @@ BarWidget {
                 anchors.right: parent.right
                 textFormat: Text.PlainText
                 text: root.scanSignal !== null ? (root.scanSignal.toFixed(1) + " dBm") : "Searching..."
-                color: root.scanSignal !== null && root.scanSignal > -55 ? Color.accent : (root.scanSignal !== null ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.6))
+                color: root.scanSignal !== null && root.scanSignal > -55 ? Color.accent : (root.scanSignal !== null ? root.bar.foreground : Color.muted)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
                 font.bold: true
@@ -1560,7 +1581,7 @@ BarWidget {
                 anchors.right: parent.right
                 textFormat: Text.PlainText
                 text: root.scanSignal !== null && root.scanSignal > -55 ? "Strong Signal" : (root.scanSignal !== null ? "Carrier Locked" : "Scanning")
-                color: Qt.darker(root.bar.foreground, 1.5)
+                color: Color.muted
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -1581,7 +1602,7 @@ BarWidget {
                 anchors.verticalCenter: parent.verticalCenter
                 textFormat: Text.PlainText
                 text: "Progress"
-                color: Qt.darker(root.bar.foreground, 1.4)
+                color: Color.muted
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -1603,7 +1624,7 @@ BarWidget {
               width: parent.width
               height: Style.space(8)
               radius: 4
-              color: Qt.darker(root.bar.foreground, 2.5)
+              color: Style.normalFillFor(root.bar.foreground, Color.accent)
 
               Rectangle {
                 height: parent.height
@@ -1664,21 +1685,37 @@ BarWidget {
           implicitHeight: Math.max(watchLine.implicitHeight, npCloseBtn.implicitHeight)
           height: implicitHeight
 
-          Button {
-            id: npCloseBtn
+          Row {
+            id: watchActions
+            z: 2
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            text: "Close"
-            tooltipText: "Close TV"
-            foreground: root.bar.foreground
-            fontSize: Style.font.caption
-            onClicked: root.stopPlayer()
+            spacing: Style.space(6)
+
+            Button {
+              id: npKeepBtn
+              visible: root.isLiveSession && !root.pauseKept
+              text: "Keep"
+              tooltipText: "Copy this pause into the library"
+              foreground: root.bar.foreground
+              fontSize: Style.font.caption
+              onClicked: root.keepPause()
+            }
+
+            Button {
+              id: npCloseBtn
+              text: "Close"
+              tooltipText: "Close TV"
+              foreground: root.bar.foreground
+              fontSize: Style.font.caption
+              onClicked: root.stopPlayer()
+            }
           }
 
           Row {
             id: watchLine
             anchors.left: parent.left
-            anchors.right: npCloseBtn.left
+            anchors.right: watchActions.left
             anchors.rightMargin: Style.space(8)
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(4)
@@ -1889,7 +1926,7 @@ BarWidget {
           width: parent.width
           textFormat: Text.PlainText
           text: "No repeated shows yet."
-          color: Qt.darker(root.bar.foreground, 1.4)
+          color: Color.muted
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.caption
           wrapMode: Text.Wrap
@@ -2102,14 +2139,14 @@ BarWidget {
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "No channels found yet"
-            color: Qt.darker(root.bar.foreground, 1.5)
+            color: Color.muted
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
           }
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "Scan for local Over-The-Air stations."
-            color: Qt.darker(root.bar.foreground, 1.8)
+            color: Color.muted
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
           }
@@ -2135,7 +2172,7 @@ BarWidget {
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "⭐ No favorite channels yet"
-            color: Qt.darker(root.bar.foreground, 1.3)
+            color: Color.muted
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
             font.bold: true
@@ -2143,7 +2180,7 @@ BarWidget {
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
             text: "Click the ☆ star on any station below to pin it here."
-            color: Qt.darker(root.bar.foreground, 1.8)
+            color: Color.muted
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
           }
@@ -2200,7 +2237,7 @@ BarWidget {
                   return now + " · " + nxt
                 }
                 readonly property string channelBadge: Model.getChannelBadge(modelData)
-                readonly property string netColor: Model.networkColor(modelData.network, Color.accent)
+                readonly property color netColor: Model.networkColor(modelData.network, Color.accent, Color.urgent, Color.muted, root.bar.foreground)
                 readonly property bool isFav: root.isFavorite(modelData.name) || (modelData.tune_name && root.isFavorite(modelData.tune_name))
 
                 width: channelListView.width
@@ -2255,7 +2292,7 @@ BarWidget {
                   fontSize: Style.font.bodySmall
                   iconText: chItem.isFav ? "★" : "☆"
                   tooltipText: chItem.isFav ? "Remove favorite" : "Add favorite"
-                  foreground: chItem.isFav ? Color.accent : Qt.darker(root.bar.foreground, 1.8)
+                  foreground: chItem.isFav ? Color.accent : Color.muted
                   fontFamily: root.bar.fontFamily
                   onClicked: root.toggleFavorite(chItem.modelData.tune_name || chItem.modelData.name)
                 }
@@ -2312,7 +2349,7 @@ BarWidget {
                     }
                     textFormat: Text.PlainText
                     text: chItem.nowNextLine
-                    color: chItem.isCurrent ? Color.accent : Qt.darker(root.bar.foreground, 1.4)
+                    color: chItem.isCurrent ? Color.accent : Color.muted
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.bodySmall
                     elide: Text.ElideRight
@@ -2331,7 +2368,7 @@ BarWidget {
           anchors.margins: 2
           width: 4
           radius: 2
-          color: Qt.darker(root.bar.foreground, 2.8)
+          color: Style.normalFillFor(root.bar.foreground, Color.accent)
           visible: channelFlickable.contentHeight > channelFlickable.height
 
           Rectangle {
@@ -2423,7 +2460,7 @@ BarWidget {
               text: (root.recordingsData.length > 0)
                 ? (root.libraryBytesLabel + " of " + root.libraryBudgetLabel + " · " + root.recordingsData.length + " in Videos/TV")
                 : "Nothing recorded yet"
-              color: Qt.darker(root.bar.foreground, 1.5)
+              color: Color.muted
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
               elide: Text.ElideRight
@@ -2440,7 +2477,7 @@ BarWidget {
           Text {
             anchors.centerIn: parent
             text: "Record from the Guide, then play it back here."
-            color: Qt.darker(root.bar.foreground, 1.5)
+            color: Color.muted
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
           }
@@ -2509,7 +2546,7 @@ BarWidget {
                     Text {
                       textFormat: Text.PlainText
                       text: recRow.modelData.title || recRow.modelData.name
-                      color: recRow.modelData.playable === false ? Qt.darker(root.bar.foreground, 1.5) : root.bar.foreground
+                      color: recRow.modelData.playable === false ? Color.muted : root.bar.foreground
                       font.family: root.bar.fontFamily
                       font.pixelSize: Style.font.bodySmall
                       font.bold: true
@@ -2523,7 +2560,7 @@ BarWidget {
                         ? ((recRow.modelData.channel_number || "") + " " + (recRow.modelData.station || "") + " · ")
                         : "") + (recRow.modelData.date_formatted || "") + " · " + (recRow.modelData.size_formatted || "")
                         + (recRow.modelData.playable === false ? " · empty dump" : "")
-                      color: Qt.darker(root.bar.foreground, 1.5)
+                      color: Color.muted
                       font.family: root.bar.fontFamily
                       font.pixelSize: Style.font.caption
                       elide: Text.ElideRight
