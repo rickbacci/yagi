@@ -1,12 +1,10 @@
 """
 Throwaway pause-live buffer: dump Tuner 0 to a growing MPEG-TS file.
 
-A loopback HTTP sidecar serves live.ts (from= playhead, wait at EOF).
-Windowed MPV loadfiles that URL. Skip, live, and channel change are a new
-GET in the same PiP — not a pipe, not pip-relaunch. The HTTP process
-outlives `omarchy-tv play`. Channel change dumps tuner 0, then loadfile
-from byte 0. HUD `omarchy-tv play` must not quit mpv itself. Close TV wipes
-the dump and the sidecar. This is not a library recording and not dvb:// cache.
+A detached reader copies live.ts onto a fifo and outlives `omarchy-tv play`.
+The window opens that fifo once. Skip and live SEEK the reader. Channel
+change is the only loadfile. Close TV wipes the dump and the reader. This
+is not a library recording and not dvb:// cache.
 """
 
 import json
@@ -15,6 +13,7 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -23,6 +22,7 @@ from typing import Any, Dict, Optional
 
 from engine.paths import (
     CHANNELS_JSON_PATH,
+    FOLLOW_FIFO_PATH,
     FOLLOW_SOCKET_PATH,
     MPV_CHANNELS_CONF,
     TIMESHIFT_ACTIVE_PATH,
@@ -249,18 +249,32 @@ class Timeshift:
 
     @classmethod
     def write_rate(cls) -> float:
-        """Bytes/sec of the dump. Pause growth first, else last measure, else ATSC."""
+        """Bytes/sec the dump file is growing. Pause and play share this rate."""
         state = cls.load_state()
+        size = cls.dump_bytes()
+        now = time.time()
         try:
-            t0 = float(state.get("playhead_t") or 0)
+            raw_mark = state.get("rate_byte")
+            mark_b = int(raw_mark) if raw_mark is not None else -1
         except (TypeError, ValueError):
-            t0 = 0.0
-        held = time.time() - t0 if t0 > 0 else 0.0
-        playhead = int(state.get("playhead_byte") or 0)
-        if bool(state.get("paused")) and held > 0.5:
-            return max(1000.0, (cls.dump_bytes() - playhead) / held)
+            mark_b = -1
         try:
-            bps = float(state.get("mux_bps") or 0)
+            mark_t = float(state.get("rate_t") or 0)
+        except (TypeError, ValueError):
+            mark_t = 0.0
+        if mark_t <= 0 or mark_b < 0 or size < mark_b:
+            cls.patch_state(rate_byte=size, rate_t=now)
+        else:
+            elapsed = now - mark_t
+            grown = size - mark_b
+            if elapsed >= 0.5 and grown > 0:
+                measured = grown / elapsed
+                if measured >= 1000:
+                    if elapsed >= 5:
+                        cls.patch_state(rate_byte=size, rate_t=now, mux_bps=measured)
+                    return measured
+        try:
+            bps = float(cls.load_state().get("mux_bps") or 0)
         except (TypeError, ValueError):
             bps = 0.0
         if bps >= 1000:
@@ -315,19 +329,14 @@ class Timeshift:
 
     @classmethod
     def delay_sec(cls) -> float:
+        """File end minus the cursor, at the measured dump rate.
+
+        Live and unpaused is the write head, so the gap is zero. Pause and
+        play use this same subtraction. Neither one starts a clock.
+        """
         state = cls.load_state()
-        if bool(state.get("dump_held")) and bool(state.get("paused")):
-            playhead = int(state.get("playhead_byte") or 0)
-            return max(0.0, (cls.dump_bytes() - playhead) / (ATSC_BPS / 8.0))
         if str(state.get("view") or "live") == "live" and not bool(state.get("paused")):
             return 0.0
-        if bool(state.get("paused")):
-            try:
-                t0 = float(state.get("playhead_t") or 0)
-            except (TypeError, ValueError):
-                t0 = 0.0
-            if t0 > 0:
-                return max(0.0, time.time() - t0)
         rate = cls.write_rate()
         if rate <= 0:
             return 0.0
@@ -353,21 +362,22 @@ class Timeshift:
 
     @classmethod
     def playhead_now(cls) -> int:
+        """Reader cursor. Live playback sits on the write head. A pause leaves it."""
         state = cls.load_state()
-        pos = int(state.get("playhead_byte") or 0)
         view = str(state.get("view") or "live")
         paused = bool(state.get("paused"))
-        if view == "delayed" and not paused:
+        if view == "live" and not paused:
+            return cls.live_edge_byte()
+        pos = cls.follow_pos() if state.get("follow_socket") else None
+        if pos is None:
             try:
-                t0 = float(state.get("playhead_t") or 0)
+                pos = int(state.get("playhead_byte") or 0)
             except (TypeError, ValueError):
-                t0 = 0.0
-            if t0 > 0:
-                pos += int((time.time() - t0) * cls.mux_rate())
+                pos = 0
         size = cls.dump_bytes()
         if size > TS_PACKET:
             pos = min(pos, size - TS_PACKET)
-        return align_ts(max(0, pos))
+        return align_ts(max(0, int(pos)))
 
     @classmethod
     def remain_sec(cls) -> float:
@@ -587,6 +597,12 @@ class Timeshift:
                 os.unlink(sock)
             except OSError:
                 pass
+        for path in (FOLLOW_FIFO_PATH, cls._follow_pos_path(sock)):
+            if path and os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
         if state:
             state.pop("follow_pid", None)
             state.pop("follow_socket", None)
@@ -594,15 +610,42 @@ class Timeshift:
             cls._write_state(state)
 
     @classmethod
-    def start_follow(cls, start_byte: int = 0) -> Optional[subprocess.Popen]:
-        """Stdout is a never-EOF MPEG-TS pipe of live.ts for the windowed player."""
+    def _follow_pos_path(cls, sock: str) -> str:
+        if sock.endswith(".sock"):
+            return sock[:-5] + ".pos"
+        return sock + ".pos"
+
+    @classmethod
+    def _fifo_is_fifo(cls) -> bool:
+        try:
+            return stat.S_ISFIFO(os.stat(FOLLOW_FIFO_PATH).st_mode)
+        except OSError:
+            return False
+
+    @classmethod
+    def start_follow(cls, start_byte: int = 0) -> Optional[int]:
+        """Detached reader. Its fifo outlives this command. A live reader stays."""
+        state = cls.load_state()
+        pid = int(state.get("follow_pid") or 0)
+        if cls._pid_alive(pid) and cls._fifo_is_fifo():
+            return pid
         cls.stop_follow()
         sock = FOLLOW_SOCKET_PATH
-        if os.path.exists(sock):
-            try:
-                os.unlink(sock)
-            except OSError:
-                pass
+        fifo = FOLLOW_FIFO_PATH
+        for path in (sock, fifo):
+            if os.path.exists(path):
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+        try:
+            os.mkfifo(fifo, 0o600)
+        except OSError:
+            return None
+        try:
+            os.chmod(fifo, 0o600)
+        except OSError:
+            pass
         proc = subprocess.Popen(
             [
                 sys.executable,
@@ -610,19 +653,18 @@ class Timeshift:
                 TIMESHIFT_FILE,
                 str(max(0, int(start_byte))),
                 sock,
+                fifo,
             ],
-            stdout=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
         if isinstance(proc.poll(), int):
             return None
-        state = cls.load_state()
-        state["follow_pid"] = proc.pid
-        state["follow_socket"] = sock
-        state["updated_at"] = time.time()
-        cls._write_state(state)
-        return proc
+        cls.patch_state(follow_pid=proc.pid, follow_socket=sock)
+        cls._finish_http_popen(proc, keep=True)
+        return proc.pid
 
     @classmethod
     def send_follow_cmd(cls, line: str) -> bool:
@@ -1267,7 +1309,7 @@ class Timeshift:
         """Locks tuner 0, dumps dvb:// into live.ts, waits until the file is playable.
 
         keep_follow: channel change under a live PiP. Stop the dump, replace
-        live.ts, leave any follow pid. The player then loadfiles from=0.
+        live.ts, leave the reader. The player loadfiles the same fifo.
         """
         name = (tune_name or "").strip()
         if not name:

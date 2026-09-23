@@ -214,26 +214,28 @@ class TestTimeshift(unittest.TestCase):
                     _reap_http_under(tmp_dir)
                 self.assertFalse(Timeshift._pid_alive(int(data.get("http_pid") or 0)))
 
-    def test_delay_sec_paused_is_wall_clock_not_atsc(self):
+    def test_delay_sec_pause_and_play_share_the_gap(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             live = os.path.join(tmp_dir, "live.ts")
             state = os.path.join(tmp_dir, "timeshift_active.json")
+            size = 20_000_000
+            rate = 2_000_000
             with open(live, "wb") as f:
-                f.write(b"x" * 188)
-            t0 = time.time() - 47.0
+                f.write(b"x" * size)
             with patch("engine.timeshift.TIMESHIFT_FILE", live), \
                  patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
                  patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
                 Timeshift.patch_state(
-                    view="live",
+                    view="delayed",
                     paused=True,
                     playhead_byte=0,
-                    playhead_t=t0,
-                    mux_bps=824_000,
+                    mux_bps=rate,
                 )
-                delay = Timeshift.delay_sec()
-            self.assertGreater(delay, 45.0)
-            self.assertLess(delay, 50.0)
+                paused_delay = Timeshift.delay_sec()
+                Timeshift.patch_state(paused=False, view="delayed")
+                playing_delay = Timeshift.delay_sec()
+            self.assertAlmostEqual(paused_delay, size / rate, delta=0.05)
+            self.assertAlmostEqual(paused_delay, playing_delay, delta=0.01)
 
     def test_hold_dump_stops_an_hour_past_the_playhead(self):
         self.assertEqual(Timeshift.pause_cap_bytes(), int(ATSC_BPS / 8.0 * 3600))
@@ -332,28 +334,30 @@ class TestTimeshift(unittest.TestCase):
                 Timeshift.patch_state(view="live", paused=False, playhead_t=time.time() - 30)
                 self.assertEqual(Timeshift.delay_sec(), 0.0)
 
-    def test_write_rate_paused_uses_dump_growth_not_sticky_mux(self):
+    def test_write_rate_uses_dump_growth_paused_or_not(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             live = os.path.join(tmp_dir, "live.ts")
             state = os.path.join(tmp_dir, "timeshift_active.json")
-            playhead = 1880
+            mark = 1880
             grown = 5_000_000
             with open(live, "wb") as f:
-                f.write(b"x" * (playhead + grown))
+                f.write(b"x" * (mark + grown))
             t0 = time.time() - 10.0
             with patch("engine.timeshift.TIMESHIFT_FILE", live), \
                  patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
                  patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
-                Timeshift.patch_state(
-                    paused=True,
-                    playhead_byte=playhead,
-                    playhead_t=t0,
-                    mux_bps=824_000,
-                )
-                rate = Timeshift.write_rate()
-            self.assertAlmostEqual(rate, grown / 10.0, delta=50_000)
-            self.assertNotAlmostEqual(rate, ATSC_BPS / 8.0, delta=100_000)
-            self.assertNotAlmostEqual(rate, 824_000, delta=100_000)
+                for paused in (True, False):
+                    Timeshift.patch_state(
+                        paused=paused,
+                        playhead_byte=0,
+                        rate_byte=mark,
+                        rate_t=t0,
+                        mux_bps=824_000,
+                    )
+                    rate = Timeshift.write_rate()
+                    self.assertAlmostEqual(rate, grown / 10.0, delta=50_000)
+                    self.assertNotAlmostEqual(rate, ATSC_BPS / 8.0, delta=100_000)
+                    self.assertNotAlmostEqual(rate, 824_000, delta=100_000)
 
     def test_write_rate_falls_back_to_atsc_when_unpaused(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -669,6 +673,96 @@ class TestTimeshift(unittest.TestCase):
         self.assertEqual(align_ts_offset(187), 0)
         self.assertEqual(align_ts_offset(188), 188)
         self.assertEqual(align_ts_offset(200), 188)
+
+    def test_seek_cuts_at_the_next_video_keyframe(self):
+        from engine.follow_ts import TsFollower, packet_is_video_keyframe
+        filler = bytes([0x47, 0x00, 0x21, 0x10]) + bytes(184)
+        pframe = bytearray(188)
+        pframe[0] = 0x47
+        pframe[1] = 0x40
+        pframe[2] = 0x21
+        pframe[3] = 0x10
+        pframe[4:10] = b"\x00\x00\x01\x00\x00\x10"
+        key = bytearray(188)
+        key[0] = 0x47
+        key[1] = 0x40
+        key[2] = 0x21
+        key[3] = 0x10
+        key[4:8] = b"\x00\x00\x01\xb3"
+        self.assertFalse(packet_is_video_keyframe(bytes(pframe)))
+        self.assertTrue(packet_is_video_keyframe(bytes(key)))
+        data = filler + bytes(pframe) + filler + bytes(key) + filler
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            sock = os.path.join(tmp_dir, "follow.sock")
+            with open(live, "wb") as f:
+                f.write(data)
+            follower = TsFollower(live, 0, sock)
+            follower._open_file()
+            sentinel = os.open(os.path.join(tmp_dir, "out"), os.O_CREAT | os.O_RDWR, 0o600)
+            follower._out_fd = sentinel
+            try:
+                follower._apply_seek(0)
+                self.assertEqual(follower.pos, 188 * 3)
+                self.assertEqual(follower._out_fd, sentinel)
+                follower._apply_seek(188 * 4)
+                self.assertEqual(follower.pos, 188 * 4)
+                self.assertEqual(follower._out_fd, sentinel)
+            finally:
+                os.close(sentinel)
+                if follower._fd is not None:
+                    os.close(follower._fd)
+
+    def test_seek_on_junk_stays_aligned(self):
+        from engine.follow_ts import TsFollower
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            sock = os.path.join(tmp_dir, "follow.sock")
+            with open(live, "wb") as f:
+                f.write(b"A" * 1880)
+            follower = TsFollower(live, 0, sock)
+            follower._open_file()
+            try:
+                follower._apply_seek(200)
+                self.assertEqual(follower.pos, 188)
+            finally:
+                if follower._fd is not None:
+                    os.close(follower._fd)
+
+    def test_start_follow_detaches_onto_the_fifo(self):
+        import stat as stat_mod
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            sock = os.path.join(tmp_dir, "follow.sock")
+            fifo = os.path.join(tmp_dir, "follow.fifo")
+            with open(live, "wb") as f:
+                f.write(b"x" * 188)
+            proc = MagicMock()
+            proc.pid = 5150
+            proc.poll.return_value = None
+            proc.returncode = None
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
+                 patch("engine.timeshift.FOLLOW_SOCKET_PATH", sock), \
+                 patch("engine.timeshift.FOLLOW_FIFO_PATH", fifo), \
+                 patch("subprocess.Popen", return_value=proc) as mock_popen:
+                pid = Timeshift.start_follow(188)
+                self.assertEqual(pid, 5150)
+                self.assertTrue(stat_mod.S_ISFIFO(os.stat(fifo).st_mode))
+                cmd = mock_popen.call_args[0][0]
+                kwargs = mock_popen.call_args[1]
+                self.assertEqual(cmd[-1], fifo)
+                self.assertEqual(cmd[-2], sock)
+                self.assertEqual(kwargs["stdout"], subprocess.DEVNULL)
+                self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
+                self.assertTrue(kwargs["start_new_session"])
+                mock_popen.reset_mock()
+                with patch.object(Timeshift, "_pid_alive", return_value=True):
+                    again = Timeshift.start_follow(0)
+                self.assertEqual(again, 5150)
+                mock_popen.assert_not_called()
 
     def test_tune_lock_tracks_this_process(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

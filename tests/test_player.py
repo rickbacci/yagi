@@ -322,21 +322,22 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertEqual(dump.call_args[0][0], "28.2")
 
     @patch("player.controller.is_timeshift_path", return_value=True)
-    @patch("player.controller.Timeshift.start_http", return_value=18765)
-    @patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=0")
+    @patch("player.controller.Timeshift.start_follow", return_value=4242)
     @patch("player.controller.Timeshift.live_edge_byte", return_value=0)
     @patch("player.controller.Timeshift.start_dump")
     @patch.object(MpvController, "is_running", return_value=False)
     @patch("subprocess.Popen")
     @patch("os.path.exists", return_value=True)
-    def test_live_launch_plays_dump_file_not_dvbin(self, mock_exists, mock_popen, mock_running, mock_dump, _edge, _url, _http, _ts_path):
+    def test_live_launch_plays_dump_file_not_dvbin(self, mock_exists, mock_popen, mock_running, mock_dump, _edge, mock_follow, _ts_path):
         dump = os.path.join(self.tmp_dir.name, "live.ts")
         with open(dump, "wb") as f:
             f.write(b"x" * (256 * 1024))
         mock_dump.return_value = dump
         mock_popen.return_value = MagicMock(pid=9)
 
-        with patch("player.controller.Timeshift.patch_state"), \
+        with patch("player.controller.os.open", return_value=30), \
+             patch("player.controller.os.close"), \
+             patch("player.controller.Timeshift.patch_state"), \
              patch("player.controller.update_player_state"), \
              patch("player.controller.Timeshift.picture_open_byte", return_value=0):
             self.controller.launch(channel_name="53.1 Daystar", adapter_id=None)
@@ -349,13 +350,14 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertNotIn("--geometry=1280x720", cmd)
         self.assertNotIn("--idle=yes", cmd)
         self.assertFalse(any(str(arg).startswith("--dvbin-") for arg in cmd))
-        self.assertTrue(str(cmd[-1]).startswith("http://127.0.0.1:"))
+        self.assertEqual(cmd[-1], "fd://0")
+        self.assertIn("--demuxer=lavf", cmd)
         self.assertIn("--demuxer-lavf-format=mpegts", cmd)
         joined = " ".join(str(a) for a in cmd)
         self.assertIn("--demuxer-lavf-analyzeduration=2", cmd)
         self.assertNotIn("demuxer-lavf-probesize", joined)
         self.assertNotIn("scan_all_pmts=1", joined)
-        _url.assert_called_with(0)
+        mock_follow.assert_called_with(0)
         self.assertIn("--cache-pause=no", cmd)
         self.assertIn("--ytdl=no", cmd)
         self.assertIn("--mute=yes", cmd)
@@ -364,15 +366,15 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertIn("--subs-fallback=yes", cmd)
         self.assertTrue(any("tv_hud-timeshift-file=" in str(arg) for arg in cmd))
         self.assertTrue(any("tv_hud-tune=" in str(arg) for arg in cmd))
-        self.assertFalse(any("tv_hud-follow-sock=" in str(arg) for arg in cmd))
+        self.assertTrue(any("tv_hud-follow-sock=" in str(arg) for arg in cmd))
         self.assertNotEqual(cmd[-1], "-")
 
     @patch("player.controller.is_timeshift_path", return_value=True)
-    @patch("player.controller.Timeshift.start_http", return_value=0)
+    @patch("player.controller.Timeshift.start_follow", return_value=None)
     @patch("player.controller.Timeshift.start_dump")
     @patch.object(MpvController, "is_running", return_value=False)
     @patch("subprocess.Popen")
-    def test_live_launch_aborts_when_http_fails(self, mock_popen, mock_running, mock_dump, _http, _ts_path):
+    def test_live_launch_aborts_when_follow_fails(self, mock_popen, mock_running, mock_dump, _follow, _ts_path):
         dump = os.path.join(self.tmp_dir.name, "live.ts")
         with open(dump, "wb") as f:
             f.write(b"x" * (256 * 1024))
@@ -591,8 +593,11 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         with patch.object(self.controller, "launch_file", return_value=True) as mock_launch, \
              patch("player.controller.subprocess.Popen") as mock_popen, \
              patch("player.controller.Timeshift.retune_keep_window", return_value=self.dump_path) as mock_retune, \
-             patch("player.controller.Timeshift.start_http", return_value=18765), \
-             patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=0"), \
+             patch("player.controller.Timeshift.start_follow", return_value=4242), \
+             patch("player.controller.Timeshift.send_follow_reopen", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_seek", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_play", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_catchup", return_value=True), \
              patch("player.controller.Timeshift.write_rate", return_value=1e6), \
              patch("player.controller.Timeshift.dump_bytes", return_value=256 * 1024), \
              patch("player.controller.Timeshift.patch_state"), \
@@ -603,8 +608,9 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         mock_popen.assert_not_called()
         sent = [m.get("command") for m in self.server.commands]
         load = next(c for c in sent if c and c[0] == "loadfile")
-        self.assertTrue(str(load[1]).startswith("http://127.0.0.1:"))
+        self.assertEqual(load[1], "fd://0")
         self.assertEqual(load[2], "replace")
+        self.assertIn(["script-message", "tv-blank"], sent)
         self.assertFalse(
             any((c.get("command") or [None])[0] == "quit" for c in self.server.commands)
         )
@@ -700,30 +706,30 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
             self.assertTrue(self.controller.return_to_live())
         mock_tune.assert_called_once_with("WKYC-HD")
 
-    def test_return_to_live_from_live_reopens_write_head(self):
-        self.server.path_value = "http://127.0.0.1:18765/live.ts?from=0"
-        with patch("player.controller.Timeshift.start_http", return_value=18765), \
-             patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=99"), \
-             patch("player.controller.Timeshift.live_edge_byte", return_value=99), \
+    def test_return_to_live_from_live_seeks_the_write_head(self):
+        self.server.path_value = FOLLOW_FIFO_PATH
+        with patch("player.controller.Timeshift.send_follow_seek", return_value=True) as mock_seek, \
+             patch("player.controller.Timeshift.send_follow_play", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_catchup", return_value=True), \
+             patch("player.controller.Timeshift.live_edge_byte", return_value=376), \
              patch("player.controller.Timeshift.write_rate", return_value=2_000_000), \
              patch("player.controller.Timeshift.dump_bytes", return_value=100), \
              patch("player.controller.Timeshift.patch_state"), \
              patch("player.controller.subprocess.Popen") as mock_popen:
             self.assertTrue(self.controller.return_to_live())
+        mock_seek.assert_called_with(376)
         sent = [m.get("command") for m in self.server.commands]
-        load = next(c for c in sent if c and c[0] == "loadfile")
-        self.assertTrue(str(load[1]).startswith("http://127.0.0.1:"))
-        self.assertNotIn(["script-message", "tv-live-edge"], sent)
+        self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
+        self.assertNotIn(["script-message", "tv-blank"], sent)
         mock_popen.assert_not_called()
 
-    def test_return_to_live_from_timeshift_file_reopens_http(self):
+    def test_return_to_live_from_timeshift_file_seeks(self):
         self.server.path_value = self.dump_path
-        with patch.object(self.controller, "open_timeshift_dump", return_value=True) as mock_open, \
-             patch("player.controller.Timeshift.start_http"), \
+        with patch.object(self.controller, "_seek_cursor", return_value=True) as mock_seek, \
              patch("player.controller.Timeshift.live_edge_byte", return_value=1880):
             self.assertTrue(self.controller.return_to_live())
-        mock_open.assert_called_once()
-        self.assertEqual(mock_open.call_args[0][0], 1880)
+        mock_seek.assert_called_once()
+        self.assertEqual(mock_seek.call_args[0][0], 1880)
 
     def test_channel_up_from_recording_uses_last_live(self):
         rec = os.path.join(self.tmp_dir.name, "show.ts")
@@ -748,60 +754,86 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         sent = [m.get("command") for m in self.server.commands]
         self.assertIn(["cycle", "pause"], sent)
 
-    def test_pause_on_live_http_does_not_relaunch(self):
-        self.server.path_value = "http://127.0.0.1:18765/live.ts?from=0"
+    def test_pause_on_live_freezes_the_cursor(self):
+        self.server.path_value = FOLLOW_FIFO_PATH
         with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False}), \
-             patch("player.controller.Timeshift.live_edge_byte", return_value=1880), \
-             patch("player.controller.Timeshift.dump_bytes", return_value=5000), \
+             patch("player.controller.Timeshift.follow_pos", return_value=1880), \
+             patch("player.controller.Timeshift.send_follow_pause", return_value=True) as mock_pause, \
              patch("player.controller.Timeshift.patch_state") as mock_patch, \
              patch("player.controller.subprocess.Popen") as mock_popen:
             self.controller.toggle_pause()
         sent = [m.get("command") for m in self.server.commands]
         self.assertIn(["set_property", "pause", True], sent)
         self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
-        self.assertTrue(mock_patch.called)
+        mock_pause.assert_called_once()
         mock_popen.assert_not_called()
+        paused_call = mock_patch.call_args.kwargs
+        self.assertEqual(paused_call.get("playhead_byte"), 1880)
+        self.assertTrue(paused_call.get("paused"))
+        self.assertNotIn("playhead_t", paused_call)
 
-    def test_seek_back_from_live_opens_dump(self):
-        self.server.path_value = "http://127.0.0.1:18765/live.ts?from=0"
+    def test_play_keeps_the_paused_cursor(self):
+        self.server.path_value = FOLLOW_FIFO_PATH
+        with patch("player.controller.Timeshift.load_state", return_value={"view": "delayed", "paused": True, "playhead_byte": 1880}), \
+             patch("player.controller.Timeshift.follow_pos", return_value=1880), \
+             patch("player.controller.Timeshift.delay_sec", return_value=12.0), \
+             patch("player.controller.Timeshift.write_rate", return_value=2_000_000), \
+             patch("player.controller.Timeshift.send_follow_play", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_pace", return_value=True) as mock_pace, \
+             patch("player.controller.Timeshift.patch_state") as mock_patch, \
+             patch("player.controller.subprocess.Popen"):
+            self.controller.toggle_pause()
+        sent = [m.get("command") for m in self.server.commands]
+        self.assertIn(["set_property", "pause", False], sent)
+        self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
+        played = mock_patch.call_args.kwargs
+        self.assertEqual(played.get("playhead_byte"), 1880)
+        self.assertFalse(played.get("paused"))
+        self.assertEqual(played.get("view"), "delayed")
+        self.assertNotIn("playhead_t", played)
+        mock_pace.assert_called_once()
+
+    def test_seek_back_from_live_seeks_reader(self):
+        self.server.path_value = FOLLOW_FIFO_PATH
         with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False, "skip_busy": False}), \
              patch("player.controller.Timeshift.dump_bytes", return_value=10_000_000), \
              patch("player.controller.Timeshift.write_rate", return_value=2_423_750), \
-             patch("player.controller.Timeshift.start_http", return_value=18765), \
-             patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=1"), \
+             patch("player.controller.Timeshift.send_follow_seek", return_value=True) as mock_seek, \
+             patch("player.controller.Timeshift.send_follow_play", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_pace", return_value=True), \
              patch("player.controller.Timeshift.patch_state"), \
              patch("player.controller.subprocess.Popen") as mock_popen:
             self.assertTrue(self.controller.seek(-10))
         sent = [m.get("command") for m in self.server.commands]
-        load = next(c for c in sent if c and c[0] == "loadfile")
-        self.assertTrue(str(load[1]).startswith("http://127.0.0.1:"))
-        self.assertEqual(load[2], "replace")
+        self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
+        mock_seek.assert_called()
         mock_popen.assert_not_called()
 
-    def test_seek_last_hop_reopens_live_http_not_relaunch(self):
-        self.server.path_value = "http://127.0.0.1:18765/live.ts?from=1000"
+    def test_seek_last_hop_seeks_live_not_relaunch(self):
+        self.server.path_value = FOLLOW_FIFO_PATH
         with patch("player.controller.Timeshift.load_state", return_value={"view": "delayed", "paused": False, "skip_busy": False, "playhead_byte": 1000}), \
              patch("player.controller.Timeshift.delay_sec", return_value=6.0), \
-             patch("player.controller.Timeshift.start_http", return_value=18765), \
-             patch("player.controller.Timeshift.http_url", return_value="http://127.0.0.1:18765/live.ts?from=99"), \
-             patch("player.controller.Timeshift.live_edge_byte", return_value=99), \
+             patch("player.controller.Timeshift.send_follow_seek", return_value=True) as mock_seek, \
+             patch("player.controller.Timeshift.send_follow_play", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_catchup", return_value=True), \
+             patch("player.controller.Timeshift.live_edge_byte", return_value=376), \
              patch("player.controller.Timeshift.write_rate", return_value=2_000_000), \
              patch("player.controller.Timeshift.dump_bytes", return_value=100), \
              patch("player.controller.Timeshift.patch_state"), \
              patch("player.controller.subprocess.Popen") as mock_popen:
             self.assertTrue(self.controller.seek(10))
         sent = [m.get("command") for m in self.server.commands]
-        load = next(c for c in sent if c and c[0] == "loadfile")
-        self.assertTrue(str(load[1]).startswith("http://127.0.0.1:"))
+        self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
+        mock_seek.assert_called_with(376)
         mock_popen.assert_not_called()
 
     def test_seek_fwd_on_live_is_noop(self):
-        self.server.path_value = "http://127.0.0.1:18765/live.ts?from=0"
+        self.server.path_value = FOLLOW_FIFO_PATH
         with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False, "skip_busy": False}), \
-             patch("player.controller.Timeshift.start_http") as mock_http, \
+             patch("player.controller.Timeshift.send_follow_seek") as mock_seek, \
              patch("player.controller.subprocess.Popen") as mock_popen:
             self.assertTrue(self.controller.seek(10))
-        mock_http.assert_not_called()
+        mock_seek.assert_not_called()
         mock_popen.assert_not_called()
         sent = [m.get("command") for m in self.server.commands]
         self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
@@ -863,6 +895,10 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn('cli_async({"pause"})', src)
         self.assertIn('cli_async({"seek"', src)
         self.assertIn('cli_async({"live"})', src)
+        eof = src[src.index("local function on_dump_eof"):src.index('mp.register_event("playback-restart"')]
+        self.assertIn('cli_async({"live"})', eof)
+        self.assertNotIn('cli_async({"seek"', eof)
+        self.assertNotIn("loadfile", eof)
         self.assertNotIn("drop-buffers", src)
         self.assertNotIn("send_follow_seek", src)
         self.assertNotIn("timeshift_skip", src)

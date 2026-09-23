@@ -690,15 +690,25 @@ class MpvController:
         stdin = subprocess.DEVNULL
         script_opts = [f"tv_hud-cli={cli_bin}"]
         play_url = file_path
+        fifo_fd = None
         if live_dump:
-            if Timeshift.start_http() <= 0:
-                return False
             opened = Timeshift.picture_open_byte()
-            play_url = Timeshift.http_url(opened)
+            if not Timeshift.start_follow(opened):
+                return False
+            try:
+                fifo_fd = os.open(FOLLOW_FIFO_PATH, os.O_RDONLY)
+            except OSError:
+                return False
+            stdin = fifo_fd
+            # One read end. A path open also runs the disc probes, and those
+            # steal the first bytes, so the picture never locks.
+            play_url = "fd://0"
             script_opts.append(f"tv_hud-timeshift-file={file_path}")
+            script_opts.append(f"tv_hud-follow-sock={FOLLOW_SOCKET_PATH}")
             if channel:
                 script_opts.append("tv_hud-tune=" + channel.replace(",", " "))
             cmd.extend([
+                "--demuxer=lavf",
                 "--demuxer-lavf-format=mpegts",
                 "--keep-open=yes",
                 "--keep-open-pause=no",
@@ -720,6 +730,8 @@ class MpvController:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        if fifo_fd is not None:
+            os.close(fifo_fd)
         chmod_private_file(log_path)
         def commit_playing() -> bool:
             if live_dump:
@@ -747,8 +759,6 @@ class MpvController:
                     view="live",
                     paused=False,
                     playhead_byte=opened,
-                    playhead_t=0,
-                    mux_bps=0,
                 )
             return True
 
@@ -788,8 +798,7 @@ class MpvController:
         if is_timeshift_http(path) or is_timeshift_path(path) or is_follow_path(path):
             if named:
                 return self.tune(named)
-            Timeshift.start_http()
-            return self.open_timeshift_dump(Timeshift.live_edge_byte(), paused=False)
+            return self._seek_cursor(Timeshift.live_edge_byte(), paused=False)
         Timeshift.wipe()
         target = named or load_last_live_channel()
         if not target:
@@ -884,12 +893,36 @@ class MpvController:
             self.send_command(["set_property", "program", sid])
 
     def open_timeshift_dump(self, byte: int, paused: bool) -> bool:
-        """Reopen the dump HTTP view at a playhead. Same PiP — not a new window."""
-        Timeshift.start_http()
+        """Channel change. The only loadfile, under the black cover already up."""
         byte = align_ts(byte)
-        url = Timeshift.http_url(byte)
-        self._load_dump(url)
+        if not Timeshift.start_follow(byte):
+            return False
+        Timeshift.send_follow_reopen()
+        Timeshift.send_follow_seek(byte)
+        self._arm_reader(paused, self._behind(byte))
+        self._load_dump("fd://0")
         self.send_command(["set_property", "pause", paused])
+        self._note_cursor(byte, paused)
+        return True
+
+    def _behind(self, byte: int) -> bool:
+        rate = Timeshift.write_rate()
+        if rate <= 0:
+            return False
+        return (Timeshift.dump_bytes() - byte) / rate > LIVE_SLACK
+
+    def _arm_reader(self, paused: bool, delayed: bool) -> None:
+        """Pause freezes the cursor. Play behind paces. Live races the write head."""
+        if paused:
+            Timeshift.send_follow_pause()
+            return
+        Timeshift.send_follow_play()
+        if delayed:
+            Timeshift.send_follow_pace(Timeshift.write_rate())
+        else:
+            Timeshift.send_follow_catchup()
+
+    def _note_cursor(self, byte: int, paused: bool) -> None:
         rate = Timeshift.write_rate()
         remain = 0.0 if rate <= 0 else max(0.0, (Timeshift.dump_bytes() - byte) / rate)
         view = "live" if remain <= LIVE_SLACK else "delayed"
@@ -897,9 +930,18 @@ class MpvController:
             view=view,
             paused=paused,
             playhead_byte=byte,
-            playhead_t=time.time() if paused or view == "delayed" else 0,
             skip_busy=False,
         )
+
+    def _seek_cursor(self, byte: int, paused: bool) -> bool:
+        """Move the reader. The window stays on the fifo it already has open."""
+        byte = align_ts(byte)
+        if not Timeshift.send_follow_seek(byte):
+            if not Timeshift.start_follow(byte) or not Timeshift.send_follow_seek(byte):
+                return False
+        self._arm_reader(paused, self._behind(byte))
+        self.send_command(["set_property", "pause", paused])
+        self._note_cursor(byte, paused)
         return True
 
     def _timeshift_playing(self, path: Optional[str]) -> bool:
@@ -915,22 +957,25 @@ class MpvController:
         state = Timeshift.load_state()
         paused = bool(state.get("paused"))
         if not paused:
-            playhead = Timeshift.live_edge_byte() if str(state.get("view") or "live") == "live" else Timeshift.playhead_now()
+            Timeshift.send_follow_pause()
+            cursor = Timeshift.follow_pos()
+            if cursor is None:
+                if str(state.get("view") or "live") == "live":
+                    cursor = Timeshift.live_edge_byte()
+                else:
+                    cursor = int(state.get("playhead_byte") or 0)
             self.send_command(["set_property", "pause", True])
-            Timeshift.patch_state(
-                paused=True,
-                playhead_byte=align_ts(playhead),
-                playhead_t=time.time(),
-            )
+            Timeshift.patch_state(paused=True, playhead_byte=align_ts(cursor))
             return
-        held = time.time() - float(state.get("playhead_t") or 0)
-        playhead = int(state.get("playhead_byte") or 0)
-        if held > 0.5:
-            grown = max(0, Timeshift.dump_bytes() - playhead)
-            Timeshift.patch_state(mux_bps=max(1000.0, grown / held))
+        cursor = Timeshift.follow_pos()
+        if cursor is None:
+            cursor = int(state.get("playhead_byte") or 0)
+        cursor = align_ts(cursor)
+        delay = Timeshift.delay_sec()
+        self._arm_reader(False, delay > LIVE_SLACK)
         self.send_command(["set_property", "pause", False])
-        view = "delayed" if Timeshift.delay_sec() > LIVE_SLACK else "live"
-        Timeshift.patch_state(paused=False, view=view, playhead_t=time.time() if view == "delayed" else 0)
+        view = "delayed" if delay > LIVE_SLACK else "live"
+        Timeshift.patch_state(paused=False, view=view, playhead_byte=cursor)
 
     def seek(self, seconds: float) -> bool:
         if not self.is_running():
@@ -944,7 +989,7 @@ class MpvController:
             if bool(Timeshift.load_state().get("paused")):
                 return True
             if Timeshift.delay_sec() > 0.15:
-                return self.open_timeshift_dump(Timeshift.playhead_now(), paused=False)
+                return self._seek_cursor(Timeshift.playhead_now(), paused=False)
             return self.return_to_live()
         if Timeshift.load_state().get("skip_busy"):
             return True
@@ -960,7 +1005,7 @@ class MpvController:
                     return True
                 hop = abs(delta)
                 byte = align_ts(max(0, int(Timeshift.dump_bytes() - hop * rate)))
-                return self.open_timeshift_dump(byte, paused=False)
+                return self._seek_cursor(byte, paused=False)
             pos = int(state.get("playhead_byte") or Timeshift.playhead_now())
             if delta > 0:
                 hop = Timeshift.fwd_hop(remain)
@@ -969,7 +1014,7 @@ class MpvController:
                 pos = int(pos + hop * rate)
             else:
                 pos = max(0, int(pos - abs(delta) * rate))
-            return self.open_timeshift_dump(align_ts(pos), paused)
+            return self._seek_cursor(align_ts(pos), paused)
         finally:
             Timeshift.patch_state(skip_busy=False)
 

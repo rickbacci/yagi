@@ -11,7 +11,7 @@ description: >
 
 Project `~/Projects/personal/omarchy-tv`. CLI `omarchy-tv` (`PATH` or `bin/`). Rules: `AGENTS.md`. Facts: `MEMORY.md`.
 
-**Play path:** Tuner 0 dumps `live.ts`. A sidecar on `127.0.0.1` serves `http://127.0.0.1:…/live.ts?from=`. Playing the file directly hits `keep-open` EOF. Skip and live are `loadfile` of that URL at a new `from=` in the same window. Do not SEEK a pipe. Never `drop-buffers`. HUD `play` must not quit this mpv. One window. Reap a lost sidecar by module `engine.timeshift_http`, not by the timeshift path.
+**Play path:** Tuner 0 dumps `live.ts`. Detached `follow_ts` copies it onto a fifo. The window reads that fifo once as `fd://0` (one read end; opening the path steals a non-aligned prefix). Channel change is the only `loadfile`. Skip and live SEEK the control socket. Pause freezes the cursor. Play behind paces at the measured dump rate. Behind is file end minus the cursor, at that rate. Never `drop-buffers`. HUD `play` must not quit this mpv. One window.
 
 ## CLI
 
@@ -38,6 +38,6 @@ Space pause / play still behind · `l` live · ←/→ skip (10s, 5s near live; 
 ## If pause / skip / HUD is wrong
 
 1. This machine’s `mpv --version` / manpage — not a wiki.
-2. Probe the socket **before** editing lua: live `path` is `http://127.0.0.1:…/live.ts`; never `dvb://`. Then `pause`, `time-pos`. Skip and read them again. If only the HUD clock moved, the decoder did not seek.
+2. Probe the socket **before** editing lua: live `path` is `fd://0`; never `dvb://`. Then `pause` and video width. Skip and read the path again. A new path means the window reopened.
 3. lua loads at mpv start. Not fixed until they see it.
 4. Do not ship another overlay for a demuxer or path bug. Probe the socket first.

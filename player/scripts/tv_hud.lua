@@ -234,6 +234,8 @@ local playhead_byte = nil
 local mux_bps = 0
 local dump_start_byte = 0
 local dump_start_t = nil
+local rate_mark_byte = nil
+local rate_mark_t = nil
 
 local function tv_cli()
     local cli = mp.get_opt("cli")
@@ -348,9 +350,44 @@ local function dump_playhead()
     return pos
 end
 
+local function read_follow_cursor()
+    local sock = follow_sock_opt()
+    if not sock or sock == "" then return nil end
+    local pos_path = sock:gsub("%.sock$", ".pos")
+    local f = io.open(pos_path, "r")
+    if not f then return nil end
+    local n = tonumber(f:read("*l"))
+    f:close()
+    return n
+end
+
+local function measured_rate()
+    local saved = tonumber(cached_timeshift.mux_bps) or 0
+    local size = file_bytes()
+    local now = mp.get_time()
+    if not rate_mark_t then
+        rate_mark_byte = size
+        rate_mark_t = now
+    else
+        local elapsed = now - rate_mark_t
+        if elapsed >= 0.5 and size > (rate_mark_byte or 0) then
+            local rate = (size - rate_mark_byte) / elapsed
+            if rate >= 1000 then
+                mux_bps = rate
+                if elapsed >= 5 then
+                    rate_mark_byte = size
+                    rate_mark_t = now
+                end
+            end
+        end
+    end
+    if mux_bps >= 1000 then return mux_bps end
+    if saved >= 1000 then return saved end
+    return ATSC_BPS / 8
+end
+
 local function timeshift_delay()
     if not is_timeshift_playback() then
-        pause_origin = nil
         behind_clock = 0
         playhead_byte = nil
         return 0
@@ -364,34 +401,21 @@ local function timeshift_delay()
     end
     local view = tostring(cached_timeshift.view or "live")
     local paused = cached_timeshift.paused == true
-    if view == "live" and not paused then
+    local held = cached_timeshift.dump_held == true
+    if view == "live" and not paused and not held then
         behind_clock = 0
         return 0
     end
-    if paused then
-        if cached_timeshift.dump_held == true then
-            local size = file_bytes()
-            local pos = tonumber(cached_timeshift.playhead_byte) or 0
-            behind_clock = math.max(0, (size - pos) / (ATSC_BPS / 8))
-            return behind_clock
-        end
-        local t0 = tonumber(cached_timeshift.playhead_t) or 0
-        if t0 > 0 then
-            behind_clock = math.max(0, os.time() - t0)
-            return behind_clock
-        end
-    end
     local size = file_bytes()
-    local pos = tonumber(cached_timeshift.playhead_byte) or 0
-    local rate = mux_rate()
-    if view == "delayed" and not paused then
-        local t0 = tonumber(cached_timeshift.playhead_t) or 0
-        if t0 > 0 then
-            pos = pos + math.max(0, os.time() - t0) * rate
-        end
+    local pos = read_follow_cursor()
+    if pos == nil then
+        pos = tonumber(cached_timeshift.playhead_byte) or 0
     end
+    local rate = measured_rate()
     if size > 188 then
         pos = math.max(0, math.min(pos, size - 188))
+    else
+        pos = math.max(0, pos)
     end
     behind_clock = math.max(0, (size - pos) / rate)
     return behind_clock
@@ -411,6 +435,8 @@ local function reset_virt()
     mux_bps = 0
     dump_start_byte = 0
     dump_start_t = nil
+    rate_mark_byte = nil
+    rate_mark_t = nil
     if mp.get_property_bool("pause", false) then
         virt_last = nil
     else
@@ -1030,16 +1056,6 @@ local function on_dump_eof()
     if is_library_playback() then
         cli_async({"live"})
         return
-    end
-    reload_data()
-    if cached_timeshift.dump_held == true then
-        return
-    end
-    if is_timeshift_playback() and not is_follow_pipe() then
-        if mp.get_property_bool("pause", false) then
-            return
-        end
-        cli_async({"seek", "0"})
     end
 end
 

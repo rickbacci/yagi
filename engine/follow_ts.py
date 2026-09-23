@@ -8,6 +8,10 @@ replies with the current cursor so skip can move from the real playhead.
 Unpaced copy dumps the rest of the file as fast as the pipe allows, so a
 delayed skip never moves the picture. PACE <bytes/sec> reads the buffer at
 1x. CATCHUP turns that off and races to the write head.
+
+SEEK lands on the next video keyframe at or after the byte, then keeps
+writing the same fifo. The window stays open. A cursor file beside the
+control socket is the byte the behind number subtracts from the file end.
 """
 
 from __future__ import annotations
@@ -31,6 +35,61 @@ def align_ts_offset(n: int) -> int:
     return n - (n % TS_PACKET)
 
 
+def cursor_path(sock_path: str) -> str:
+    if sock_path.endswith(".sock"):
+        return sock_path[:-5] + ".pos"
+    return sock_path + ".pos"
+
+
+def packet_is_video_keyframe(pkt: bytes) -> bool:
+    """True when this TS packet begins a video random-access point.
+
+    MPEG-2 sequence header, an I-picture, or an H.264 IDR. The packet has to
+    start a payload unit so the cut is on a PES boundary.
+    """
+    if len(pkt) < TS_PACKET or pkt[0] != 0x47:
+        return False
+    if (pkt[1] & 0x40) == 0:
+        return False
+    afc = (pkt[3] >> 4) & 0x3
+    off = 4
+    if afc in (2, 3):
+        afl = pkt[4]
+        off = 5 + afl
+        if off > TS_PACKET:
+            return False
+    if afc == 2:
+        return False
+    body = pkt[off:]
+    if b"\x00\x00\x01\xb3" in body or b"\x00\x00\x01\x65" in body or b"\x00\x00\x00\x01\x65" in body:
+        return True
+    idx = body.find(b"\x00\x00\x01\x00")
+    if idx < 0 or idx + 6 > len(body):
+        return False
+    coding = (body[idx + 5] >> 3) & 0x07
+    return coding == 1
+
+
+def next_video_keyframe(data: bytes, start: int) -> int:
+    """Offset of the next video keyframe at or after start.
+
+    Junk that is not MPEG-TS stays on the aligned byte. A real stream with
+    no keyframe in the buffer stays there too, so a seek never waits forever.
+    """
+    start = align_ts_offset(start)
+    if start < 0 or start >= len(data):
+        return max(0, start)
+    if data[start:start + 1] != b"\x47":
+        return start
+    limit = min(len(data), start + 4 * 1024 * 1024)
+    pos = start
+    while pos + TS_PACKET <= limit:
+        if packet_is_video_keyframe(data[pos:pos + TS_PACKET]):
+            return pos
+        pos += TS_PACKET
+    return start
+
+
 class TsFollower:
     def __init__(self, path: str, start_byte: int, sock_path: str, dest_fifo: Optional[str] = None):
         self.path = path
@@ -51,6 +110,8 @@ class TsFollower:
         self._write_bps = 0.0
         self._eof_t: Optional[float] = None
         self._eof_size = 0
+        self._pos_note_t = 0.0
+        self._pos_path = cursor_path(sock_path)
 
     def _open_dest(self) -> None:
         if not self.dest_fifo:
@@ -138,21 +199,58 @@ class TsFollower:
         extra = (self.pos - allowed) / self._pace_bps
         time.sleep(min(max(0.0, extra), 0.25))
 
-    def _apply_seek(self, byte: int) -> None:
-        target = align_ts_offset(byte)
-        with self._lock:
-            self.pos = target
-            if self._fd is None:
-                self._reset_pace_clock()
-                return
+    def _publish_pos(self, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and (now - self._pos_note_t) < 0.25:
+            return
+        self._pos_note_t = now
+        tmp = self._pos_path + ".tmp"
+        try:
+            fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        except OSError:
+            return
+        try:
+            os.write(fd, str(self.pos).encode())
+        except OSError:
             try:
-                size = os.fstat(self._fd).st_size
-                if self.pos > size:
-                    self.pos = align_ts_offset(size)
-                os.lseek(self._fd, self.pos, os.SEEK_SET)
+                os.close(fd)
             except OSError:
                 pass
+            return
+        try:
+            os.close(fd)
+            os.replace(tmp, self._pos_path)
+        except OSError:
+            pass
+
+    def _apply_seek(self, byte: int) -> None:
+        """Move the read cursor. The fifo stays open."""
+        target = align_ts_offset(byte)
+        with self._lock:
+            fd = self._fd
+            size = 0
+            window = b""
+            if fd is not None:
+                try:
+                    size = os.fstat(fd).st_size
+                    if target < size:
+                        os.lseek(fd, target, os.SEEK_SET)
+                        window = os.read(fd, min(4 * 1024 * 1024, size - target))
+                except OSError:
+                    window = b""
+            cut = target
+            if window:
+                cut = target + next_video_keyframe(window, 0)
+            if size and cut > size:
+                cut = align_ts_offset(size)
+            self.pos = cut
+            if fd is not None:
+                try:
+                    os.lseek(fd, self.pos, os.SEEK_SET)
+                except OSError:
+                    pass
             self._reset_pace_clock()
+        self._publish_pos(force=True)
 
     def _handle_ctl(self, data: str) -> Optional[str]:
         upper = data.upper()
@@ -161,6 +259,7 @@ class TsFollower:
                 return str(self.pos)
         if upper.startswith("PAUSE"):
             self._paused = True
+            self._publish_pos(force=True)
             return None
         if upper.startswith("PLAY"):
             self._paused = False
@@ -221,12 +320,14 @@ class TsFollower:
                         pass
 
     def run(self) -> None:
-        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+        # A probe can open the fifo and close it. Default SIGPIPE would kill
+        # the reader. Ignore it and wait for the real window.
+        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
         self._bind_sock()
         self._open_file()
-        self._open_dest()
         ctl = threading.Thread(target=self._ctl_loop, name="follow-ctl", daemon=True)
         ctl.start()
+        self._open_dest()
         stdout = sys.stdout.buffer
         try:
             while self._running:
@@ -245,13 +346,26 @@ class TsFollower:
                         if buf:
                             self.pos += len(buf)
                 if buf:
+                    self._publish_pos()
                     try:
                         if self._out_fd is not None:
-                            os.write(self._out_fd, buf)
+                            pending = buf
+                            while pending:
+                                wrote = os.write(self._out_fd, pending)
+                                if wrote <= 0:
+                                    raise BrokenPipeError
+                                pending = pending[wrote:]
                         else:
                             stdout.write(buf)
                             stdout.flush()
                     except (BrokenPipeError, OSError):
+                        with self._lock:
+                            self.pos = max(0, self.pos - len(buf))
+                            if self._fd is not None:
+                                try:
+                                    os.lseek(self._fd, self.pos, os.SEEK_SET)
+                                except OSError:
+                                    pass
                         if not self.dest_fifo:
                             return
                         if self._out_fd is not None:
