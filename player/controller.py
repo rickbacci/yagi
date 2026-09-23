@@ -714,8 +714,8 @@ class MpvController:
                 "--keep-open-pause=no",
                 "--cache-pause=no",
                 "--cache=no",
-                "--demuxer-readahead-secs=1",
-                "--demuxer-max-bytes=1572864",
+                "--demuxer-readahead-secs=3",
+                "--demuxer-max-bytes=4194304",
                 "--ytdl=no",
             ])
         else:
@@ -942,6 +942,8 @@ class MpvController:
         if not Timeshift.send_follow_seek(byte):
             if not Timeshift.start_follow(byte) or not Timeshift.send_follow_seek(byte):
                 return False
+        # The readahead is the old picture. Drop it so the keyframe break is next.
+        self.send_command(["drop-buffers"])
         self._arm_reader(paused, self._behind(byte))
         self.send_command(["set_property", "pause", paused])
         self._note_cursor(byte, paused)

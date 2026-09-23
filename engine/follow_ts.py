@@ -26,6 +26,7 @@ from typing import List, Optional
 
 TS_PACKET = 188
 CHUNK = TS_PACKET * 64
+PACE_LEAD_SEC = 3.0
 
 
 def align_ts_offset(n: int) -> int:
@@ -70,6 +71,43 @@ def packet_is_video_keyframe(pkt: bytes) -> bool:
     return coding == 1
 
 
+def packet_pid(pkt: bytes) -> int:
+    if len(pkt) < 4 or pkt[0] != 0x47:
+        return -1
+    return ((pkt[1] & 0x1F) << 8) | pkt[2]
+
+
+def discontinuity_packet(pid: int) -> bytes:
+    """Adaptation-only packet. The next payload on this PID is a new timeline."""
+    pkt = bytearray(TS_PACKET)
+    pkt[0] = 0x47
+    pkt[1] = (pid >> 8) & 0x1F
+    pkt[2] = pid & 0xFF
+    pkt[3] = 0x20
+    pkt[4] = TS_PACKET - 5
+    pkt[5] = 0x80
+    for i in range(6, TS_PACKET):
+        pkt[i] = 0xFF
+    return bytes(pkt)
+
+
+def mark_discontinuity(buf: bytes) -> bytes:
+    """Prefix a break packet for each elementary stream in this chunk."""
+    if not buf or buf[0] != 0x47:
+        return buf
+    seen = set()
+    prefix = bytearray()
+    for off in range(0, len(buf) - TS_PACKET + 1, TS_PACKET):
+        if buf[off] != 0x47:
+            break
+        pid = packet_pid(buf[off:off + TS_PACKET])
+        if pid < 0 or pid == 0x1FFF or pid in seen:
+            continue
+        seen.add(pid)
+        prefix += discontinuity_packet(pid)
+    return bytes(prefix) + buf
+
+
 def next_video_keyframe(data: bytes, start: int) -> int:
     """Offset of the next video keyframe at or after start.
 
@@ -112,6 +150,7 @@ class TsFollower:
         self._eof_size = 0
         self._pos_note_t = 0.0
         self._pos_path = cursor_path(sock_path)
+        self._break = False
 
     def _open_dest(self) -> None:
         if not self.dest_fifo:
@@ -195,9 +234,10 @@ class TsFollower:
             with self._lock:
                 elapsed = time.monotonic() - self._pace_origin_t
                 allowed = self._pace_origin_pos + elapsed * self._pace_bps
-                if self.pos <= allowed:
+                lead = min(self._pace_bps * PACE_LEAD_SEC, 3 * 1024 * 1024)
+                if self.pos <= allowed + lead:
                     return
-                extra = (self.pos - allowed) / self._pace_bps
+                extra = (self.pos - allowed - lead) / self._pace_bps
             time.sleep(min(max(0.0, extra), 0.05))
 
     def _publish_pos(self, force: bool = False) -> None:
@@ -251,6 +291,7 @@ class TsFollower:
                 except OSError:
                     pass
             self._reset_pace_clock()
+            self._break = True
         self._publish_pos(force=True)
 
     def _handle_ctl(self, data: str) -> Optional[str]:
@@ -335,6 +376,7 @@ class TsFollower:
                 if self._paused:
                     time.sleep(0.04)
                     continue
+                stamp = False
                 with self._lock:
                     fd = self._fd
                     if fd is None:
@@ -346,6 +388,11 @@ class TsFollower:
                             buf = b""
                         if buf:
                             self.pos += len(buf)
+                            stamp = self._break
+                            self._break = False
+                file_len = len(buf)
+                if buf and stamp:
+                    buf = mark_discontinuity(buf)
                 if buf:
                     self._publish_pos()
                     try:
@@ -361,7 +408,9 @@ class TsFollower:
                             stdout.flush()
                     except (BrokenPipeError, OSError):
                         with self._lock:
-                            self.pos = max(0, self.pos - len(buf))
+                            self.pos = max(0, self.pos - file_len)
+                            if stamp:
+                                self._break = True
                             if self._fd is not None:
                                 try:
                                     os.lseek(self._fd, self.pos, os.SEEK_SET)

@@ -413,7 +413,8 @@ class TestTimeshift(unittest.TestCase):
 
             with patch("engine.follow_ts.time.sleep", side_effect=fake_sleep):
                 follower._pace_wait()
-            self.assertGreater(sum(slept), 9.0)
+            self.assertGreater(sum(slept), 6.0)
+            self.assertLess(sum(slept), 8.0)
             self.assertLess(max(slept), 0.2)
 
     def test_write_rate_falls_back_to_atsc_when_unpaused(self):
@@ -761,7 +762,14 @@ class TestTimeshift(unittest.TestCase):
             try:
                 follower._apply_seek(0)
                 self.assertEqual(follower.pos, 188 * 3)
+                self.assertTrue(follower._break)
                 self.assertEqual(follower._out_fd, sentinel)
+                from engine.follow_ts import mark_discontinuity, TS_PACKET
+                marked = mark_discontinuity(bytes(key) + filler)
+                self.assertEqual(marked[0], 0x47)
+                self.assertEqual(marked[3] & 0x30, 0x20)
+                self.assertEqual(marked[5] & 0x80, 0x80)
+                self.assertEqual(marked[TS_PACKET:TS_PACKET + 4], bytes(key[:4]))
                 follower._apply_seek(188 * 4)
                 self.assertEqual(follower.pos, 188 * 4)
                 self.assertEqual(follower._out_fd, sentinel)

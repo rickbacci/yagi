@@ -360,8 +360,8 @@ class TestMpvPlayerController(unittest.TestCase):
         mock_follow.assert_called_with(0)
         self.assertIn("--cache-pause=no", cmd)
         self.assertGreater(cmd.index("--cache=no"), cmd.index("--cache=yes"))
-        self.assertIn("--demuxer-readahead-secs=1", cmd)
-        self.assertIn("--demuxer-max-bytes=1572864", cmd)
+        self.assertIn("--demuxer-readahead-secs=3", cmd)
+        self.assertIn("--demuxer-max-bytes=4194304", cmd)
         self.assertIn("--ytdl=no", cmd)
         self.assertIn("--mute=yes", cmd)
         self.assertIn("--sub-create-cc-track=yes", cmd)
@@ -845,6 +845,8 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
             self.assertTrue(self.controller.seek(-10))
         mock_seek.assert_called_with(18_800_000)
         mock_popen.assert_not_called()
+        sent = [m.get("command") for m in self.server.commands]
+        self.assertIn(["drop-buffers"], sent)
 
     def test_seek_fwd_on_live_is_noop(self):
         self.server.path_value = FOLLOW_FIFO_PATH
