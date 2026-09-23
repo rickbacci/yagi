@@ -71,6 +71,17 @@ class TestCliE2E(unittest.TestCase):
         self.assertEqual(res.returncode, 0, f"Status failed: {res.stderr}")
         self.assertIn("Discovered", res.stdout)
         self.assertNotIn("Traceback", res.stderr)
+        self.assertNotIn("Daemon", res.stdout)
+
+    def test_cli_daemon_command_is_gone(self):
+        res = subprocess.run(
+            [sys.executable, CLI_BIN, "daemon"],
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertNotIn("Listening", res.stdout)
 
     def test_cli_channels_empty(self):
         """omarchy-tv channels must report 'No channels found' gracefully when empty."""

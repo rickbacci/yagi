@@ -19,26 +19,14 @@ from engine.tuner import TunerManager
 from engine.scanner import AtscScanner, write_scan_status
 from engine.paths import CHANNELS_JSON_PATH, FAVORITES_JSON_PATH, UI_PREFS_PATH, RECORDINGS_DIR
 from player.controller import MpvController
-from engine.daemon import TvDaemon, send_daemon_request
 
 
 def cmd_status(args):
-    res = send_daemon_request("status")
-    if res and res.get("success"):
-        print("Omarchy TV Daemon: Running")
-        print(f"Player active: {res.get('player_running')}")
-        print(f"Channels configured: {res.get('total_channels')}")
-        print("\nTuners:")
-        for t in res.get("tuners", []):
-            status = "BUSY" if t["is_busy"] else "FREE"
-            print(f"  [{t['adapter_id']}] {t['name']} ({status}) - Systems: {t['delivery_systems']}")
-    else:
-        print("Omarchy TV Daemon: Inactive (Running direct hardware query)")
-        tuners = TunerManager.list_tuners()
-        print(f"Discovered {len(tuners)} tuner adapters:")
-        for t in tuners:
-            status = "BUSY" if t.is_busy else "FREE"
-            print(f"  [{t.adapter_id}] {t.name} ({status}) - Systems: {t.delivery_systems}")
+    tuners = TunerManager.list_tuners()
+    print(f"Discovered {len(tuners)} tuner adapters:")
+    for t in tuners:
+        status = "BUSY" if t.is_busy else "FREE"
+        print(f"  [{t.adapter_id}] {t.name} ({status}) - Systems: {t.delivery_systems}")
 
 
 def cmd_scan(args):
@@ -533,12 +521,6 @@ def cmd_record(args):
         print("=" * 85)
 
 
-def cmd_daemon(args):
-    daemon = TvDaemon()
-    print("Starting Omarchy TV background daemon...")
-    daemon.start()
-
-
 def main():
     parser = argparse.ArgumentParser(description="Omarchy TV - Modern Linux Over-The-Air Television")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
@@ -631,10 +613,6 @@ def main():
     p_rec.add_argument("--end-clock", dest="end_clock", default="", help="End clock label")
     p_rec.add_argument("--display-name", dest="display_name", default="", help="Station line")
     p_rec.set_defaults(func=cmd_record)
-
-    # daemon
-    p_daemon = subparsers.add_parser("daemon", help="Run IPC daemon in foreground")
-    p_daemon.set_defaults(func=cmd_daemon)
 
     args = parser.parse_args()
     args.func(args)

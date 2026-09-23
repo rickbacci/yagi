@@ -54,6 +54,10 @@ GIB = 1024 ** 3
 DEFAULT_LIBRARY_BUDGET_GIB = 20
 MIN_LIBRARY_BUDGET_GIB = 2
 KEEP_FREE_GIB = 8
+# A locked ATSC dump passes this quickly. PAT/PMT alone does not.
+GROW_BYTES = 32 * 1024
+GROW_WAIT_SECS = 20.0
+WATCH_INTERVAL_SECS = 10.0
 
 
 def load_ui_prefs(prefs_path: Optional[str] = None) -> Dict[str, Any]:
@@ -111,6 +115,57 @@ def sanitize_filename(name: str) -> str:
     clean = re.sub(r"[\\/*?:\"<>|'`’]", "", name)
     clean = re.sub(r"\s+", "_", clean).strip("._-")
     return clean or "recording"
+
+
+def sidecar_path(file_path: str) -> str:
+    """JSON next to the recording. The filename is no longer the only record."""
+    root, _ext = os.path.splitext(file_path)
+    return root + ".json"
+
+
+def read_sidecar(file_path: str) -> Dict[str, Any]:
+    path = sidecar_path(file_path)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_sidecar(file_path: str, payload: Dict[str, Any]) -> None:
+    target = sidecar_path(file_path)
+    os.makedirs(os.path.dirname(os.path.abspath(target)) or ".", exist_ok=True)
+    tmp = f"{target}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, target)
+    chmod_private_file(target)
+
+
+def patch_sidecar(file_path: str, **fields: Any) -> Dict[str, Any]:
+    data = read_sidecar(file_path)
+    data.update(fields)
+    write_sidecar(file_path, data)
+    return data
+
+
+def disk_below_floor(path: str) -> bool:
+    """True when the volume holding path has less than the keep-free floor left."""
+    try:
+        free = shutil.disk_usage(path).free
+    except OSError:
+        return False
+    return free < KEEP_FREE_GIB * GIB
+
+
+def stop_reason(path: str, now: float, end_unix: Optional[float]) -> Optional[str]:
+    """Why the writer should stop, or None to keep going."""
+    if end_unix is not None and now >= float(end_unix):
+        return "end"
+    if disk_below_floor(path):
+        return "disk"
+    return None
 
 
 class DvrSession:
@@ -311,6 +366,68 @@ class DvrManager:
                     pass
 
     @classmethod
+    def wait_until_growing(cls, proc: subprocess.Popen, path: str, timeout: float = GROW_WAIT_SECS) -> bool:
+        """True once the dump has written a real chunk and the process is still up."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if isinstance(proc.poll(), int):
+                return False
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+            if size >= GROW_BYTES:
+                return True
+            time.sleep(0.05)
+        return False
+
+    @classmethod
+    def watch_recording(
+        cls,
+        session_id: str,
+        active_path: Optional[str] = None,
+        end_unix: Optional[float] = None,
+        interval: float = WATCH_INTERVAL_SECS,
+    ) -> None:
+        """Stop this recording at its end time, or when free space hits the floor."""
+        while True:
+            sessions = cls.load_active_sessions(active_path)
+            match = next((s for s in sessions if s.session_id == session_id and s.is_active()), None)
+            if match is None:
+                return
+            reason = stop_reason(match.file_path, time.time(), end_unix)
+            if reason:
+                if reason == "disk":
+                    patch_sidecar(match.file_path, stopped_reason="disk")
+                cls.stop_recording(session_id, active_path=active_path)
+                return
+            time.sleep(interval)
+
+    @classmethod
+    def _spawn_watcher(
+        cls,
+        session_id: str,
+        active_path: str,
+        end_unix: Optional[float],
+    ) -> None:
+        code = (
+            "import sys; sys.path.insert(0, {root});"
+            "from engine.dvr import DvrManager;"
+            "DvrManager.watch_recording({sid}, active_path={act}, end_unix={end})"
+        ).format(
+            root=repr(PROJECT_ROOT),
+            sid=repr(session_id),
+            act=repr(active_path),
+            end=repr(end_unix),
+        )
+        subprocess.Popen(
+            [sys.executable, "-c", code],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+    @classmethod
     def start_recording(
         cls,
         channel_query: str,
@@ -409,7 +526,28 @@ class DvrManager:
             except OSError:
                 pass
 
-        # 5. Build MPV Dumper Command
+        from engine.timeshift import Timeshift
+
+        full_mux = bool(Timeshift._conf_needs_full_mux(tune_name))
+        try:
+            service_id = int(Timeshift.service_id(tune_name) or 0)
+        except (TypeError, ValueError):
+            service_id = 0
+        started = time.time()
+        side = {
+            "title": program_title,
+            "station": station,
+            "channel": channel_number,
+            "tune_name": tune_name,
+            "service_id": service_id,
+            "full_mux": full_mux,
+            "start": int(started),
+            "end": None,
+            "planned_end": int(started + duration) if duration and duration > 0 else None,
+            "status": "recording",
+        }
+
+        # 5. Build MPV Dumper Command. A copied video id dumps the whole tower.
         cmd = [
             "mpv",
             f"--stream-dump={file_path}",
@@ -420,28 +558,38 @@ class DvrManager:
             f"--dvbin-card={adapter_id}",
             f"--dvbin-file={m_path}",
             "--idle=no",
-            f"dvb://{tune_name}",
         ]
+        if full_mux:
+            cmd.append("--dvbin-full-transponder=yes")
+        cmd.append(f"dvb://{tune_name}")
 
-        # Launch background process detached
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        exited = proc.poll()
-        if isinstance(exited, int):
-            raise RuntimeError("Recorder exited before the tuner locked. Try again when a tuner is free.")
         chmod_private_file(file_path)
+        if not cls.wait_until_growing(proc, file_path):
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            side["status"] = "failed"
+            write_sidecar(file_path, side)
+            raise RuntimeError(
+                "Recorder did not start writing. The partial file was kept."
+            )
 
+        write_sidecar(file_path, side)
         session = DvrSession(
             session_id=session_id,
             channel_number=channel_number,
             station=station,
             tune_name=tune_name,
             program_title=program_title,
-            start_time=time.time(),
+            start_time=started,
             duration_seconds=duration,
             adapter_id=adapter_id,
             file_path=file_path,
@@ -454,20 +602,8 @@ class DvrManager:
         if os.path.realpath(rec_dir) == os.path.realpath(RECORDINGS_DIR):
             cls.refresh_library_index(recordings_dir=rec_dir)
 
-        # 6. If duration is set, schedule background termination via detached timer process
-        if duration and duration > 0:
-            timer_code = (
-                f"import sys, time; sys.path.insert(0, {repr(PROJECT_ROOT)});"
-                f"from engine.dvr import DvrManager;"
-                f"time.sleep({float(duration)});"
-                f"DvrManager.stop_recording({repr(session.session_id)}, active_path={repr(act_path)})"
-            )
-            subprocess.Popen(
-                [sys.executable, "-c", timer_code],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+        end_unix = float(side["planned_end"]) if side.get("planned_end") else None
+        cls._spawn_watcher(session.session_id, act_path, end_unix)
 
         return session
 
@@ -497,6 +633,8 @@ class DvrManager:
 
             if match:
                 s.stop()
+                if s.file_path:
+                    patch_sidecar(s.file_path, status="complete", end=int(time.time()))
                 stopped.append(s)
             else:
                 remaining.append(s)
@@ -528,17 +666,34 @@ class DvrManager:
                         title = entry.name
                         ts_raw = ""
 
+                    side = read_sidecar(entry.path)
+                    if side:
+                        title = str(side.get("title") or title)
+                        station = str(side.get("station") or station)
+                        ch_num = str(side.get("channel") or ch_num)
+                    status = str(side.get("status") or "")
+                    try:
+                        service_id = int(side.get("service_id") or 0)
+                    except (TypeError, ValueError):
+                        service_id = 0
+                    playable = stat.st_size >= MIN_PLAYABLE_BYTES
+
                     results.append({
                         "name": entry.name,
                         "path": entry.path,
                         "size_bytes": stat.st_size,
                         "size_formatted": format_bytes(stat.st_size),
-                        "playable": stat.st_size >= MIN_PLAYABLE_BYTES,
+                        "playable": playable,
                         "mtime": stat.st_mtime,
                         "date_formatted": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
                         "channel_number": ch_num,
                         "station": station,
                         "title": title,
+                        "status": status,
+                        "service_id": service_id,
+                        "full_mux": bool(side.get("full_mux")) if side else False,
+                        "start": side.get("start"),
+                        "end": side.get("end"),
                     })
                 except OSError:
                     continue
@@ -653,6 +808,13 @@ class DvrManager:
 
         if os.path.exists(real_file):
             os.remove(real_file)
+            side = sidecar_path(real_file)
+            if os.path.isfile(side) and not os.path.islink(side):
+                try:
+                    if os.path.commonpath([rec_dir, os.path.realpath(side)]) == rec_dir:
+                        os.remove(side)
+                except (OSError, ValueError):
+                    pass
             if recordings_dir is None or os.path.realpath(recordings_dir) == os.path.realpath(RECORDINGS_DIR):
                 cls.refresh_library_index(recordings_dir=recordings_dir)
             return True

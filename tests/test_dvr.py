@@ -5,6 +5,7 @@ Unit tests for Dual-Tuner DVR Engine.
 import os
 import json
 import time
+import threading
 import unittest
 import tempfile
 from unittest.mock import patch, MagicMock
@@ -14,9 +15,14 @@ from engine.dvr import (
     sanitize_filename,
     default_library_budget_bytes,
     resolve_library_budget_bytes,
+    disk_below_floor,
+    stop_reason,
+    read_sidecar,
     DvrSession,
     DvrManager,
     GIB,
+    KEEP_FREE_GIB,
+    GROW_BYTES,
 )
 from engine.tuner import TunerAdapter
 
@@ -224,14 +230,15 @@ class TestDvrEngine(unittest.TestCase):
             with open(channels_file, "w") as f:
                 json.dump([{"channel_number": "8.1", "station": "FOX", "name": "WJW-HD", "tune_name": "8.1"}], f)
 
-            session = DvrManager.start_recording(
-                channel_query="8.1",
-                duration=300,
-                recordings_dir=tmp_dir,
-                channels_file=channels_file,
-                active_path=active_file,
-                program_title="Monday Night Football Kickoff",
-            )
+            with patch.object(DvrManager, "wait_until_growing", return_value=True):
+                session = DvrManager.start_recording(
+                    channel_query="8.1",
+                    duration=300,
+                    recordings_dir=tmp_dir,
+                    channels_file=channels_file,
+                    active_path=active_file,
+                    program_title="Monday Night Football Kickoff",
+                )
 
             self.assertEqual(session.channel_number, "8.1")
             self.assertEqual(session.station, "FOX")
@@ -241,6 +248,14 @@ class TestDvrEngine(unittest.TestCase):
             rec_cmd = mock_popen.call_args_list[0][0][0]
             self.assertIn("--dvbin-card=1", rec_cmd)
             self.assertNotIn("--dvbin-card=0", rec_cmd)
+            self.assertNotIn("--dvbin-full-transponder=yes", rec_cmd)
+            side = read_sidecar(session.file_path)
+            self.assertEqual(side["title"], "Monday Night Football Kickoff")
+            self.assertEqual(side["channel"], "8.1")
+            self.assertEqual(side["status"], "recording")
+            self.assertIsNone(side["end"])
+            watcher = mock_popen.call_args_list[1][0][0]
+            self.assertIn("watch_recording", watcher[2])
 
             # Second concurrent recording of same channel must raise RuntimeError
             with self.assertRaises(RuntimeError):
@@ -277,6 +292,127 @@ class TestDvrEngine(unittest.TestCase):
                 )
             self.assertIn("Tuner 1", str(ctx.exception))
             mock_popen.assert_not_called()
+
+    @patch("subprocess.Popen")
+    @patch("engine.tuner.TunerManager.adapter_is_free", return_value=True)
+    def test_start_recording_full_mux_and_sidecar_service(self, mock_free, mock_popen):
+        fake_proc = MagicMock()
+        fake_proc.pid = os.getpid()
+        fake_proc.poll.return_value = None
+        mock_popen.return_value = fake_proc
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            channels_file = os.path.join(tmp_dir, "channels.json")
+            with open(channels_file, "w") as f:
+                json.dump([{"channel_number": "43.1", "station": "GRIT", "tune_name": "GRIT"}], f)
+            with patch("engine.timeshift.Timeshift._conf_needs_full_mux", return_value=True), \
+                 patch("engine.timeshift.Timeshift.service_id", return_value=7), \
+                 patch.object(DvrManager, "wait_until_growing", return_value=True):
+                session = DvrManager.start_recording(
+                    "43.1",
+                    recordings_dir=tmp_dir,
+                    channels_file=channels_file,
+                    active_path=os.path.join(tmp_dir, "active.json"),
+                )
+            cmd = mock_popen.call_args_list[0][0][0]
+            self.assertIn("--dvbin-full-transponder=yes", cmd)
+            side = read_sidecar(session.file_path)
+            self.assertTrue(side["full_mux"])
+            self.assertEqual(side["service_id"], 7)
+            self.assertIsNone(side["planned_end"])
+
+    @patch("subprocess.Popen")
+    @patch("engine.tuner.TunerManager.adapter_is_free", return_value=True)
+    def test_start_recording_keeps_partial_when_dump_never_grows(self, mock_free, mock_popen):
+        fake_proc = MagicMock()
+        fake_proc.pid = os.getpid()
+        fake_proc.poll.return_value = 1
+        mock_popen.return_value = fake_proc
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            channels_file = os.path.join(tmp_dir, "channels.json")
+            with open(channels_file, "w") as f:
+                json.dump([{"channel_number": "8.1", "station": "FOX", "tune_name": "8.1"}], f)
+            active_file = os.path.join(tmp_dir, "active.json")
+            with self.assertRaises(RuntimeError) as ctx:
+                DvrManager.start_recording(
+                    "8.1",
+                    recordings_dir=tmp_dir,
+                    channels_file=channels_file,
+                    active_path=active_file,
+                )
+            self.assertIn("partial file", str(ctx.exception))
+            ts_files = [name for name in os.listdir(tmp_dir) if name.endswith(".ts")]
+            self.assertEqual(len(ts_files), 1)
+            side = read_sidecar(os.path.join(tmp_dir, ts_files[0]))
+            self.assertEqual(side["status"], "failed")
+            self.assertEqual(DvrManager.load_active_sessions(active_file), [])
+            fake_proc.kill.assert_not_called()
+
+    def test_list_prefers_sidecar_over_filename(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            rec_file = os.path.join(tmp_dir, "8.1-FOX_Wrong_Title_20260920_120000.ts")
+            with open(rec_file, "wb") as f:
+                f.write(b"x" * (256 * 1024))
+            from engine.dvr import write_sidecar
+            write_sidecar(rec_file, {
+                "title": "MASH",
+                "station": "METV",
+                "channel": "19.2",
+                "service_id": 4,
+                "full_mux": True,
+                "status": "complete",
+                "start": 10,
+                "end": 20,
+            })
+            records = DvrManager.list_recordings(recordings_dir=tmp_dir)
+            self.assertEqual(records[0]["title"], "MASH")
+            self.assertEqual(records[0]["station"], "METV")
+            self.assertEqual(records[0]["channel_number"], "19.2")
+            self.assertEqual(records[0]["service_id"], 4)
+            self.assertTrue(records[0]["playable"])
+            DvrManager.delete_recording(rec_file, recordings_dir=tmp_dir)
+            self.assertFalse(os.path.exists(rec_file))
+            self.assertFalse(os.path.exists(os.path.splitext(rec_file)[0] + ".json"))
+
+    def test_disk_floor_and_end_time(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with patch("engine.dvr.shutil.disk_usage") as mock_usage:
+                mock_usage.return_value = MagicMock(free=(KEEP_FREE_GIB * GIB) - 1)
+                self.assertTrue(disk_below_floor(tmp_dir))
+                mock_usage.return_value = MagicMock(free=(KEEP_FREE_GIB * GIB) + 1)
+                self.assertFalse(disk_below_floor(tmp_dir))
+        self.assertEqual(stop_reason(tmp_dir, now=100, end_unix=100), "end")
+        with patch("engine.dvr.disk_below_floor", return_value=True):
+            self.assertEqual(stop_reason(tmp_dir, now=1, end_unix=None), "disk")
+        with patch("engine.dvr.disk_below_floor", return_value=False):
+            self.assertIsNone(stop_reason(tmp_dir, now=1, end_unix=None))
+
+    def test_wait_until_growing_accepts_a_live_file(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, "live.ts")
+            with open(path, "wb") as f:
+                f.write(b"")
+            proc = MagicMock()
+            proc.poll.return_value = None
+
+            def grow():
+                time.sleep(0.05)
+                with open(path, "wb") as f:
+                    f.write(b"x" * GROW_BYTES)
+
+            threading.Thread(target=grow).start()
+            self.assertTrue(DvrManager.wait_until_growing(proc, path, timeout=1.0))
+
+    def test_tiny_failed_file_stays_unplayable(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            rec_file = os.path.join(tmp_dir, "stub.ts")
+            with open(rec_file, "wb") as f:
+                f.write(b"x" * 100)
+            from engine.dvr import write_sidecar
+            write_sidecar(rec_file, {"title": "Gone", "status": "failed", "channel": "8.1"})
+            records = DvrManager.list_recordings(recordings_dir=tmp_dir)
+            self.assertEqual(records[0]["status"], "failed")
+            self.assertFalse(records[0]["playable"])
+            self.assertTrue(os.path.exists(rec_file))
 
 
 if __name__ == "__main__":

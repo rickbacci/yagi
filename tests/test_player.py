@@ -627,6 +627,28 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self.assertIn("--force-seekable=yes", cmd)
         self.assertEqual(cmd[-1], rec)
 
+    @patch("subprocess.Popen")
+    def test_launch_file_opens_sidecar_service(self, mock_popen):
+        mock_popen.return_value = MagicMock(pid=1)
+        rec = os.path.join(self.tmp_dir.name, "tower.ts")
+        with open(rec, "wb") as f:
+            f.write(b"x" * (256 * 1024))
+        side = os.path.splitext(rec)[0] + ".json"
+        with open(side, "w", encoding="utf-8") as f:
+            json.dump({"full_mux": True, "service_id": 7, "title": "MASH"}, f)
+        sent = []
+        with patch("os.path.exists", return_value=True), \
+             patch("player.controller.update_player_state"), \
+             patch.object(self.controller, "send_command", side_effect=lambda cmd: sent.append(cmd) or {"error": "success"}):
+            self.assertTrue(self.controller.launch_file(rec))
+        self.assertIn(["set_property", "program", 7], sent)
+
+    def test_tune_reports_failure_when_lock_is_held(self):
+        with patch("player.controller.Timeshift.acquire_tune_lock", return_value=False), \
+             patch("player.controller.Timeshift.start_dump") as mock_dump:
+            self.assertFalse(self.controller.tune("WKYC-HD"))
+        mock_dump.assert_not_called()
+
     def test_tune_from_recording_relaunches_live_tuner(self):
         self.server.path_value = os.path.join(self.tmp_dir.name, "show.ts")
         with patch.object(self.controller, "launch_file", return_value=True) as mock_launch:
@@ -807,6 +829,11 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("function program_on_now", src)
         self.assertIn("function picture_ready", src)
         self.assertIn("dump_held", src)
+        record_key = src[src.index('mp.add_forced_key_binding("r"'):]
+        self.assertIn("recording_for_channel(ch)", record_key)
+        self.assertNotIn("cached_recordings[1]", record_key)
+        self.assertIn('"record", "stop"', record_key)
+        self.assertIn('"record", "start"', record_key)
         self.assertIn('mp.get_opt("tune")', src)
         self.assertIn("video-params/w", src)
         self.assertIn('mp.observe_property("video-params/w"', src)

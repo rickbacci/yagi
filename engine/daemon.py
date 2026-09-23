@@ -27,28 +27,7 @@ class TvDaemon:
         self.last_scan_progress: Dict[str, Any] = {"status": "idle", "percent": 0}
 
     def start(self):
-        self.running = True
-        if os.path.exists(self.socket_path):
-            try:
-                os.unlink(self.socket_path)
-            except OSError:
-                pass
-
-        self.server_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.server_sock.bind(self.socket_path)
-        self.server_sock.listen(5)
-        print(f"[omarchy-tv-daemon] Listening on {self.socket_path}")
-
-        while self.running:
-            try:
-                conn, _ = self.server_sock.accept()
-                client_thread = threading.Thread(target=self._handle_client, args=(conn,))
-                client_thread.daemon = True
-                client_thread.start()
-            except Exception as e:
-                if not self.running:
-                    break
-                print(f"[omarchy-tv-daemon] accept error: {e}")
+        raise RuntimeError("The TV daemon is not used. The CLI talks to the tuners directly.")
 
     def _handle_client(self, conn: socket.socket):
         conn.settimeout(30.0)
@@ -166,9 +145,3 @@ def send_daemon_request(cmd: str, args: Optional[Dict[str, Any]] = None) -> Opti
         return None
 
 
-if __name__ == "__main__":
-    daemon = TvDaemon()
-    try:
-        daemon.start()
-    except KeyboardInterrupt:
-        daemon.stop()

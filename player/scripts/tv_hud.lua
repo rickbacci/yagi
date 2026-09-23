@@ -759,7 +759,7 @@ local function render_hud()
     local vol = math.floor(mp.get_property_number("volume", 100) or 100)
     local vol_label = "Vol " .. tostring(vol)
     local action = paused and "Play (Space)" or "Pause (Space)"
-    local record = (is_recording or any_rec) and "Stop (r)" or "Record (r)"
+    local record = is_recording and "Stop (r)" or "Record (r)"
     local hints
     if is_library or is_ts or delayed then
         hints = string.format("Back 10s (←)    %s    Ahead 10s (→)    Live (l)    Mute (m)    %s", action, vol_label)
@@ -1136,34 +1136,38 @@ mp.add_forced_key_binding("c", "tv_sub_cycle", function()
     mp.command("cycle sub")
     show_hud()
 end)
+local function recording_for_channel(ch)
+    if not ch then return nil end
+    local ch_num = ch.channel_number
+    local tune = ch.tune_name or ch.name
+    for _, rec in ipairs(cached_recordings) do
+        if (tune and rec.tune_name == tune) or (ch_num and rec.channel_number == ch_num) then
+            return rec
+        end
+    end
+    return nil
+end
+
 mp.add_forced_key_binding("r", "tv_record_toggle", function()
     reload_data()
-    local rec = cached_recordings[1]
-    if rec then
-        local ident = rec.tune_name or rec.station or rec.channel_number
-        local cli = tv_cli()
-        mp.command_native_async({
-            name = "subprocess",
-            playback_only = false,
-            capture_stdout = true,
-            args = {cli, "record", "stop", tostring(ident)}
-        }, function()
-            reload_data()
-            show_hud()
-        end)
-        return
-    end
-    local path = mp.get_property("path") or ""
     if is_library_playback() then return end
     local ch, _ = get_active_info()
     if not ch then return end
     local ch_ident = ch.tune_name or ch.name or ch.channel_number
+    local rec = recording_for_channel(ch)
     local cli = tv_cli()
+    local args
+    if rec then
+        local ident = rec.tune_name or rec.channel_number or ch_ident
+        args = {cli, "record", "stop", tostring(ident)}
+    else
+        args = {cli, "record", "start", tostring(ch_ident)}
+    end
     mp.command_native_async({
         name = "subprocess",
         playback_only = false,
         capture_stdout = true,
-        args = {cli, "record", "start", tostring(ch_ident)}
+        args = args
     }, function()
         reload_data()
         show_hud()

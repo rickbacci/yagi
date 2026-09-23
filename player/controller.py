@@ -211,6 +211,19 @@ def is_allowed_playback_path(file_path: str) -> bool:
         return False
 
 
+def _recording_service_id(file_path: str) -> int:
+    """Service to open when the library file is a whole tower."""
+    from engine.dvr import read_sidecar
+
+    side = read_sidecar(file_path)
+    if not side.get("full_mux"):
+        return 0
+    try:
+        return int(side.get("service_id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def is_dvb_path(path: Optional[str]) -> bool:
     return isinstance(path, str) and path.strip().lower().startswith("dvb://")
 
@@ -498,7 +511,7 @@ class MpvController:
 
         keep_window = self.is_running() and self.playback_mode() == "live"
         if not Timeshift.acquire_tune_lock():
-            return True
+            return False
         opened = False
         try:
             self.channels = self._load_channels()
@@ -717,6 +730,9 @@ class MpvController:
                 label = channel or os.path.splitext(os.path.basename(file_path))[0].replace("_", " ")
                 st = station or "Recording"
                 play_mode = mode or "recording"
+                sid = _recording_service_id(file_path)
+                if sid > 0:
+                    self.send_command(["set_property", "program", sid])
             update_player_state(
                 True,
                 channel=label,
