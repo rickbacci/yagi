@@ -1017,6 +1017,8 @@ local function seek_rel(delta)
 end
 
 local function request_pause()
+    -- Nothing plays under the black cover yet. A pause there has no picture to hold.
+    if blanking or not picture_ready() then return end
     if is_library_playback() then
         mp.commandv("no-osd", "cycle", "pause")
         show_hud()
