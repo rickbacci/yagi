@@ -169,6 +169,31 @@ class TestTimeshift(unittest.TestCase):
                 self.assertFalse(Timeshift.hold_dump_if_full())
             kill.assert_not_called()
 
+    def test_hold_dump_stops_live_playback_when_the_disk_is_low(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state_path = os.path.join(tmp_dir, "timeshift_active.json")
+            with open(live, "wb") as f:
+                f.write(b"x" * 1880)
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state_path), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
+                 patch("engine.dvr.disk_below_floor", return_value=True), \
+                 patch.object(Timeshift, "_pid_alive", return_value=True), \
+                 patch("os.kill") as kill:
+                Timeshift.patch_state(
+                    running=True,
+                    paused=False,
+                    view="live",
+                    pid=4242,
+                    playhead_byte=0,
+                    socket=os.path.join(tmp_dir, "no.sock"),
+                )
+                self.assertTrue(Timeshift.hold_dump_if_full())
+                self.assertEqual(Timeshift.load_state().get("dump_held"), "disk")
+            kill.assert_called_with(4242, signal.SIGTERM)
+            self.assertTrue(os.path.isfile(live))
+
     def test_hold_dump_leaves_a_shorter_pause_writing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             live = os.path.join(tmp_dir, "live.ts")

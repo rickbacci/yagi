@@ -232,22 +232,25 @@ class Timeshift:
 
     @classmethod
     def hold_dump_if_full(cls) -> bool:
-        """Stop the tuner dump once it is an hour ahead of the playhead.
+        """Stop the tuner dump an hour ahead of the playhead, or when the disk is low.
 
         The file, the picture, and the playhead stay. A later Live still jumps
-        to the write head that remains.
+        to the write head that remains. dump_held says which: "hour" or "disk".
         """
         state = cls.load_state()
         if not state or state.get("dump_held"):
             return False
-        # Live playback reads the write head. playhead_byte stays put, so the
-        # file size alone is not "an hour ahead."
-        if str(state.get("view") or "live") == "live" and not bool(state.get("paused")):
-            return False
         pid = int(state.get("pid") or 0)
         if not cls._pid_alive(pid):
             return False
-        if cls.dump_bytes() - cls.playhead_now() < cls.pause_cap_bytes():
+        from engine.dvr import disk_below_floor
+        reason = "disk" if disk_below_floor(TIMESHIFT_DIR) else ""
+        # Live playback reads the write head. playhead_byte stays put, so the
+        # file size alone is not "an hour ahead."
+        watching_live = str(state.get("view") or "live") == "live" and not bool(state.get("paused"))
+        if not reason and not watching_live and cls.dump_bytes() - cls.playhead_now() >= cls.pause_cap_bytes():
+            reason = "hour"
+        if not reason:
             return False
         sock = str(state.get("socket") or TIMESHIFT_SOCKET_PATH)
         if os.path.exists(sock):
@@ -268,7 +271,7 @@ class Timeshift:
                 os.unlink(sock)
             except OSError:
                 pass
-        cls.patch_state(pid=0, dump_held=True)
+        cls.patch_state(pid=0, dump_held=reason)
         return True
 
     @classmethod
