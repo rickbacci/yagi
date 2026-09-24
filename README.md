@@ -5,7 +5,7 @@
 
 OTA ATSC 1.0 for Omarchy: bar plugin, pinned PiP, dual-tuner record. Not MythTV, not Kaffeine.
 
-Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts. `omarchy-tv guide refresh` reads that on Tuner 1 into the flyout strip. Search looks at those saved titles. Record on Tuner 1 into `~/Videos/TV` while Tuner 0 keeps the live dump. Pause-live is that dump over loopback HTTP (skip and channel change are `loadfile` in the same window). Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
+Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts. `omarchy-tv guide refresh` reads that on Tuner 1 into the flyout strip. Search looks at those saved titles. Record on Tuner 1 into `~/Videos/TV` while Tuner 0 keeps the live dump. Pause-live is that dump, read once through a fifo. Skip seeks inside the same window. Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
 
 Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `omarchy-tv`.
 
@@ -29,7 +29,7 @@ This is a DualHD-shaped appliance, not a generic PVR.
 - Two ATSC adapters. Tuner 0 is only the live dump. Tuner 1 is only scan, Guide, and library record. A one-tuner box can watch. It cannot record, scan, or refresh the Guide while that dump is up, and those jobs will not steal tuner 0.
 - First run: no stations until you scan, no Hidden list until you hide one, no Guide titles until `guide refresh` (what the stations send in PSIP). There is no canned Cleveland lineup in the engine.
 - Super+K is Omarchy’s keybindings overlay. It does not open this flyout. Use the antenna, or `omarchy-shell shell toggle richardb.omarchy-tv`.
-- The pause sidecar is `http://127.0.0.1/…` with no token. Stay on loopback.
+- State JSON is not all `0600`.
 - Version in `manifest.json` is `0.1.0`. Not a published 1.0.
 
 ## Install
@@ -115,14 +115,14 @@ omarchy-tv pref filter favorites|watchable|all|hidden | pref library-max auto|20
 omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
 ```
 
-`pause` is throwaway `live.ts`. The writer stops when that file is an hour of air ahead of the playhead. `record` is a keepable file. `live` `loadfile`s the dump write head, or retunes after a recording. Channel change is a new dump on tuner 0, then `loadfile` in the same window.
+`pause` is throwaway `live.ts`. The writer stops when that file is an hour of air ahead of the playhead. `record` is a keepable file. `live` seeks the dump write head, or retunes after a recording. Channel change is the only `loadfile`, in the same window.
 
 ## HUD (pointer in the PiP — not the plugin, not Super+K)
 
 | Key | Live TV | Recording |
 | --- | --- | --- |
 | Space | Pause (writer stops an hour ahead); play stays behind until `l` | Pause / resume |
-| ← / → | Skip HTTP playhead (last hop is live, same window) | Skip; last hop retunes live |
+| ← / → | Skip 10s (inside the last 10s, → is live) | Skip; last hop retunes live |
 | l | Live write head (same window) | Return to live (new dump) |
 | r | Library record | ignored |
 | Super+F | Fullscreen (unpins first) | same |
@@ -141,4 +141,4 @@ omarchy-shell shell broadcast richardb.omarchy-tv play "8.1 FOX"
 # also: stop next prev live guide scan reloadChannels open close show hide
 ```
 
-Tests: `python3 -m unittest discover tests` (100% before commit).
+Tests: `TMPDIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/tv-test-tmp" python3 -m unittest discover tests`

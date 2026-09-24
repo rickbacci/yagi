@@ -14,7 +14,7 @@ Plugin `richardb.omarchy-tv`, kind `bar-widget`, QML `plugin/BarWidget.qml`. Hyp
 6. QML: `Color.*` / `Style.*` / `root.bar.*` only. HUD owns key chords.
 7. Class `omarchy-tv`: float, pin, 16:9, bottom-right, height `monitor/3`. Like `pip.lua`, not tag `pip` or 600×338. Super+F unpins, then fullscreen. No HUD `f`. Move is Super+LMB.
 8. Free the frontend before a dump (`EBUSY`). Scan dwell ≥ 1.2 s.
-9. Library `$XDG_VIDEOS_DIR/TV`. Pause dump `$XDG_CACHE_HOME/omarchy/tv/timeshift/`. PiP is never `dvb://`. Close TV wipes the dump and lost sidecars.
+9. Library `$XDG_VIDEOS_DIR/TV`. Pause dump `$XDG_CACHE_HOME/omarchy/tv/timeshift/`. PiP is never `dvb://`. Close TV wipes the dump.
 
 ## Settled
 `tv_hud.lua` and `plugin/BarWidget.qml` are settled. Stop, say why the look must change, and wait. Do not restyle, move, add, or drop a word, color, or bar.

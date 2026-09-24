@@ -20,7 +20,7 @@ No `Panel.qml`. The flyout is `BarWidget.qml`’s `KeyboardPanel`. The widget ro
 
 **Library vs pause-live.** `r` writes keepable files to `$XDG_VIDEOS_DIR/TV` (Recordings, Tuner 1). Space writes throwaway `live.ts` under `$XDG_CACHE_HOME/omarchy/tv/timeshift` (Tuner 0 dump). Pause files are never in Recordings. They can run together.
 
-**PiP is never `dvb://`.** Tuner 0 dumps growing `live.ts`. A loopback HTTP sidecar serves it (`from=` playhead, wait at EOF). That process outlives `omarchy-tv play` — an in-process server dies when play returns and the PiP flashes then exits. Live, skip, and channel change are `loadfile` of that URL in the same window. Close TV wipes the dump, the sidecar, and any sidecar it lost track of. End of a library file retunes the last live station. One window. Until the first frame, the window may be black: the top bar and the bottom line stay up, and the middle stays empty. After a frame, those bars hide on their own. HUD `play` must not quit the window. A pipe is not seekable — do not SEEK a follow feeder.
+**PiP is never `dvb://`.** Tuner 0 dumps growing `live.ts`. A follower copies it onto a fifo. The window reads that once as `fd://0`. Channel change is the only `loadfile`. Skip and live SEEK the follower. Close TV wipes the dump. End of a library file retunes the last live station. One window. Until the first frame, the window may be black: the top bar and the bottom line stay up, and the middle stays empty. After a frame, those bars hide on their own. HUD `play` must not quit the window.
 
 **State.** JSON via `.tmp` + `os.replace`. `player_state.json` is now-playing. `sync` must not wipe a dump while a retune lock is held.
 

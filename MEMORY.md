@@ -4,7 +4,7 @@ Plugin `richardb.omarchy-tv` (`bar-widget`). QML `plugin/BarWidget.qml`. Timezon
 
 Pause dump stops when it is an hour of air ahead of the playhead. `l` jumps to that saved end, about an hour behind the air. Picking the station again starts a fresh dump. Close TV still deletes the file. It is not a library recording. An hour of ordinary live watching does not stop the writer.
 
-A test sidecar must not run the pause cap on the installed `live.ts`. Reap only a sidecar whose file is under that test’s temp dir. Do not match the timeshift path in process args; that kills the PiP.
+Do not match the timeshift path in process args; that kills the PiP.
 
 Bars stay up until the first frame. A channel click keeps the window and blacks the picture until the new frame. This mpv reopens the tuner and locks again for every station, including a subchannel. The banner re-reads the live station while the picture is up. j and k change channel. Left and right stay skip.
 
