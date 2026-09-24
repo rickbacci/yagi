@@ -362,11 +362,10 @@ class TsFollower:
                         pass
 
     def run(self) -> None:
-        # A probe can open the fifo and close it. Default SIGPIPE would kill
-        # the reader. Ignore it and wait for the real window.
-        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+        # SIGPIPE is ignored by main(). A library call must not set process signals.
         self._bind_sock()
         self._open_file()
+        threading.settrace(sys.gettrace())
         ctl = threading.Thread(target=self._ctl_loop, name="follow-ctl", daemon=True)
         ctl.start()
         self._open_dest()
@@ -460,6 +459,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if len(args) < 3:
         sys.stderr.write("usage: follow_ts.py PATH START_BYTE SOCK [FIFO]\n")
         return 2
+    # A probe can open the fifo and close it. Default SIGPIPE would kill the reader.
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
     fifo = args[3] if len(args) > 3 else None
     TsFollower(args[0], int(args[1]), args[2], fifo).run()
     return 0

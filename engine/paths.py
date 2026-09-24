@@ -86,7 +86,6 @@ def get_runtime_socket(name: str) -> str:
 
 
 MPV_SOCKET_PATH = get_runtime_socket("omarchy-tv-mpv.sock")
-DAEMON_SOCKET_PATH = get_runtime_socket("omarchy-tv-daemon.sock")
 TIMESHIFT_SOCKET_PATH = get_runtime_socket("omarchy-tv-timeshift.sock")
 TIMESHIFT_NEXT_SOCKET_PATH = get_runtime_socket("omarchy-tv-timeshift-next.sock")
 FOLLOW_SOCKET_PATH = get_runtime_socket("omarchy-tv-follow.sock")

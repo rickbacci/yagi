@@ -123,6 +123,66 @@ class TestScannerParser(unittest.TestCase):
             with open(status, encoding="utf-8") as f:
                 self.assertEqual(json.load(f)["status"], "error")
 
+    def test_scan_reads_a_fake_dvbv5_scan(self):
+        class FakeProc:
+            def __init__(self, cmd, **_kwargs):
+                out = cmd[cmd.index("-o") + 1]
+                with open(out, "w", encoding="utf-8") as handle:
+                    handle.write(
+                        "[3.4 Quest]\n"
+                        "  DELIVERY_SYSTEM = ATSC\n"
+                        "  FREQUENCY = 57028615\n"
+                        "  SERVICE_ID = 4\n"
+                        "  VIDEO_PID = 49\n"
+                        "  AUDIO_PID = 52\n"
+                    )
+                self.stdout = [
+                    "\n",
+                    "Scanning frequency #1 57028615\n",
+                    "Signal= -40.5dBm\n",
+                    "Signal= nope\n",
+                    "Scanning frequency #nope\n",
+                    "Virtual channel 3.4, name = Quest\n",
+                    "Service Extra, Provider X\n",
+                ]
+
+            def wait(self):
+                return 0
+
+        scanner = AtscScanner(adapter_id=1)
+        with tempfile.TemporaryDirectory() as tmp:
+            status = os.path.join(tmp, "scan_status.json")
+            channels = os.path.join(tmp, "channels.json")
+            mpv = os.path.join(tmp, "channels.conf")
+            with patch("engine.scanner.SCAN_STATUS_PATH", status), \
+                 patch("engine.scanner.CHANNELS_JSON_PATH", channels), \
+                 patch("engine.scanner.MPV_CHANNELS_CONF", mpv), \
+                 patch("engine.guide.sync_guide_from_channels"), \
+                 patch.object(AtscScanner, "_work_tuner_ready", return_value=True), \
+                 patch("engine.scanner.subprocess.Popen", side_effect=FakeProc):
+                events = list(scanner.scan(quick_mode=True, timeout_multiplier=1))
+            self.assertEqual(events[0]["status"], "starting")
+            self.assertIn("scanning", [ev["status"] for ev in events])
+            self.assertEqual(events[-1]["status"], "complete")
+            self.assertGreaterEqual(events[-1]["total_found"], 1)
+            with open(channels, encoding="utf-8") as handle:
+                saved = json.load(handle)["channels"]
+            self.assertTrue(any("Quest" in ch.get("name", "") for ch in saved))
+
+    def test_scan_failure_returns_to_idle(self):
+        scanner = AtscScanner(adapter_id=1)
+        with tempfile.TemporaryDirectory() as tmp:
+            status = os.path.join(tmp, "scan_status.json")
+            with patch("engine.scanner.SCAN_STATUS_PATH", status), \
+                 patch.object(AtscScanner, "_work_tuner_ready", return_value=True), \
+                 patch("engine.scanner.subprocess.Popen", side_effect=OSError):
+                gen = scanner.scan(quick_mode=True)
+                self.assertEqual(next(gen)["status"], "starting")
+                with self.assertRaises(OSError):
+                    next(gen)
+            with open(status, encoding="utf-8") as handle:
+                self.assertEqual(json.load(handle)["status"], "idle")
+
 
 if __name__ == "__main__":
     unittest.main()

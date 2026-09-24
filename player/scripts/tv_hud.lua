@@ -34,6 +34,7 @@ local hud_visible = false
 local hide_timer = nil
 local HIDE_DELAY = 3.5
 local LIVE_SLACK = 2.5
+local PAUSE_WINDOW = 3600
 
 -- Paths
 local xdg_config = os.getenv("XDG_CONFIG_HOME")
@@ -222,7 +223,6 @@ end
 -- ATSC 8VSB transport is ~19.39 Mbps. MPV duration/percent on raw .ts is often 0.
 local ATSC_BPS = 19390000
 local SEEK_STEP = 10
-local SEEK_NEAR = 5
 local virt_pos = 0
 local virt_last = nil
 local seek_reload = false
@@ -236,6 +236,10 @@ local dump_start_byte = 0
 local dump_start_t = nil
 local rate_mark_byte = nil
 local rate_mark_t = nil
+local clock_shown = nil
+local clock_tick = nil
+local clock_raw = nil
+local clock_jump = nil
 
 local function tv_cli()
     local cli = mp.get_opt("cli")
@@ -384,10 +388,54 @@ local function measured_rate()
     return ATSC_BPS / 8
 end
 
+local function smooth_clock(raw)
+    raw = math.max(0, math.floor((tonumber(raw) or 0) + 0.5))
+    local now = mp.get_time()
+    local paused = cached_timeshift.paused == true or mp.get_property_bool("pause", false)
+    if clock_shown == nil or clock_tick == nil then
+        clock_shown = raw
+        clock_raw = raw
+        clock_tick = now
+        return clock_shown
+    end
+    -- A skip moves the file by seconds all at once. The pause count does not.
+    if clock_jump ~= nil then
+        if math.abs(raw - clock_jump) <= 1 then
+            clock_jump = nil
+            clock_raw = raw
+            clock_shown = raw
+            clock_tick = now
+            return clock_shown
+        end
+        return clock_shown
+    end
+    if math.abs(raw - (clock_raw or raw)) >= 8 then
+        clock_raw = raw
+        clock_shown = raw
+        clock_tick = now
+        return clock_shown
+    end
+    clock_raw = raw
+    if now < clock_tick + 0.98 then
+        return clock_shown
+    end
+    clock_tick = now
+    if paused then
+        clock_shown = clock_shown + 1
+    elseif raw < clock_shown then
+        clock_shown = clock_shown - 1
+    end
+    return clock_shown
+end
+
 local function timeshift_delay()
     if not is_timeshift_playback() then
         behind_clock = 0
         playhead_byte = nil
+        clock_shown = nil
+        clock_tick = nil
+        clock_raw = nil
+        clock_jump = nil
         return 0
     end
     local f_ts = io.open(TIMESHIFT_ACTIVE_PATH, "r")
@@ -408,7 +456,7 @@ local function timeshift_delay()
     else
         pos = math.max(0, pos)
     end
-    behind_clock = math.max(0, (size - pos) / rate)
+    behind_clock = smooth_clock(math.max(0, (size - pos) / rate))
     return behind_clock
 end
 
@@ -428,6 +476,10 @@ local function reset_virt()
     dump_start_t = nil
     rate_mark_byte = nil
     rate_mark_t = nil
+    clock_shown = nil
+    clock_tick = nil
+    clock_raw = nil
+    clock_jump = nil
     if mp.get_property_bool("pause", false) then
         virt_last = nil
     else
@@ -767,9 +819,8 @@ local function render_hud()
         if is_library then
             frac = (file_progress() or 0) / 100
         elseif is_ts then
-            local t1 = atsc_duration()
-            local pos = math.max(0, t1 - ts_delay)
-            if t1 > 0 then frac = math.max(0, math.min(1, pos / t1)) end
+            -- Right edge is live. An hour behind is the left edge.
+            frac = 1 - (ts_delay / PAUSE_WINDOW)
         else
             local delay = cache_ahead()
             frac = LIVE_SLACK / math.max(LIVE_SLACK, delay)
@@ -932,7 +983,19 @@ local function seek_rel(delta)
         return
     end
     if is_timeshift_playback() then
+        if signed > 0 then
+            local shown = clock_shown or 0
+            if shown <= SEEK_STEP then
+                clock_shown = 0
+            else
+                clock_shown = shown - SEEK_STEP
+            end
+            clock_jump = clock_shown
+            clock_raw = clock_shown
+            clock_tick = mp.get_time()
+        end
         cli_async({"seek", tostring(signed)})
+        show_hud()
         return
     end
     if signed > 0 then

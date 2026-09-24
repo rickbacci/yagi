@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from engine.enrichment import (
+    channel_kind,
     enrich_and_sort_channels,
     enrich_channel,
     load_station_map,
@@ -159,6 +160,34 @@ class TestEnrichment(unittest.TestCase):
 
         self.assertEqual(match_channel("WKYC-HD", channels)["channel_number"], "3.1")
         self.assertEqual(match_channel("WEWSHD", channels)["channel_number"], "5.1")
+        self.assertIsNone(match_channel("", channels))
+
+    def test_bad_station_map_is_empty_and_cache_reuses_a_good_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "station_map.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("{")
+            self.assertEqual(load_station_map(path), {})
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write('{"stations": "nope"}')
+            self.assertEqual(load_station_map(path), {})
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write('{"stations": [1, {"frequency": "x"}, {"frequency": 1, "service_id": 2}]}')
+            self.assertEqual(load_station_map(path), {})
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    '{"stations": [{"frequency": 1, "service_id": 2, "major": 3, "minor": 4, "callsign": "W"}]}'
+                )
+            first = station_map(path)
+            self.assertEqual(first[(1, 2)]["callsign"], "W")
+            self.assertEqual(station_map(path), first)
+
+    def test_channel_kind_matches_phrases(self):
+        self.assertEqual(channel_kind("PBS Kids"), "kids")
+        self.assertEqual(channel_kind("Daystar"), "religious")
+        self.assertEqual(channel_kind("ShopLC"), "shop")
+        self.assertEqual(channel_kind("MeTV"), "classic")
+        self.assertEqual(channel_kind("mystery"), "")
 
 
 if __name__ == "__main__":

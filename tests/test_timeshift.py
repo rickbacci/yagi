@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import socket
+import stat
 import subprocess
 import tempfile
 import threading
@@ -11,58 +12,7 @@ import time
 import unittest
 from unittest.mock import patch, MagicMock
 
-from engine.timeshift import ATSC_BPS, LIVE_SLACK, SEEK_NEAR, SEEK_STEP, Timeshift, align_ts, is_timeshift_path
-
-
-def _reap_http_under(directory: str) -> None:
-    """Kill a sidecar this test started. Leave a server on the real dump path."""
-    root = os.path.realpath(directory)
-    try:
-        out = subprocess.check_output(
-            ["pgrep", "-a", "-f", "engine.timeshift_http"],
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return
-    for line in out.splitlines():
-        parts = line.split(None, 1)
-        if len(parts) < 2 or "pgrep" in parts[1]:
-            continue
-        if root not in parts[1]:
-            continue
-        try:
-            pid = int(parts[0])
-        except ValueError:
-            continue
-        if pid <= 1 or pid == os.getpid():
-            continue
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
-        deadline = time.time() + 0.6
-        while time.time() < deadline:
-            try:
-                got, _ = os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                break
-            if got == pid:
-                break
-            try:
-                os.kill(pid, 0)
-            except OSError:
-                break
-            time.sleep(0.02)
-        else:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
-            try:
-                os.waitpid(pid, os.WNOHANG)
-            except ChildProcessError:
-                pass
+from engine.timeshift import ATSC_BPS, LIVE_SLACK, SEEK_STEP, Timeshift, align_ts, is_timeshift_path
 
 
 class TestTimeshift(unittest.TestCase):
@@ -102,17 +52,6 @@ class TestTimeshift(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(tmp_dir, "dump-next.log")))
             self.assertFalse(os.path.exists(os.path.join(tmp_dir, "live.ts")))
 
-    def test_reap_orphan_http_skips_the_player(self):
-        listing = "\n".join([
-            "111 python3 -m engine.timeshift_http /cache/omarchy/tv/timeshift/live.ts",
-            "222 mpv --log-file=/cache/omarchy/tv/timeshift/hud.log http://127.0.0.1/live.ts",
-            "333 pgrep -a -f engine.timeshift_http",
-        ])
-        with patch("engine.timeshift.subprocess.check_output", return_value=listing), \
-             patch.object(Timeshift, "_kill_pid") as kill:
-            Timeshift._reap_orphan_http()
-        kill.assert_called_once_with(111)
-
     def test_is_timeshift_path(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             live = os.path.join(tmp_dir, "live.ts")
@@ -125,94 +64,20 @@ class TestTimeshift(unittest.TestCase):
 
     def test_fwd_hop_last_step_is_live(self):
         self.assertEqual(Timeshift.fwd_hop(LIVE_SLACK), 0.0)
-        self.assertEqual(Timeshift.fwd_hop(SEEK_NEAR + LIVE_SLACK), SEEK_NEAR + LIVE_SLACK)
-        self.assertEqual(Timeshift.fwd_hop(SEEK_STEP * 2), SEEK_NEAR)
+        self.assertEqual(Timeshift.fwd_hop(SEEK_STEP), 0.0)
+        self.assertEqual(Timeshift.fwd_hop(SEEK_STEP + 0.1), SEEK_STEP)
         self.assertEqual(Timeshift.fwd_hop(90.0), SEEK_STEP)
 
-    def test_http_serves_playhead_and_stops(self):
-        from engine.timeshift_http import TimeshiftHttp
-        import urllib.request
-
+    def test_live_join_sits_back_from_the_torn_packet(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             live = os.path.join(tmp_dir, "live.ts")
-            with open(live, "wb") as f:
-                f.write(b"A" * 188)
-            with patch("engine.timeshift_http.TIMESHIFT_FILE", live):
-                http = TimeshiftHttp()
-                port = http.start()
-                try:
-                    req = urllib.request.Request(f"http://127.0.0.1:{port}/live.ts?from=0")
-                    with urllib.request.urlopen(req, timeout=1.5) as resp:
-                        got = resp.read(188)
-                    self.assertEqual(got, b"A" * 188)
-                    self.assertGreater(port, 0)
-                finally:
-                    http.stop()
-
-    def test_http_waits_at_eof_then_serves_appended(self):
-        from engine.timeshift_http import TimeshiftHttp
-        import urllib.request
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            live = os.path.join(tmp_dir, "live.ts")
-            with open(live, "wb") as f:
-                f.write(b"A" * 188)
-            with patch("engine.timeshift_http.TIMESHIFT_FILE", live):
-                http = TimeshiftHttp()
-                port = http.start()
-                got: list = []
-                err: list = []
-
-                def reader() -> None:
-                    try:
-                        req = urllib.request.Request(f"http://127.0.0.1:{port}/live.ts?from=0")
-                        with urllib.request.urlopen(req, timeout=4) as resp:
-                            got.append(resp.read(188))
-                            got.append(resp.read(188))
-                    except Exception as exc:
-                        err.append(exc)
-
-                worker = threading.Thread(target=reader)
-                worker.start()
-                deadline = time.time() + 2
-                while time.time() < deadline and len(got) < 1:
-                    time.sleep(0.02)
-                try:
-                    self.assertEqual(got, [b"A" * 188], msg=err)
-                    time.sleep(0.1)
-                    self.assertEqual(len(got), 1, "connection closed at EOF instead of waiting")
-                    with open(live, "ab") as f:
-                        f.write(b"B" * 188)
-                    worker.join(timeout=3)
-                    self.assertFalse(err)
-                    self.assertEqual(got, [b"A" * 188, b"B" * 188])
-                finally:
-                    http.stop()
-                    worker.join(timeout=1)
-
-    def test_start_http_child_keeps_port(self):
-        import urllib.request
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            live = os.path.join(tmp_dir, "live.ts")
-            state = os.path.join(tmp_dir, "timeshift_active.json")
-            with open(live, "wb") as f:
-                f.write(b"A" * 188)
-            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
-                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
-                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
-                port = Timeshift.start_http()
-                data = Timeshift.load_state()
-                try:
-                    self.assertGreater(port, 0)
-                    self.assertTrue(Timeshift._pid_alive(int(data.get("http_pid") or 0)))
-                    req = urllib.request.Request(f"http://127.0.0.1:{port}/live.ts?from=0")
-                    with urllib.request.urlopen(req, timeout=1.5) as resp:
-                        self.assertEqual(resp.read(188), b"A" * 188)
-                finally:
-                    Timeshift.stop_http()
-                    _reap_http_under(tmp_dir)
-                self.assertFalse(Timeshift._pid_alive(int(data.get("http_pid") or 0)))
+            with open(live, "wb") as handle:
+                handle.truncate(2 * 1024 * 1024)
+            with patch("engine.timeshift.TIMESHIFT_FILE", live):
+                join = Timeshift.live_join_byte()
+                edge = Timeshift.live_edge_byte()
+            self.assertLess(join, edge)
+            self.assertEqual(join, ((2 * 1024 * 1024) - 512 * 1024) // 188 * 188)
 
     def test_delay_sec_pause_and_play_share_the_gap(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -377,6 +242,41 @@ class TestTimeshift(unittest.TestCase):
             self.assertGreater(rate, 800_000)
             self.assertLess(rate, 900_000)
 
+    def test_write_rate_keeps_mux_through_a_stall(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            mark = 1880
+            with open(live, "wb") as f:
+                f.write(b"x" * (mark + 20_000))
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
+                Timeshift.patch_state(
+                    rate_byte=mark,
+                    rate_t=time.time() - 10.0,
+                    mux_bps=800_000,
+                )
+                self.assertEqual(Timeshift.write_rate(), 800_000)
+
+    def test_write_rate_replaces_a_crawling_mux(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            mark = 1880
+            with open(live, "wb") as f:
+                f.write(b"x" * (mark + 10_000_000))
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
+                Timeshift.patch_state(
+                    rate_byte=mark,
+                    rate_t=time.time() - 10.0,
+                    mux_bps=7_734,
+                )
+                rate = Timeshift.write_rate()
+            self.assertAlmostEqual(rate, 1_000_000, delta=20_000)
+
     def test_write_rate_ignores_a_short_spike(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             live = os.path.join(tmp_dir, "live.ts")
@@ -426,17 +326,6 @@ class TestTimeshift(unittest.TestCase):
                 Timeshift.patch_state(paused=False, mux_bps=1_500_000)
                 self.assertEqual(Timeshift.write_rate(), 1_500_000)
 
-    def test_http_url_aligns_from_byte(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            state = os.path.join(tmp_dir, "timeshift_active.json")
-            with patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
-                 patch.object(Timeshift, "start_http") as mock_start:
-                Timeshift.patch_state(http_port=18765)
-                url = Timeshift.http_url(200)
-            mock_start.assert_not_called()
-            self.assertEqual(url, f"http://127.0.0.1:18765/live.ts?from={align_ts(200)}")
-            self.assertTrue(url.endswith("from=188"))
-
     def test_picture_opens_where_a_second_is_already_saved(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             live = os.path.join(tmp_dir, "live.ts")
@@ -453,72 +342,6 @@ class TestTimeshift(unittest.TestCase):
                     Timeshift.picture_open_byte(),
                     align_ts(5 * 1024 * 1024 - 2 * 1024 * 1024),
                 )
-
-    def test_wipe_kills_http_child(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            live = os.path.join(tmp_dir, "live.ts")
-            state = os.path.join(tmp_dir, "timeshift_active.json")
-            with open(live, "wb") as f:
-                f.write(b"A" * 188)
-            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
-                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
-                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
-                 patch.object(Timeshift, "stop_dump"), \
-                 patch.object(Timeshift, "stop_follow"), \
-                 patch.object(Timeshift, "_reap_orphan_dumps"), \
-                 patch.object(Timeshift, "_reap_orphan_http"), \
-                 patch.object(Timeshift, "_remove_files"):
-                try:
-                    Timeshift.start_http()
-                    pid = int(Timeshift.load_state().get("http_pid") or 0)
-                    self.assertTrue(Timeshift._pid_alive(pid))
-                    Timeshift.wipe()
-                    self.assertFalse(Timeshift._pid_alive(pid))
-                    self.assertNotIn("http_port", Timeshift.load_state())
-                finally:
-                    Timeshift.stop_http()
-                    _reap_http_under(tmp_dir)
-
-    def test_start_http_ignores_stale_port(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            live = os.path.join(tmp_dir, "live.ts")
-            state = os.path.join(tmp_dir, "timeshift_active.json")
-            with open(live, "wb") as f:
-                f.write(b"A" * 188)
-            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
-                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
-                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir):
-                Timeshift.patch_state(http_port=1, http_pid=999_999)
-                try:
-                    port = Timeshift.start_http()
-                    self.assertGreater(port, 1)
-                    self.assertNotEqual(port, 1)
-                finally:
-                    Timeshift.stop_http()
-                    _reap_http_under(tmp_dir)
-
-    def test_same_dump_ignores_a_temp_sidecar(self):
-        from engine.timeshift_http import same_dump
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            live = os.path.join(tmp_dir, "live.ts")
-            real = os.path.join(tmp_dir, "installed", "live.ts")
-            os.makedirs(os.path.dirname(real))
-            self.assertTrue(same_dump(live, live))
-            self.assertFalse(same_dump(live, real))
-            self.assertFalse(same_dump("", real))
-
-    def test_pause_cap_thread_checks_the_sidecar_file(self):
-        path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
-            "engine",
-            "timeshift_http.py",
-        )
-        with open(path, encoding="utf-8") as f:
-            src = f.read()
-        start = src.index("def _watch_pause_cap")
-        chunk = src[start:start + 600]
-        self.assertIn("same_dump", chunk)
-        self.assertLess(chunk.index("same_dump"), chunk.index("hold_dump_if_full"))
 
     def test_start_dump_writes_state_and_waits_for_bytes(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -556,6 +379,41 @@ class TestTimeshift(unittest.TestCase):
             self.assertEqual(data["tune_name"], "FOX")
             self.assertEqual(data["pid"], 4242)
             self.assertEqual(data["adapter_id"], 0)
+
+    def test_broken_pipe_keeps_the_fifo(self):
+        import sys
+        follow_py = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+            "engine",
+            "follow_ts.py",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            sock = os.path.join(tmp_dir, "follow.sock")
+            fifo = os.path.join(tmp_dir, "follow.fifo")
+            packet = b"\x47" + b"\x00" * 187
+            with open(live, "wb") as f:
+                f.write(packet * 400)
+            os.mkfifo(fifo, 0o600)
+            proc = subprocess.Popen(
+                [sys.executable, follow_py, live, "0", sock, fifo],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            reader = os.open(fifo, os.O_RDONLY)
+            try:
+                os.read(reader, 188)
+                os.close(reader)
+                reader = -1
+                time.sleep(0.3)
+                self.assertIsNone(proc.poll())
+                self.assertTrue(stat.S_ISFIFO(os.stat(fifo).st_mode))
+            finally:
+                if reader >= 0:
+                    os.close(reader)
+                proc.kill()
+                proc.wait(timeout=1)
 
     def test_follow_emits_appended_bytes(self):
         import select

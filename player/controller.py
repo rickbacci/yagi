@@ -34,6 +34,7 @@ from engine.timeshift import (
     align_ts,
     is_timeshift_path,
 )
+from player.transport import Transport
 
 # Dump lock plus lua/lavf can outrun a 3s IPC poll. The flyout treats a
 # non-zero CLI as "TV didn't open" even if mpv is still coming up.
@@ -228,13 +229,6 @@ def is_dvb_path(path: Optional[str]) -> bool:
     return isinstance(path, str) and path.strip().lower().startswith("dvb://")
 
 
-def is_timeshift_http(path: Optional[str]) -> bool:
-    if not isinstance(path, str) or not path.strip():
-        return False
-    p = path.strip()
-    return p.startswith("http://127.0.0.1:") and "/live.ts" in p
-
-
 def is_follow_path(path: Optional[str]) -> bool:
     if not isinstance(path, str) or not path.strip():
         return False
@@ -354,6 +348,7 @@ class MpvController:
         self.socket_path = socket_path
         self.proc: Optional[subprocess.Popen] = None
         self.current_channel_index = 0
+        self.transport = Transport(self)
         self._ipc_id = 0
         self.channels = self._load_channels()
 
@@ -456,28 +451,6 @@ class MpvController:
             return False
         return self.tune(channel_name, adapter_id=adapter_id)
 
-    @staticmethod
-    def _tv_cli() -> str:
-        return os.path.join(
-            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
-            "bin",
-            "omarchy-tv",
-        )
-
-    def spawn_pip_relaunch(self, channel: str, station: str = "") -> None:
-        """Remap in a new session so HUD `play` can die with the old PiP."""
-        cmd = [self._tv_cli(), "pip-relaunch", channel]
-        if station:
-            cmd.extend(["--station", station])
-        subprocess.Popen(
-            cmd,
-            start_new_session=True,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-        )
-
     def relaunch_pip(self, channel: str, station: str = "") -> bool:
         """Quit the old PiP, then open a new one on the dump already filling."""
         for _ in range(40):
@@ -543,7 +516,7 @@ class MpvController:
 
             if keep_window:
                 self.send_command(["script-message", "tv-retuned"])
-                self.open_timeshift_dump(Timeshift.play_from_byte(), paused=False)
+                self.open_timeshift_dump(Timeshift.picture_open_byte(), paused=False)
                 opened = True
                 update_player_state(
                     True,
@@ -783,7 +756,7 @@ class MpvController:
             return None
         res = self.send_command(["get_property", "path"])
         path = res.get("data") if res and res.get("error") == "success" else None
-        if is_timeshift_path(path) or is_follow_path(path) or is_timeshift_http(path) or is_dvb_path(path):
+        if is_timeshift_path(path) or is_follow_path(path) or is_dvb_path(path):
             return "live"
         if isinstance(path, str) and path.strip():
             return "file"
@@ -795,13 +768,13 @@ class MpvController:
         """Seek the dump write head in this window, or retune after a library file."""
         path = self._mpv_path()
         named = (channel_name or "").strip()
-        if named and not (is_timeshift_http(path) or is_timeshift_path(path) or is_follow_path(path)):
+        if named and not (is_timeshift_path(path) or is_follow_path(path)):
             Timeshift.wipe()
             return self.tune(named)
-        if is_timeshift_http(path) or is_timeshift_path(path) or is_follow_path(path):
+        if is_timeshift_path(path) or is_follow_path(path):
             if named:
                 return self.tune(named)
-            return self._seek_cursor(Timeshift.live_edge_byte(), paused=False)
+            return self.transport.seek_cursor(Timeshift.live_join_byte(), paused=False)
         Timeshift.wipe()
         target = named or load_last_live_channel()
         if not target:
@@ -817,7 +790,7 @@ class MpvController:
         res = self.send_command(["get_property", "path"])
         if res and res.get("error") == "success":
             path = res.get("data")
-            if is_timeshift_path(path) or is_follow_path(path) or is_timeshift_http(path):
+            if is_timeshift_path(path) or is_follow_path(path):
                 return Timeshift.current_channel() or load_last_live_channel() or None
             if not is_dvb_path(path):
                 return None
@@ -869,14 +842,6 @@ class MpvController:
         res = self.send_command(["get_property", "path"])
         return res.get("data") if res and res.get("error") == "success" else None
 
-    def _mpv_paused(self) -> bool:
-        res = self.send_command(["get_property", "pause"])
-        return bool(res.get("data")) if res and res.get("error") == "success" else False
-
-    def _mpv_eof(self) -> bool:
-        res = self.send_command(["get_property", "eof-reached"])
-        return bool(res.get("data")) if res and res.get("error") == "success" else False
-
     def _load_dump(self, url: str) -> None:
         """Open the dump. A full-mux file still has every station, so name the program."""
         state = Timeshift.load_state()
@@ -896,141 +861,17 @@ class MpvController:
             self.send_command(["set_property", "program", sid])
 
     def open_timeshift_dump(self, byte: int, paused: bool) -> bool:
-        """Channel change. The only loadfile, under the black cover already up."""
-        byte = align_ts(byte)
-        if not Timeshift.start_follow(byte):
-            return False
-        Timeshift.send_follow_reopen()
-        Timeshift.send_follow_seek(byte)
-        self._arm_reader(paused, self._behind(byte))
-        self._load_dump("fd://0")
-        self.send_command(["set_property", "pause", paused])
-        self._note_cursor(byte, paused)
-        return True
-
-    def _behind(self, byte: int) -> bool:
-        rate = Timeshift.write_rate()
-        if rate <= 0:
-            return False
-        return (Timeshift.dump_bytes() - byte) / rate > LIVE_SLACK
-
-    def _arm_reader(self, paused: bool, delayed: bool) -> None:
-        """Pause freezes the cursor. Play behind paces. Live races the write head."""
-        if paused:
-            Timeshift.send_follow_pause()
-            return
-        Timeshift.send_follow_play()
-        if delayed:
-            Timeshift.send_follow_pace(Timeshift.write_rate())
-        else:
-            Timeshift.send_follow_catchup()
-
-    def _note_cursor(self, byte: int, paused: bool) -> None:
-        rate = Timeshift.write_rate()
-        remain = 0.0 if rate <= 0 else max(0.0, (Timeshift.dump_bytes() - byte) / rate)
-        view = "live" if remain <= LIVE_SLACK else "delayed"
-        Timeshift.patch_state(
-            view=view,
-            paused=paused,
-            playhead_byte=byte,
-            skip_busy=False,
-        )
-
-    def _seek_cursor(self, byte: int, paused: bool) -> bool:
-        """Move the reader. The window stays on the fifo it already has open."""
-        byte = align_ts(byte)
-        if not Timeshift.send_follow_seek(byte):
-            if not Timeshift.start_follow(byte) or not Timeshift.send_follow_seek(byte):
-                return False
-        # The readahead is the old picture. Drop it so the keyframe break is next.
-        self.send_command(["drop-buffers"])
-        self._arm_reader(paused, self._behind(byte))
-        self.send_command(["set_property", "pause", paused])
-        self._note_cursor(byte, paused)
-        return True
-
-    def _timeshift_playing(self, path: Optional[str]) -> bool:
-        return is_timeshift_http(path) or is_timeshift_path(path) or is_follow_path(path)
+        return self.transport.open_dump(byte, paused)
 
     def toggle_pause(self) -> None:
-        if not self.is_running():
-            return
-        path = self._mpv_path()
-        if not self._timeshift_playing(path):
-            self.send_command(["cycle", "pause"])
-            return
-        state = Timeshift.load_state()
-        paused = bool(state.get("paused"))
-        if not paused:
-            Timeshift.send_follow_pause()
-            cursor = Timeshift.follow_pos()
-            if cursor is None:
-                if str(state.get("view") or "live") == "live":
-                    cursor = Timeshift.live_edge_byte()
-                else:
-                    cursor = int(state.get("playhead_byte") or 0)
-            self.send_command(["set_property", "pause", True])
-            Timeshift.patch_state(paused=True, playhead_byte=align_ts(cursor))
-            return
-        cursor = Timeshift.follow_pos()
-        if cursor is None:
-            cursor = int(state.get("playhead_byte") or 0)
-        cursor = align_ts(cursor)
-        delay = Timeshift.delay_sec()
-        self._arm_reader(False, delay > LIVE_SLACK)
-        self.send_command(["set_property", "pause", False])
-        view = "delayed" if delay > LIVE_SLACK else "live"
-        Timeshift.patch_state(paused=False, view=view, playhead_byte=cursor)
+        self.transport.toggle_pause()
 
     def seek(self, seconds: float) -> bool:
-        if not self.is_running():
-            return False
-        path = self._mpv_path()
-        if not self._timeshift_playing(path):
-            res = self.send_command(["script-message", "tv-seek", str(seconds)])
-            return res is not None and res.get("error") == "success"
-        delta = float(seconds or 0)
-        if delta == 0:
-            if bool(Timeshift.load_state().get("paused")):
-                return True
-            if Timeshift.delay_sec() > 0.15:
-                return self._seek_cursor(Timeshift.playhead_now(), paused=False)
-            return self.return_to_live()
-        if Timeshift.load_state().get("skip_busy"):
-            return True
-        Timeshift.patch_state(skip_busy=True)
-        try:
-            state = Timeshift.load_state()
-            paused = bool(state.get("paused"))
-            view = str(state.get("view") or "live")
-            rate = Timeshift.write_rate()
-            remain = Timeshift.delay_sec()
-            if view == "live" and not paused:
-                if delta > 0:
-                    return True
-                hop = abs(delta)
-                byte = align_ts(max(0, int(Timeshift.dump_bytes() - hop * rate)))
-                return self._seek_cursor(byte, paused=False)
-            pos = Timeshift.follow_pos()
-            if pos is None:
-                pos = int(state.get("playhead_byte") or Timeshift.playhead_now())
-            if delta > 0:
-                hop = Timeshift.fwd_hop(remain)
-                if hop <= 0 or (remain - hop) <= LIVE_SLACK:
-                    return self.return_to_live()
-                pos = int(pos + hop * rate)
-            else:
-                pos = max(0, int(pos - abs(delta) * rate))
-            return self._seek_cursor(align_ts(pos), paused)
-        finally:
-            Timeshift.patch_state(skip_busy=False)
+        return self.transport.seek(seconds)
 
     def toggle_fullscreen(self, target_tv: bool = False) -> None:
         """Omarchy Super+F dispatcher. Unpin this PiP first — Hyprland no-ops fullscreen while pinned."""
         _toggle_omarchy_fullscreen(target_tv=target_tv)
-
-    def show_osd(self, text: str, duration_ms: int = 3000) -> None:
-        self.send_command(["show-text", text, str(duration_ms)])
 
     def _wait_until_stopped(self, timeout: float = 2.0) -> None:
         deadline = time.time() + timeout

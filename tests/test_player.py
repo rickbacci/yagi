@@ -714,7 +714,7 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         with patch("player.controller.Timeshift.send_follow_seek", return_value=True) as mock_seek, \
              patch("player.controller.Timeshift.send_follow_play", return_value=True), \
              patch("player.controller.Timeshift.send_follow_catchup", return_value=True), \
-             patch("player.controller.Timeshift.live_edge_byte", return_value=376), \
+             patch("player.controller.Timeshift.live_join_byte", return_value=376), \
              patch("player.controller.Timeshift.write_rate", return_value=2_000_000), \
              patch("player.controller.Timeshift.dump_bytes", return_value=100), \
              patch("player.controller.Timeshift.patch_state"), \
@@ -728,8 +728,8 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
 
     def test_return_to_live_from_timeshift_file_seeks(self):
         self.server.path_value = self.dump_path
-        with patch.object(self.controller, "_seek_cursor", return_value=True) as mock_seek, \
-             patch("player.controller.Timeshift.live_edge_byte", return_value=1880):
+        with patch.object(self.controller.transport, "seek_cursor", return_value=True) as mock_seek, \
+             patch("player.controller.Timeshift.live_join_byte", return_value=1880):
             self.assertTrue(self.controller.return_to_live())
         mock_seek.assert_called_once()
         self.assertEqual(mock_seek.call_args[0][0], 1880)
@@ -794,11 +794,13 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self.assertFalse(played.get("paused"))
         self.assertEqual(played.get("view"), "delayed")
         self.assertNotIn("playhead_t", played)
-        mock_pace.assert_called_once()
+        mock_pace.assert_called_once_with(2_000_000)
+        self.assertIn(["set_property", "speed", 1], sent)
 
     def test_seek_back_from_live_seeks_reader(self):
         self.server.path_value = FOLLOW_FIFO_PATH
-        with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False, "skip_busy": False}), \
+        with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False, "skip_busy": False, "playhead_byte": 0}), \
+             patch("player.controller.Timeshift.follow_pos", return_value=None), \
              patch("player.controller.Timeshift.dump_bytes", return_value=10_000_000), \
              patch("player.controller.Timeshift.write_rate", return_value=2_423_750), \
              patch("player.controller.Timeshift.send_follow_seek", return_value=True) as mock_seek, \
@@ -815,11 +817,11 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
     def test_seek_last_hop_seeks_live_not_relaunch(self):
         self.server.path_value = FOLLOW_FIFO_PATH
         with patch("player.controller.Timeshift.load_state", return_value={"view": "delayed", "paused": False, "skip_busy": False, "playhead_byte": 1000}), \
-             patch("player.controller.Timeshift.delay_sec", return_value=6.0), \
+             patch("player.controller.Timeshift.follow_pos", return_value=1000), \
              patch("player.controller.Timeshift.send_follow_seek", return_value=True) as mock_seek, \
              patch("player.controller.Timeshift.send_follow_play", return_value=True), \
              patch("player.controller.Timeshift.send_follow_catchup", return_value=True), \
-             patch("player.controller.Timeshift.live_edge_byte", return_value=376), \
+             patch("player.controller.Timeshift.live_join_byte", return_value=376), \
              patch("player.controller.Timeshift.write_rate", return_value=2_000_000), \
              patch("player.controller.Timeshift.dump_bytes", return_value=100), \
              patch("player.controller.Timeshift.patch_state"), \
@@ -848,16 +850,42 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         sent = [m.get("command") for m in self.server.commands]
         self.assertIn(["drop-buffers"], sent)
 
-    def test_seek_fwd_on_live_is_noop(self):
+    def test_seek_fwd_while_labeled_live_still_jumps(self):
         self.server.path_value = FOLLOW_FIFO_PATH
+        pos = 188_000
+        rate = 188_000
         with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False, "skip_busy": False}), \
-             patch("player.controller.Timeshift.send_follow_seek") as mock_seek, \
+             patch("player.controller.Timeshift.follow_pos", return_value=pos), \
+             patch("player.controller.Timeshift.dump_bytes", return_value=pos + int(30 * rate)), \
+             patch("player.controller.Timeshift.write_rate", return_value=rate), \
+             patch("player.controller.Timeshift.send_follow_seek", return_value=True) as mock_seek, \
+             patch("player.controller.Timeshift.send_follow_play", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_pace", return_value=True), \
+             patch("player.controller.Timeshift.patch_state"), \
              patch("player.controller.subprocess.Popen") as mock_popen:
             self.assertTrue(self.controller.seek(10))
-        mock_seek.assert_not_called()
+        mock_seek.assert_called_with(pos + int(10 * rate))
         mock_popen.assert_not_called()
         sent = [m.get("command") for m in self.server.commands]
         self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
+        self.assertIn(["set_property", "speed", 1], sent)
+
+    def test_seek_does_not_replace_a_live_reader(self):
+        self.server.path_value = FOLLOW_FIFO_PATH
+        pos = 188_000
+        rate = 188_000
+        with patch("player.controller.Timeshift.load_state", return_value={"view": "delayed", "paused": False, "skip_busy": False, "playhead_byte": pos, "follow_pid": 99}), \
+             patch("player.controller.Timeshift.follow_pos", return_value=pos), \
+             patch("player.controller.Timeshift.dump_bytes", return_value=pos + int(30 * rate)), \
+             patch("player.controller.Timeshift.write_rate", return_value=rate), \
+             patch("player.controller.Timeshift.send_follow_seek", return_value=False), \
+             patch("player.controller.Timeshift._pid_alive", return_value=True), \
+             patch("player.controller.Timeshift.start_follow") as mock_start, \
+             patch("player.controller.Timeshift.patch_state"), \
+             patch("player.controller.subprocess.Popen") as mock_popen:
+            self.assertFalse(self.controller.seek(10))
+        mock_start.assert_not_called()
+        mock_popen.assert_not_called()
 
     def test_seek_asks_hud(self):
         rec = os.path.join(self.tmp_dir.name, "show.ts")
@@ -921,6 +949,10 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertNotIn('cli_async({"seek"', eof)
         self.assertNotIn("loadfile", eof)
         self.assertNotIn("drop-buffers", src)
+        skip = src[src.index("local function seek_rel"):]
+        skip = skip[skip.index("if is_timeshift_playback() then"):skip.index('cli_async({"seek", tostring(signed)})')]
+        self.assertNotIn("loadfile", skip)
+        self.assertNotIn("http://", skip)
         self.assertNotIn("send_follow_seek", src)
         self.assertNotIn("timeshift_skip", src)
         self.assertNotIn("open_dump_at", src)
@@ -931,6 +963,8 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("function program_on_now", src)
         self.assertIn("function picture_ready", src)
         self.assertIn("cached_timeshift.mux_bps", src)
+        self.assertIn("ts_delay / PAUSE_WINDOW", src)
+        self.assertIn("local PAUSE_WINDOW = 3600", src)
         record_key = src[src.index('mp.add_forced_key_binding("r"'):]
         self.assertIn("recording_for_channel(ch)", record_key)
         self.assertNotIn("cached_recordings[1]", record_key)

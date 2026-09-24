@@ -8,7 +8,6 @@ import tempfile
 from engine.paths import (
     get_runtime_socket,
     MPV_SOCKET_PATH,
-    DAEMON_SOCKET_PATH,
     ensure_private_dir,
     chmod_private_file,
     touch_private_file,
@@ -67,7 +66,6 @@ class TestPathsSecurity(unittest.TestCase):
 
     def test_socket_constants(self):
         self.assertTrue(MPV_SOCKET_PATH.endswith("omarchy-tv-mpv.sock"))
-        self.assertTrue(DAEMON_SOCKET_PATH.endswith("omarchy-tv-daemon.sock"))
         from engine.paths import RECORDINGS_ACTIVE_PATH, PLAYER_STATE_PATH, UI_PREFS_PATH, STATION_MAP_PATH, RECORDINGS_INDEX_PATH, TIMESHIFT_DIR, TIMESHIFT_FILE, TIMESHIFT_ACTIVE_PATH, TIMESHIFT_SOCKET_PATH, FOLLOW_SOCKET_PATH, FOLLOW_FIFO_PATH, TUNE_LOCK_PATH
         self.assertTrue(RECORDINGS_ACTIVE_PATH.endswith("recordings_active.json"))
         self.assertTrue(PLAYER_STATE_PATH.endswith("player_state.json"))

@@ -53,7 +53,6 @@ TS_PACKET = 188
 ATSC_BPS = 19_390_000
 PAUSE_CAP_SEC = 3600
 SEEK_STEP = 10.0
-SEEK_NEAR = 5.0
 LIVE_SLACK = 2.5
 
 
@@ -147,6 +146,15 @@ class Timeshift:
         return align_ts(size - TS_PACKET)
 
     @classmethod
+    def live_join_byte(cls) -> int:
+        """Far enough back from the write head for a keyframe. The last packet is torn."""
+        size = cls.dump_bytes()
+        back = 512 * 1024
+        if size <= back + TS_PACKET:
+            return 0
+        return align_ts(size - back)
+
+    @classmethod
     def play_from_byte(cls) -> int:
         """Where the picture should open after a zap. 0 is the start of live.ts."""
         try:
@@ -167,85 +175,6 @@ class Timeshift:
         if size <= mark + back:
             return mark
         return align_ts(size - back)
-
-    @classmethod
-    def _http_port_up(cls, port: int) -> bool:
-        if port <= 0:
-            return False
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                return True
-        except OSError:
-            return False
-
-    @classmethod
-    def start_http(cls) -> int:
-        """Loopback MPEG-TS server in its own process. The play CLI must not own it."""
-        state = cls.load_state()
-        pid = int(state.get("http_pid") or 0)
-        port = int(state.get("http_port") or 0)
-        if pid > 0 and port > 0 and cls._pid_alive(pid) and cls._http_port_up(port):
-            return port
-        cls.stop_http()
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "engine.timeshift_http", TIMESHIFT_FILE],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-            cwd=PROJECT_ROOT,
-        )
-        if proc.stdout is None:
-            cls._kill_pid(proc.pid)
-            cls._finish_http_popen(proc, keep=False)
-            return 0
-        line = proc.stdout.readline()
-        try:
-            proc.stdout.close()
-        except OSError:
-            pass
-        if isinstance(proc.poll(), int):
-            return 0
-        try:
-            port = int(line.strip())
-        except (TypeError, ValueError):
-            cls._kill_pid(proc.pid)
-            cls._finish_http_popen(proc, keep=False)
-            return 0
-        cls.patch_state(http_port=port, http_pid=proc.pid)
-        cls._finish_http_popen(proc, keep=True)
-        return port
-
-    @classmethod
-    def _finish_http_popen(cls, proc: subprocess.Popen, keep: bool) -> None:
-        """The sidecar outlives this call. Popen.__del__ warns if returncode is unset."""
-        if proc.returncode is not None:
-            return
-        if keep:
-            proc.returncode = 0
-            return
-        try:
-            proc.wait(timeout=1)
-        except (subprocess.TimeoutExpired, ChildProcessError):
-            proc.returncode = 0
-
-    @classmethod
-    def stop_http(cls) -> None:
-        state = cls.load_state()
-        pid = int(state.get("http_pid") or 0)
-        cls._kill_pid(pid)
-        if state:
-            state.pop("http_port", None)
-            state.pop("http_pid", None)
-            state["updated_at"] = time.time()
-            cls._write_state(state)
-
-    @classmethod
-    def http_url(cls, start_byte: int = 0) -> str:
-        port = int(cls.load_state().get("http_port") or 0)
-        if port <= 0:
-            port = cls.start_http()
-        return f"http://127.0.0.1:{port}/live.ts?from={align_ts(start_byte)}"
 
     @classmethod
     def write_rate(cls) -> float:
@@ -277,7 +206,12 @@ class Timeshift:
                     except (TypeError, ValueError):
                         prev = 0.0
                     if prev >= 1000:
-                        measured = prev * 0.85 + measured * 0.15
+                        if measured < prev * 0.5:
+                            measured = prev
+                        elif measured > prev * 3:
+                            pass
+                        else:
+                            measured = prev * 0.85 + measured * 0.15
                     cls.patch_state(rate_byte=size, rate_t=now, mux_bps=measured)
                     return measured
         try:
@@ -395,12 +329,9 @@ class Timeshift:
 
     @classmethod
     def fwd_hop(cls, remain: float) -> float:
-        if remain <= LIVE_SLACK:
+        """Ten seconds closer to live. Inside that last ten, the next press is live."""
+        if remain <= SEEK_STEP:
             return 0.0
-        if remain <= (SEEK_NEAR + LIVE_SLACK):
-            return remain
-        if remain <= (SEEK_STEP * 2):
-            return SEEK_NEAR
         return SEEK_STEP
 
     @classmethod
@@ -670,8 +601,15 @@ class Timeshift:
         if isinstance(proc.poll(), int):
             return None
         cls.patch_state(follow_pid=proc.pid, follow_socket=sock)
-        cls._finish_http_popen(proc, keep=True)
+        cls._detach_child(proc)
         return proc.pid
+
+    @classmethod
+    def _detach_child(cls, proc: subprocess.Popen) -> None:
+        """The follower outlives this call. Popen.__del__ warns if returncode is unset."""
+        if proc.returncode is not None:
+            return
+        proc.returncode = 0
 
     @classmethod
     def send_follow_cmd(cls, line: str) -> bool:
@@ -713,42 +651,10 @@ class Timeshift:
 
     @classmethod
     def wipe(cls) -> None:
-        cls.stop_http()
-        cls._reap_orphan_http()
         cls.stop_follow()
         cls.stop_dump()
         cls._reap_orphan_dumps()
         cls._remove_files()
-
-    @classmethod
-    def _reap_orphan_http(cls) -> None:
-        """Stops leftover loopback servers Close lost track of.
-
-        Match the module name. A path match also hits the picture
-        (--log-file=.../hud.log).
-        """
-        try:
-            out = subprocess.check_output(
-                ["pgrep", "-a", "-f", "engine.timeshift_http"],
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-        except Exception:
-            return
-        for line in out.splitlines():
-            parts = line.split(None, 1)
-            if len(parts) < 2:
-                continue
-            cmd = parts[1]
-            if "pgrep" in cmd or "engine.timeshift_http" not in cmd:
-                continue
-            try:
-                pid = int(parts[0])
-            except ValueError:
-                continue
-            if pid <= 1 or pid == os.getpid():
-                continue
-            cls._kill_pid(pid)
 
     @classmethod
     def _reap_orphan_dumps(cls, keep_pid: int = 0) -> None:
