@@ -5,7 +5,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from engine.paths import SCHEDULE_PATH, chmod_private_file, ensure_private_dir
+from engine.paths import SCHEDULE_PATH, chmod_private_file, ensure_private_dir, state_lock
 from engine.psip import GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
 
 # A minute early, three minutes late. A game adds extra_end_sec on its own row.
@@ -103,20 +103,22 @@ def add_later(
         "slot_id": str(slot_id or ""),
         "status": "waiting",
     }
-    items = [row for row in load_schedule(path) if row.get("id") != item["id"]]
-    items.append(item)
-    items.sort(key=lambda row: int(row.get("start_unix") or 0))
-    save_schedule(items, path)
+    with state_lock(path or SCHEDULE_PATH):
+        items = [row for row in load_schedule(path) if row.get("id") != item["id"]]
+        items.append(item)
+        items.sort(key=lambda row: int(row.get("start_unix") or 0))
+        save_schedule(items, path)
     return item
 
 
 def remove_later(item_id: str, path: Optional[str] = None) -> bool:
     ident = (item_id or "").strip()
-    items = load_schedule(path)
-    kept = [row for row in items if str(row.get("id") or "") != ident]
-    if len(kept) == len(items):
-        return False
-    save_schedule(kept, path)
+    with state_lock(path or SCHEDULE_PATH):
+        items = load_schedule(path)
+        kept = [row for row in items if str(row.get("id") or "") != ident]
+        if len(kept) == len(items):
+            return False
+        save_schedule(kept, path)
     return True
 
 
@@ -124,23 +126,24 @@ def due_items(now: Optional[float] = None, path: Optional[str] = None) -> List[D
     """Rows inside their record window. A window that closed without a start is missed."""
     stamp = time.time() if now is None else float(now)
     ready = []
-    items = load_schedule(path)
-    changed = False
-    for row in items:
-        if str(row.get("status") or "waiting") == "missed":
-            continue
-        start = int(row.get("start_unix") or 0)
-        if start <= 0:
-            continue
-        arm, end = item_window(row)
-        if stamp >= end:
-            row["status"] = "missed"
-            changed = True
-            continue
-        if arm <= stamp:
-            ready.append(row)
-    if changed:
-        save_schedule(items, path)
+    with state_lock(path or SCHEDULE_PATH):
+        items = load_schedule(path)
+        changed = False
+        for row in items:
+            if str(row.get("status") or "waiting") == "missed":
+                continue
+            start = int(row.get("start_unix") or 0)
+            if start <= 0:
+                continue
+            arm, end = item_window(row)
+            if stamp >= end:
+                row["status"] = "missed"
+                changed = True
+                continue
+            if arm <= stamp:
+                ready.append(row)
+        if changed:
+            save_schedule(items, path)
     return ready
 
 

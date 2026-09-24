@@ -3,7 +3,13 @@ Omarchy TV - Shared Paths & Runtime Security
 Centralizes configuration, socket locations, and directories with secure permissions.
 """
 
+import contextlib
+import fcntl
+import hashlib
 import os
+import threading
+import time
+from typing import Iterator, Optional
 
 DIR_PRIVATE = 0o700
 FILE_PRIVATE = 0o600
@@ -83,6 +89,51 @@ def get_runtime_socket(name: str) -> str:
     if (st.st_mode & 0o077) != 0:
         raise RuntimeError("XDG_RUNTIME_DIR must not be group or world accessible")
     return os.path.join(runtime_dir, name)
+
+
+TUNER1_LOCK_KEY = "tuner1"
+
+_lock_depth = threading.local()
+
+
+@contextlib.contextmanager
+def state_lock(key: str, timeout: Optional[float] = None) -> Iterator[None]:
+    """One process at a time for key: a state file path, or a name like "tuner1".
+
+    Nests inside one thread. Raises TimeoutError after timeout seconds.
+    """
+    name = "omarchy-tv-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16] + ".flock"
+    held = getattr(_lock_depth, "held", None)
+    if held is None:
+        held = _lock_depth.held = {}
+    if held.get(name):
+        held[name] += 1
+        try:
+            yield
+        finally:
+            held[name] -= 1
+        return
+    fd = os.open(get_runtime_socket(name), os.O_CREAT | os.O_RDWR, FILE_PRIVATE)
+    try:
+        if timeout is None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        else:
+            deadline = time.time() + timeout
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.time() >= deadline:
+                        raise TimeoutError(key)
+                    time.sleep(0.05)
+        held[name] = 1
+        try:
+            yield
+        finally:
+            held[name] = 0
+    finally:
+        os.close(fd)
 
 
 MPV_SOCKET_PATH = get_runtime_socket("omarchy-tv-mpv.sock")

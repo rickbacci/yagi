@@ -33,6 +33,7 @@ from engine.paths import (
     TUNE_STATUS_PATH,
     chmod_private_file,
     ensure_private_dir,
+    state_lock,
     touch_private_file,
 )
 from engine.tuner import LIVE_ADAPTER
@@ -79,13 +80,14 @@ class Timeshift:
 
         Returns False if another living process already holds the lock.
         """
-        if cls.tune_lock_held():
-            return False
-        tmp = f"{TUNE_LOCK_PATH}.tmp.{os.getpid()}"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(str(os.getpid()))
-        os.replace(tmp, TUNE_LOCK_PATH)
-        return True
+        with state_lock(TUNE_LOCK_PATH):
+            if cls.tune_lock_held():
+                return False
+            tmp = f"{TUNE_LOCK_PATH}.tmp.{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(str(os.getpid()))
+            os.replace(tmp, TUNE_LOCK_PATH)
+            return True
 
     @classmethod
     def tune_lock_held(cls) -> bool:
@@ -126,10 +128,11 @@ class Timeshift:
 
     @classmethod
     def patch_state(cls, **fields: Any) -> None:
-        state = cls.load_state()
-        state.update(fields)
-        state["updated_at"] = time.time()
-        cls._write_state(state)
+        with state_lock(TIMESHIFT_ACTIVE_PATH):
+            state = cls.load_state()
+            state.update(fields)
+            state["updated_at"] = time.time()
+            cls._write_state(state)
 
     @classmethod
     def dump_bytes(cls) -> int:
@@ -356,10 +359,11 @@ class Timeshift:
     @classmethod
     def _write_state(cls, payload: Dict[str, Any]) -> None:
         os.makedirs(os.path.dirname(TIMESHIFT_ACTIVE_PATH), exist_ok=True)
-        tmp = f"{TIMESHIFT_ACTIVE_PATH}.tmp.{os.getpid()}"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-        os.replace(tmp, TIMESHIFT_ACTIVE_PATH)
+        with state_lock(TIMESHIFT_ACTIVE_PATH):
+            tmp = f"{TIMESHIFT_ACTIVE_PATH}.tmp.{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            os.replace(tmp, TIMESHIFT_ACTIVE_PATH)
 
     @classmethod
     def load_tune_status(cls) -> Dict[str, Any]:
@@ -542,10 +546,13 @@ class Timeshift:
                 except OSError:
                     pass
         if state:
-            state.pop("follow_pid", None)
-            state.pop("follow_socket", None)
-            state["updated_at"] = time.time()
-            cls._write_state(state)
+            with state_lock(TIMESHIFT_ACTIVE_PATH):
+                fresh = cls.load_state()
+                if fresh:
+                    fresh.pop("follow_pid", None)
+                    fresh.pop("follow_socket", None)
+                    fresh["updated_at"] = time.time()
+                    cls._write_state(fresh)
 
     @classmethod
     def _follow_pos_path(cls, sock: str) -> str:

@@ -26,6 +26,17 @@ from engine.dvr import (
 )
 from engine.tuner import TunerAdapter
 
+# The live timer holds the real Tuner 1 lock during a Guide update.
+_TUNER_LOCK = patch("engine.dvr.TUNER1_LOCK_KEY", f"test-tuner1-dvr-{os.getpid()}")
+
+
+def setUpModule():
+    _TUNER_LOCK.start()
+
+
+def tearDownModule():
+    _TUNER_LOCK.stop()
+
 
 class TestDvrEngine(unittest.TestCase):
     def test_format_bytes(self):
@@ -273,6 +284,7 @@ class TestDvrEngine(unittest.TestCase):
                 self.assertEqual(stopped[0].channel_number, "8.1")
                 mock_stop.assert_called_once()
 
+    @patch("engine.dvr.FRONTEND_SETTLE_SECS", 0)
     @patch("subprocess.Popen")
     @patch("engine.tuner.TunerManager.adapter_is_free", return_value=False)
     def test_start_recording_refuses_busy_tuner1(self, mock_free, mock_popen):

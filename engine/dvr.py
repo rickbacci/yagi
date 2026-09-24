@@ -25,7 +25,9 @@ from engine.paths import (
     UI_PREFS_PATH,
     chmod_private_file,
     ensure_private_dir,
+    TUNER1_LOCK_KEY,
     get_runtime_socket,
+    state_lock,
     touch_private_file,
 )
 from engine.tuner import TunerManager, WORK_ADAPTER
@@ -54,6 +56,11 @@ KEEP_FREE_GIB = 8
 # A locked ATSC dump passes this quickly. PAT/PMT alone does not.
 GROW_BYTES = 32 * 1024
 GROW_WAIT_SECS = 20.0
+# One Guide tower can hold Tuner 1 this long before it lets go.
+TUNER1_WAIT_SECS = 30.0
+FRONTEND_SETTLE_SECS = 3.0
+# A file written this recently may still be recording. Budget pruning leaves it.
+PRUNE_QUIET_SECS = 120
 
 
 def load_ui_prefs(prefs_path: Optional[str] = None) -> Dict[str, Any]:
@@ -311,7 +318,11 @@ class DvrManager:
         target_path = active_path or RECORDINGS_ACTIVE_PATH
         if not os.path.exists(target_path):
             return []
+        with state_lock(target_path):
+            return cls._load_and_prune(target_path)
 
+    @classmethod
+    def _load_and_prune(cls, target_path: str) -> List[DvrSession]:
         try:
             with open(target_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -351,9 +362,10 @@ class DvrManager:
 
         data = [s.to_dict() for s in sessions if s.is_active()]
         try:
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp_path, target_path)
+            with state_lock(target_path):
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2)
+                os.replace(tmp_path, target_path)
         except Exception:
             if os.path.exists(tmp_path):
                 try:
@@ -472,7 +484,31 @@ class DvrManager:
         return dest
 
     @classmethod
-    def start_recording(
+    def start_recording(cls, channel_query: str, **kwargs: Any) -> DvrSession:
+        """Record a channel on Tuner 1. A Guide update gives it up between towers."""
+        try:
+            with state_lock(TUNER1_LOCK_KEY, timeout=TUNER1_WAIT_SECS):
+                return cls._start_recording_locked(channel_query, **kwargs)
+        except TimeoutError as exc:
+            if str(exc) != TUNER1_LOCK_KEY:
+                raise
+            raise RuntimeError(
+                "Tuner 1 is busy. Stop the recording or wait for the Guide update."
+            ) from None
+
+    @classmethod
+    def _wait_tuner_free(cls, adapter_id: int, timeout: Optional[float] = None) -> bool:
+        """A Guide tower that just let go can take a moment to close the frontend."""
+        deadline = time.time() + (FRONTEND_SETTLE_SECS if timeout is None else timeout)
+        while True:
+            if TunerManager.adapter_is_free(adapter_id):
+                return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.1)
+
+    @classmethod
+    def _start_recording_locked(
         cls,
         channel_query: str,
         duration: Optional[int] = None,
@@ -483,9 +519,6 @@ class DvrManager:
         adapter_override: Optional[int] = None,
         program_title: Optional[str] = None,
     ) -> DvrSession:
-        """
-        Allocates an ATSC tuner and initiates background recording of a channel.
-        """
         c_path = channels_file or CHANNELS_JSON_PATH
         m_path = mpv_channels_file or MPV_CHANNELS_CONF
         rec_dir = recordings_dir or RECORDINGS_DIR
@@ -533,7 +566,7 @@ class DvrManager:
                 for s in current_sessions
                 if s.is_active() and s.adapter_id == WORK_ADAPTER
             }
-            if held or not TunerManager.adapter_is_free(adapter_id):
+            if held or not cls._wait_tuner_free(adapter_id):
                 raise RuntimeError(
                     "Tuner 1 is busy. Stop the recording or wait for the Guide update."
                 )
@@ -641,8 +674,10 @@ class DvrManager:
             pid=proc.pid,
         )
 
-        current_sessions.append(session)
-        cls.save_active_sessions(current_sessions, act_path)
+        with state_lock(act_path):
+            fresh = cls.load_active_sessions(act_path)
+            fresh.append(session)
+            cls.save_active_sessions(fresh, act_path)
         if os.path.realpath(rec_dir) == os.path.realpath(RECORDINGS_DIR):
             cls.refresh_library_index(recordings_dir=rec_dir)
 
@@ -656,6 +691,13 @@ class DvrManager:
     ) -> List[DvrSession]:
         """Stops active recording session(s). Returns list of stopped sessions."""
         act_path = active_path or RECORDINGS_ACTIVE_PATH
+        with state_lock(act_path):
+            stopped = cls._stop_matching(channel_query, act_path)
+        cls.refresh_library_index()
+        return stopped
+
+    @classmethod
+    def _stop_matching(cls, channel_query: Optional[str], act_path: str) -> List[DvrSession]:
         current_sessions = cls.load_active_sessions(act_path)
         stopped: List[DvrSession] = []
         remaining: List[DvrSession] = []
@@ -681,7 +723,6 @@ class DvrManager:
                 remaining.append(s)
 
         cls.save_active_sessions(remaining, act_path)
-        cls.refresh_library_index()
         return stopped
 
     @classmethod
@@ -776,9 +817,12 @@ class DvrManager:
 
         rec_real = os.path.realpath(rec_dir)
         removed: List[str] = []
+        quiet_before = time.time() - PRUNE_QUIET_SECS
         for item in sorted(recordings, key=lambda rec: rec.get("mtime") or 0):
             if used <= budget:
                 break
+            if float(item.get("mtime") or 0) > quiet_before:
+                continue
             path = item.get("path") or ""
             try:
                 if os.path.islink(path):
@@ -794,6 +838,10 @@ class DvrManager:
                 os.remove(path)
             except OSError:
                 continue
+            try:
+                os.remove(sidecar_path(path))
+            except OSError:
+                pass
             used -= int(item.get("size_bytes") or 0)
             removed.append(path)
         return removed
