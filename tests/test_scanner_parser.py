@@ -169,6 +169,87 @@ class TestScannerParser(unittest.TestCase):
                 saved = json.load(handle)["channels"]
             self.assertTrue(any("Quest" in ch.get("name", "") for ch in saved))
 
+    def _fake_scan_proc(self, conf_text, lines):
+        test = self
+
+        class FakeProc:
+            instances = []
+
+            def __init__(self, cmd, **_kwargs):
+                out = cmd[cmd.index("-o") + 1]
+                with open(out, "w", encoding="utf-8") as handle:
+                    handle.write(conf_text)
+                self.stdout = list(lines)
+                self.returncode = None
+                self.terminated = False
+                FakeProc.instances.append(self)
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                if self.returncode is None:
+                    self.returncode = 0
+                return self.returncode
+
+            def terminate(self):
+                self.terminated = True
+                self.returncode = -15
+
+            def kill(self):
+                self.returncode = -9
+
+        return FakeProc
+
+    def _scan_with(self, fake, tmp, stop_after=None):
+        scanner = AtscScanner(adapter_id=1)
+        status = os.path.join(tmp, "scan_status.json")
+        channels = os.path.join(tmp, "channels.json")
+        mpv = os.path.join(tmp, "channels.conf")
+        AtscScanner.save_channels(
+            [{"name": "KEEP", "frequency": 57028615, "service_id": 3}],
+            json_path=channels,
+            mpv_path=mpv,
+        )
+        with patch("engine.scanner.SCAN_STATUS_PATH", status), \
+             patch("engine.scanner.CHANNELS_JSON_PATH", channels), \
+             patch("engine.scanner.MPV_CHANNELS_CONF", mpv), \
+             patch("engine.guide.sync_guide_from_channels"), \
+             patch.object(AtscScanner, "_work_tuner_ready", return_value=True), \
+             patch("engine.scanner.subprocess.Popen", side_effect=fake):
+            gen = scanner.scan(quick_mode=True)
+            for ev in gen:
+                if stop_after and ev["status"] == stop_after:
+                    gen.close()
+                    break
+        with open(channels, encoding="utf-8") as handle:
+            saved = [ch.get("name") for ch in json.load(handle)["channels"]]
+        with open(mpv, encoding="utf-8") as handle:
+            conf = handle.read()
+        return saved, conf
+
+    def test_interrupted_scan_keeps_the_saved_lineup(self):
+        fake = self._fake_scan_proc("", [
+            "Scanning frequency #1 57028615\n",
+            "Virtual channel 3.4, name = Quest\n",
+            "Scanning frequency #2 63028615\n",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            saved, conf = self._scan_with(fake, tmp, stop_after="channel_found")
+        self.assertEqual(saved, ["KEEP"])
+        self.assertIn("KEEP", conf)
+        self.assertTrue(fake.instances[0].terminated)
+
+    def test_scan_without_finished_output_keeps_the_saved_lineup(self):
+        fake = self._fake_scan_proc("", [
+            "Scanning frequency #1 57028615\n",
+            "Virtual channel 3.4, name = Quest\n",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            saved, conf = self._scan_with(fake, tmp)
+        self.assertEqual(saved, ["KEEP"])
+        self.assertNotIn("Quest", conf)
+
     def test_scan_failure_returns_to_idle(self):
         scanner = AtscScanner(adapter_id=1)
         with tempfile.TemporaryDirectory() as tmp:

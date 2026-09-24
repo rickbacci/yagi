@@ -30,6 +30,13 @@ def write_scan_status(status_dict: Dict[str, Any], status_path: Optional[str] = 
         pass
 
 
+def _write_text_atomic(path: str, text: str) -> None:
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
 # North American ATSC Standard Frequencies
 def get_atsc_frequencies(quick_mode: bool = False) -> List[Dict[str, Any]]:
     """
@@ -149,6 +156,7 @@ class AtscScanner:
         current_freq_index = 0
         current_signal: Optional[float] = None
         scan_completed = False
+        proc = None
 
         try:
             proc = subprocess.Popen(
@@ -216,7 +224,6 @@ class AtscScanner:
                                 "band": cur_info["band"]
                             }
                             discovered_channels.append(ch_entry)
-                            self.save_channels(discovered_channels)
                             ev_found = {
                                 "status": "channel_found",
                                 "is_scanning": True,
@@ -245,7 +252,6 @@ class AtscScanner:
                                 "band": cur_info["band"]
                             }
                             discovered_channels.append(ch_entry)
-                            self.save_channels(discovered_channels)
                             ev_found = {
                                 "status": "channel_found",
                                 "is_scanning": True,
@@ -261,12 +267,10 @@ class AtscScanner:
 
             proc.wait()
 
-            # Parse full resulting configuration file
-            parsed_channels = self._parse_scan_output(out_conf_path)
-            if parsed_channels:
-                discovered_channels = parsed_channels
-
-            # An empty scan must not erase a lineup already saved.
+            # Only dvbv5-scan's finished output has service ids and PIDs. The
+            # progress lines above are stubs, and an empty result must not
+            # erase a lineup already saved.
+            discovered_channels = self._parse_scan_output(out_conf_path)
             self.commit_discovered(discovered_channels)
 
             ev_done = {
@@ -283,6 +287,16 @@ class AtscScanner:
             return discovered_channels
 
         finally:
+            if not scan_completed and proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except Exception:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=3)
+                    except Exception:
+                        pass
             if not scan_completed:
                 write_scan_status({
                     "status": "idle",
@@ -361,41 +375,27 @@ class AtscScanner:
             json.dump(payload, f, indent=2)
         os.replace(tmp_json, target_json)
 
-        # Write MPV channels.conf in ATSC format (NAME:FREQ:8VSB:VPID:APID:SID)
+        # MPV channels.conf in ATSC format (NAME:FREQ:8VSB:VPID:APID:SID)
+        conf_lines = []
+        for ch in enriched_channels:
+            tune_name = ch.get("tune_name") or ch.get("name", "Unknown")
+            freq = ch.get("frequency", 0)
+            sid = ch.get("service_id", 1)
+            vpid_raw = ch.get("video_pid", 0)
+            apid_raw = ch.get("audio_pid", 0)
+            vpid = int(str(vpid_raw).split()[0]) if vpid_raw else 0
+            apid = int(str(apid_raw).split()[0]) if apid_raw else 0
+            conf_lines.append(f"{tune_name}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
+            ch_num = ch.get("channel_number")
+            if ch_num and ch_num != tune_name:
+                conf_lines.append(f"{ch_num}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
+        conf_text = "".join(conf_lines)
+
         os.makedirs(os.path.dirname(target_mpv), exist_ok=True)
-        with open(target_mpv, "w", encoding="utf-8") as f:
-            for ch in enriched_channels:
-                tune_name = ch.get("tune_name") or ch.get("name", "Unknown")
-                freq = ch.get("frequency", 0)
-                sid = ch.get("service_id", 1)
-                vpid_raw = ch.get("video_pid", 0)
-                apid_raw = ch.get("audio_pid", 0)
-                vpid = int(str(vpid_raw).split()[0]) if vpid_raw else 0
-                apid = int(str(apid_raw).split()[0]) if apid_raw else 0
-                f.write(f"{tune_name}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
-
-                ch_num = ch.get("channel_number")
-                if ch_num and ch_num != tune_name:
-                    f.write(f"{ch_num}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
-
-        # Also write channels.conf.atsc if default MPV location
+        _write_text_atomic(target_mpv, conf_text)
         if target_mpv == MPV_CHANNELS_CONF:
             try:
-                atsc_conf = target_mpv + ".atsc"
-                with open(atsc_conf, "w", encoding="utf-8") as f:
-                    for ch in enriched_channels:
-                        tune_name = ch.get("tune_name") or ch.get("name", "Unknown")
-                        freq = ch.get("frequency", 0)
-                        sid = ch.get("service_id", 1)
-                        vpid_raw = ch.get("video_pid", 0)
-                        apid_raw = ch.get("audio_pid", 0)
-                        vpid = int(str(vpid_raw).split()[0]) if vpid_raw else 0
-                        apid = int(str(apid_raw).split()[0]) if apid_raw else 0
-                        f.write(f"{tune_name}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
-
-                        ch_num = ch.get("channel_number")
-                        if ch_num and ch_num != tune_name:
-                            f.write(f"{ch_num}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
+                _write_text_atomic(target_mpv + ".atsc", conf_text)
             except Exception:
                 pass
 
