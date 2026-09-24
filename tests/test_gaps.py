@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import socket
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -66,7 +67,13 @@ class TestTunerFakes(unittest.TestCase):
              patch("engine.tuner.subprocess.run", return_value=fuser):
             self.assertFalse(TunerAdapter(7).is_busy)
         with patch("engine.tuner.os.path.exists", return_value=True), \
+             patch("engine.tuner.subprocess.run", side_effect=subprocess.TimeoutExpired("fuser", 1)):
+            self.assertTrue(TunerAdapter(7).is_busy)
+        with patch("engine.tuner.os.path.exists", return_value=True), \
              patch("engine.tuner.subprocess.run", side_effect=OSError):
+            self.assertTrue(TunerAdapter(7).is_busy)
+        with patch("engine.tuner.os.path.exists", return_value=True), \
+             patch("engine.tuner.subprocess.run", side_effect=FileNotFoundError):
             self.assertFalse(TunerAdapter(7).is_busy)
 
     def test_allocation_skips_busy_and_excluded(self):
@@ -225,10 +232,19 @@ class TestTimeshiftStop(unittest.TestCase):
             with patch("engine.timeshift.subprocess.check_output", side_effect=OSError):
                 Timeshift._reap_orphan_dumps()
 
-    def test_wait_frontend_free_returns_when_fuser_fails(self):
+    def test_wait_frontend_free_keeps_waiting_when_fuser_fails(self):
+        runs = [subprocess.TimeoutExpired("fuser", 0.4), MagicMock(returncode=1)]
         with patch("engine.timeshift.os.path.exists", return_value=True), \
-             patch("engine.timeshift.subprocess.run", side_effect=OSError):
+             patch("engine.timeshift.time.sleep"), \
+             patch("engine.timeshift.subprocess.run", side_effect=runs) as run:
             Timeshift._wait_frontend_free(timeout=1, adapter_id=0)
+        self.assertEqual(run.call_count, 2)
+
+    def test_wait_frontend_free_returns_without_fuser(self):
+        with patch("engine.timeshift.os.path.exists", return_value=True), \
+             patch("engine.timeshift.subprocess.run", side_effect=FileNotFoundError) as run:
+            Timeshift._wait_frontend_free(timeout=1, adapter_id=0)
+        self.assertEqual(run.call_count, 1)
 
 
 class TestFollowPieces(unittest.TestCase):

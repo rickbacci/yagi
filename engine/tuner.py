@@ -92,8 +92,10 @@ class TunerAdapter:
             )
             # fuser returns returncode 0 if files are open
             return res.returncode == 0
-        except Exception:
+        except FileNotFoundError:
             return False
+        except Exception:
+            return True
 
     def to_dict(self) -> Dict[str, Any]:
         return {

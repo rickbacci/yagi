@@ -704,8 +704,11 @@ class Timeshift:
                     if res.returncode == 0:
                         busy = True
                         break
-                except Exception:
+                except FileNotFoundError:
                     return
+                except Exception:
+                    busy = True
+                    break
             if not busy:
                 return
             time.sleep(0.03)
