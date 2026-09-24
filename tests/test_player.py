@@ -335,7 +335,7 @@ class TestMpvPlayerController(unittest.TestCase):
         mock_dump.return_value = dump
         mock_popen.return_value = MagicMock(pid=9)
 
-        with patch("player.controller.os.open", return_value=30), \
+        with patch("player.controller._open_follow_reader", return_value=30), \
              patch("player.controller.os.close"), \
              patch("player.controller.Timeshift.patch_state"), \
              patch("player.controller.update_player_state"), \
@@ -385,6 +385,77 @@ class TestMpvPlayerController(unittest.TestCase):
         with patch("player.controller.Timeshift.wipe"):
             self.assertFalse(self.controller.launch(channel_name="53.1 Daystar", adapter_id=None))
         mock_popen.assert_not_called()
+
+    @patch("player.controller.is_timeshift_path", return_value=True)
+    @patch("player.controller.Timeshift.start_follow", return_value=4242)
+    @patch("player.controller.Timeshift.start_dump")
+    @patch.object(MpvController, "is_running", return_value=False)
+    @patch("subprocess.Popen")
+    def test_live_launch_aborts_when_follower_never_writes(self, mock_popen, mock_running, mock_dump, _follow, _ts_path):
+        dump = os.path.join(self.tmp_dir.name, "live.ts")
+        with open(dump, "wb") as f:
+            f.write(b"x" * (256 * 1024))
+        mock_dump.return_value = dump
+        with patch("player.controller._open_follow_reader", return_value=None), \
+             patch("player.controller.Timeshift.stop_follow") as stop, \
+             patch("player.controller.Timeshift.picture_open_byte", return_value=0), \
+             patch("player.controller.Timeshift.wipe"):
+            self.assertFalse(self.controller.launch(channel_name="53.1 Daystar", adapter_id=None))
+        mock_popen.assert_not_called()
+        stop.assert_called()
+
+    def _fifo(self):
+        path = os.path.join(self.tmp_dir.name, "follow.fifo")
+        os.mkfifo(path, 0o600)
+        return path
+
+    def test_follow_reader_waits_for_first_bytes_then_blocks(self):
+        import fcntl
+        import threading
+        from player.controller import _open_follow_reader
+        path = self._fifo()
+
+        def writer():
+            fd = os.open(path, os.O_WRONLY)
+            time.sleep(0.1)
+            os.write(fd, b"G" * 188)
+            time.sleep(0.2)
+            os.close(fd)
+
+        t = threading.Thread(target=writer)
+        t.start()
+        with patch("player.controller.Timeshift._pid_alive", return_value=True):
+            fd = _open_follow_reader(path, 4242, timeout=2.0)
+        try:
+            self.assertIsNotNone(fd)
+            self.assertFalse(fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_NONBLOCK)
+            self.assertEqual(os.read(fd, 188), b"G" * 188)
+        finally:
+            t.join()
+            os.close(fd)
+
+    def test_follow_reader_gives_up_when_the_follower_dies(self):
+        from player.controller import _open_follow_reader
+        path = self._fifo()
+        started = time.time()
+        with patch("player.controller.Timeshift._pid_alive", return_value=False):
+            self.assertIsNone(_open_follow_reader(path, 4242, timeout=5.0))
+        self.assertLess(time.time() - started, 1.0)
+
+    def test_follow_reader_gives_up_on_a_hangup_without_bytes(self):
+        from player.controller import _open_follow_reader
+        path = self._fifo()
+        import threading
+
+        def writer():
+            fd = os.open(path, os.O_WRONLY)
+            os.close(fd)
+
+        t = threading.Thread(target=writer)
+        t.start()
+        with patch("player.controller.Timeshift._pid_alive", return_value=True):
+            self.assertIsNone(_open_follow_reader(path, 4242, timeout=2.0))
+        t.join()
 
     def test_update_player_state_atomic(self):
         update_player_state(True, channel="53.1 Daystar", station="Daystar", pid=99)

@@ -7,6 +7,8 @@ import os
 import sys
 import json
 import time
+import fcntl
+import select
 import signal
 import socket
 import subprocess
@@ -39,6 +41,35 @@ from player.transport import Transport
 # Dump lock plus lua/lavf can outrun a 3s IPC poll. The flyout treats a
 # non-zero CLI as "TV didn't open" even if mpv is still coming up.
 LAUNCH_SOCKET_WAIT_SECS = 12.0
+
+# The follower writes as soon as the dump has bytes. Past this, it is stuck or dead.
+FOLLOW_OPEN_WAIT_SECS = 6.0
+
+
+def _open_follow_reader(fifo_path: str, follow_pid: int, timeout: float = FOLLOW_OPEN_WAIT_SECS) -> Optional[int]:
+    """Read end of the follow fifo, once the follower has sent its first bytes.
+
+    A blocking open never returns if the follower dies before its own open.
+    The fd goes back to blocking so mpv reads it like a plain pipe.
+    """
+    try:
+        fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+    poller = select.poll()
+    poller.register(fd, select.POLLIN)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        events = poller.poll(50)
+        if any(ev & select.POLLIN for _, ev in events):
+            flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
+            return fd
+        if events or not Timeshift._pid_alive(follow_pid):
+            break
+    os.close(fd)
+    return None
+
 
 # Same lua as /usr/share/omarchy/default/hypr/bindings/tiling.lua Super+F.
 OMARCHY_FULLSCREEN_LUA = 'hl.dsp.window.fullscreen({ mode = "fullscreen" })'
@@ -666,11 +697,12 @@ class MpvController:
         fifo_fd = None
         if live_dump:
             opened = Timeshift.picture_open_byte()
-            if not Timeshift.start_follow(opened):
+            follow_pid = Timeshift.start_follow(opened)
+            if not follow_pid:
                 return False
-            try:
-                fifo_fd = os.open(FOLLOW_FIFO_PATH, os.O_RDONLY)
-            except OSError:
+            fifo_fd = _open_follow_reader(FOLLOW_FIFO_PATH, follow_pid)
+            if fifo_fd is None:
+                Timeshift.stop_follow()
                 return False
             stdin = fifo_fd
             # One read end. A path open also runs the disc probes, and those
