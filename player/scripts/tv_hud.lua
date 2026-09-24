@@ -571,8 +571,27 @@ local function parse_clock_minutes(label)
     return h * 60 + m
 end
 
+-- GPS epoch to Unix, less the 18 leap seconds. Same as Model.js programUnix.
+local GPS_UNIX_OFFSET = 315964800 - 18
+
 local function program_on_now(row)
     if type(row) ~= "table" or type(row.programs) ~= "table" then return nil end
+    -- A broadcast start time wins, like the flyout. Clock labels are the fallback.
+    local now_unix = os.time()
+    local dated = false
+    for _, prog in ipairs(row.programs) do
+        local gps = type(prog) == "table" and tonumber(prog.gps_start) or nil
+        if gps and gps > 0 then
+            dated = true
+            local start = gps + GPS_UNIX_OFFSET
+            local dur = tonumber(prog.duration_sec) or 0
+            if dur <= 0 then dur = 30 * 60 end
+            if start <= now_unix and now_unix < start + dur then
+                return prog
+            end
+        end
+    end
+    if dated then return nil end
     local now = os.date("*t")
     local clock = now.hour * 60 + now.min
     for _, prog in ipairs(row.programs) do
