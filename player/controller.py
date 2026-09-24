@@ -767,6 +767,7 @@ class MpvController:
                     view="live",
                     paused=False,
                     playhead_byte=opened,
+                    live_lag=0,
                 )
             return True
 

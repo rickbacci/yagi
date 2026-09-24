@@ -36,7 +36,9 @@ class Transport:
         self.arm(paused, False)
         self.player._load_dump("fd://0")
         self.player.send_command(["set_property", "pause", paused])
-        self.note(byte, paused)
+        # The tune already put the picture a few seconds back. That is live.
+        ts.patch_state(live_lag=0)
+        self.note(byte, paused, live=True)
         return True
 
     def behind(self, byte: int) -> bool:
@@ -46,7 +48,7 @@ class Transport:
         rate = ts.write_rate()
         if rate <= 0:
             return False
-        return (ts.dump_bytes() - byte) / rate > LIVE_SLACK
+        return (ts.dump_bytes() - byte - ts.live_lag_bytes()) / rate > LIVE_SLACK
 
     def arm(self, paused: bool, delayed: bool) -> None:
         """Pause freezes the cursor. Play behind paces. Live races the write head."""
@@ -62,13 +64,14 @@ class Transport:
         else:
             ts.send_follow_catchup()
 
-    def note(self, byte: int, paused: bool) -> None:
+    def note(self, byte: int, paused: bool, live: bool = False) -> None:
         from player.controller import LIVE_SLACK
 
         ts = _ts()
         rate = ts.write_rate()
-        remain = 0.0 if rate <= 0 else max(0.0, (ts.dump_bytes() - byte) / rate)
-        view = "live" if remain <= LIVE_SLACK else "delayed"
+        gap = ts.dump_bytes() - byte - ts.live_lag_bytes()
+        remain = 0.0 if rate <= 0 else max(0.0, gap / rate)
+        view = "live" if live or remain <= LIVE_SLACK else "delayed"
         ts.patch_state(
             view=view,
             paused=paused,
@@ -114,13 +117,18 @@ class Transport:
         if not paused:
             ts.send_follow_pause()
             cursor = ts.follow_pos()
+            live_view = str(state.get("view") or "live") == "live"
             if cursor is None:
-                if str(state.get("view") or "live") == "live":
+                if live_view:
                     cursor = ts.live_edge_byte()
                 else:
                     cursor = int(state.get("playhead_byte") or 0)
             player.send_command(["set_property", "pause", True])
-            ts.patch_state(paused=True, playhead_byte=align_ts(cursor))
+            fields = {"paused": True, "playhead_byte": align_ts(cursor)}
+            if live_view:
+                # Pausing live: the gap right now is the lag, not time behind.
+                fields["live_lag"] = max(0, ts.dump_bytes() - int(cursor))
+            ts.patch_state(**fields)
             return
         cursor = ts.follow_pos()
         if cursor is None:
@@ -161,7 +169,8 @@ class Transport:
             pos = ts.follow_pos()
             if pos is None:
                 pos = int(state.get("playhead_byte") or ts.playhead_now())
-            remain = 0.0 if rate <= 0 else max(0.0, (ts.dump_bytes() - pos) / rate)
+            gap = ts.dump_bytes() - pos - ts.live_lag_bytes()
+            remain = 0.0 if rate <= 0 else max(0.0, gap / rate)
             if delta > 0:
                 hop = ts.fwd_hop(remain)
                 if hop <= 0:

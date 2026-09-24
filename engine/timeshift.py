@@ -287,7 +287,15 @@ class Timeshift:
         rate = cls.write_rate()
         if rate <= 0:
             return 0.0
-        return max(0.0, (cls.dump_bytes() - cls.playhead_now()) / rate)
+        return max(0.0, (cls.dump_bytes() - cls.playhead_now() - cls.live_lag_bytes()) / rate)
+
+    @classmethod
+    def live_lag_bytes(cls) -> int:
+        """The gap a live picture already had: the tune and mpv's start. It is not behind."""
+        try:
+            return max(0, int(cls.load_state().get("live_lag") or 0))
+        except (TypeError, ValueError):
+            return 0
 
     @classmethod
     def mux_rate(cls) -> float:

@@ -846,6 +846,34 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self.assertTrue(paused_call.get("paused"))
         self.assertNotIn("playhead_t", paused_call)
 
+    def test_pause_on_live_records_the_tune_lag(self):
+        self.server.path_value = FOLLOW_FIFO_PATH
+        with patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False}), \
+             patch("player.controller.Timeshift.follow_pos", return_value=1880), \
+             patch("player.controller.Timeshift.dump_bytes", return_value=1880 + 188 * 60000), \
+             patch("player.controller.Timeshift.send_follow_pause", return_value=True), \
+             patch("player.controller.Timeshift.patch_state") as mock_patch, \
+             patch("player.controller.subprocess.Popen"):
+            self.controller.toggle_pause()
+        self.assertEqual(mock_patch.call_args.kwargs.get("live_lag"), 188 * 60000)
+
+    def test_zap_opens_live_even_seconds_from_the_write_head(self):
+        patched = []
+        with patch("player.controller.Timeshift.start_follow", return_value=4242), \
+             patch("player.controller.Timeshift.send_follow_reopen", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_seek", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_play", return_value=True), \
+             patch("player.controller.Timeshift.send_follow_catchup", return_value=True) as catchup, \
+             patch("player.controller.Timeshift.write_rate", return_value=2_000_000), \
+             patch("player.controller.Timeshift.dump_bytes", return_value=20_000_000), \
+             patch("player.controller.Timeshift.live_lag_bytes", return_value=0), \
+             patch("player.controller.Timeshift.patch_state", side_effect=lambda **kw: patched.append(kw)), \
+             patch.object(self.controller, "_load_dump"):
+            self.assertTrue(self.controller.open_timeshift_dump(0, paused=False))
+        catchup.assert_called()
+        self.assertIn({"live_lag": 0}, patched)
+        self.assertEqual(patched[-1].get("view"), "live")
+
     def test_play_keeps_the_paused_cursor(self):
         self.server.path_value = FOLLOW_FIFO_PATH
         with patch("player.controller.Timeshift.load_state", return_value={"view": "delayed", "paused": True, "playhead_byte": 1880}), \

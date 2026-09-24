@@ -445,6 +445,16 @@ local function timeshift_delay()
         local data = utils.parse_json(content)
         if type(data) == "table" then cached_timeshift = data end
     end
+    -- Live and playing is live, whatever gap the tune left. Same as delay_sec.
+    local view = tostring(cached_timeshift.view or "live")
+    if view == "live" and not cached_timeshift.paused and not mp.get_property_bool("pause", false) then
+        behind_clock = 0
+        clock_shown = nil
+        clock_tick = nil
+        clock_raw = nil
+        clock_jump = nil
+        return 0
+    end
     local size = file_bytes()
     local pos = read_follow_cursor()
     if pos == nil then
@@ -456,7 +466,8 @@ local function timeshift_delay()
     else
         pos = math.max(0, pos)
     end
-    behind_clock = smooth_clock(math.max(0, (size - pos) / rate))
+    local lag = tonumber(cached_timeshift.live_lag) or 0
+    behind_clock = smooth_clock(math.max(0, (size - pos - lag) / rate))
     return behind_clock
 end
 

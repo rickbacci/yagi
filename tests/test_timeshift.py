@@ -224,6 +224,22 @@ class TestTimeshift(unittest.TestCase):
                 Timeshift.patch_state(view="live", paused=False, playhead_t=time.time() - 30)
                 self.assertEqual(Timeshift.delay_sec(), 0.0)
 
+    def test_delay_sec_leaves_out_the_tune_lag(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            live = os.path.join(tmp_dir, "live.ts")
+            state = os.path.join(tmp_dir, "timeshift_active.json")
+            with open(live, "wb") as f:
+                f.write(b"x" * (188 * 100_000))
+            with patch("engine.timeshift.TIMESHIFT_FILE", live), \
+                 patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
+                 patch.object(Timeshift, "write_rate", return_value=188 * 1000), \
+                 patch.object(Timeshift, "follow_pos", return_value=None):
+                Timeshift.patch_state(view="live", paused=True, playhead_byte=188 * 90_000, live_lag=188 * 6_000)
+                self.assertAlmostEqual(Timeshift.delay_sec(), 4.0, places=2)
+                Timeshift.patch_state(live_lag=0)
+                self.assertAlmostEqual(Timeshift.delay_sec(), 10.0, places=2)
+
     def test_write_rate_uses_dump_growth_paused_or_not(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             live = os.path.join(tmp_dir, "live.ts")
