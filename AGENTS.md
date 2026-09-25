@@ -16,8 +16,5 @@ Plugin `richardb.omarchy-tv`, kind `bar-widget`, QML `plugin/BarWidget.qml`. Hyp
 8. Free the frontend before a dump (`EBUSY`). Scan dwell ≥ 1.2 s.
 9. Library `$XDG_VIDEOS_DIR/TV`. Pause dump `$XDG_CACHE_HOME/omarchy/tv/timeshift/`. PiP is never `dvb://`. Close TV wipes the dump.
 
-## Settled
-`tv_hud.lua` and `plugin/BarWidget.qml` are settled. Stop, say why the look must change, and wait. Do not restyle, move, add, or drop a word, color, or bar.
-
 ## Working style
 One task. Talk, then a plan, then code. Commit only when asked. Done means they saw it.
