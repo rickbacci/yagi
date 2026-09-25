@@ -42,6 +42,29 @@ class TestBreaks(unittest.TestCase):
         self.assertEqual(parse_edl("12.5\t80.25\t0\nbad\n100 90 0\n"), [[12.5, 80.25]])
 
 
+class TestComskipSanity(unittest.TestCase):
+    def test_a_clip_marked_all_ads_falls_back_to_ffmpeg(self):
+        from unittest import mock
+
+        from engine import ads
+
+        with mock.patch.object(ads, "comskip_path", return_value="/usr/bin/comskip"), \
+                mock.patch.object(ads, "media_seconds", return_value=142.0), \
+                mock.patch.object(ads, "comskip_ads", return_value=[[0.0, 141.98]]), \
+                mock.patch.object(ads, "ffmpeg_ads", return_value=[[40.3, 101.8]]):
+            self.assertEqual(ads.find_ads("x.ts", {}), ([[40.3, 101.8]], "ffmpeg"))
+        with mock.patch.object(ads, "comskip_path", return_value="/usr/bin/comskip"), \
+                mock.patch.object(ads, "media_seconds", return_value=1800.0), \
+                mock.patch.object(ads, "comskip_ads", return_value=[[480.2, 587.3], [1200.0, 1350.0]]):
+            self.assertEqual(ads.find_ads("x.ts", {})[1], "comskip")
+
+    def test_one_break_longer_than_seven_minutes_is_not_believed(self):
+        from engine.ads import believable
+
+        self.assertFalse(believable([[100.0, 600.0]], 3600))
+        self.assertTrue(believable([[100.0, 280.0]], 3600))
+
+
 class TestFinish(unittest.TestCase):
     def test_a_finished_recording_is_marked_once(self):
         from unittest import mock

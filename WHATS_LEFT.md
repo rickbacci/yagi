@@ -4,7 +4,7 @@ Open:
 
 - `plugin/README` for Omarchy plugin letters. `manifest.json` stays `0.1.0` until it is published as 1.0.0.
 - State JSON is not all `0600`.
-- Comskip is not installed (`omarchy-pkg-aur-add comskip`, needs sudo). Until then ad breaks come from ffmpeg black-frame and silence detection, untested on a real episode.
+- Comskip marks ad breaks, with ffmpeg black-frame and silence detection as the fallback when Comskip's answer is not believable. Both are tested on generated clips, not yet on a real episode.
 - While you watch and something records, both tuners are busy and the Guide can't update. A long marathon then runs out of listings (about 5 hours) and stops until the next update.
 - A recorder that dies mid-run is marked finished; the rest of that run is not restarted.
 - Network names come from `markets/cleveland.json`, typed by hand. Nothing in the broadcast carries them.

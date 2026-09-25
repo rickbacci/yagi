@@ -141,10 +141,31 @@ def comskip_ads(exe: str, path: str) -> List[List[float]]:
             return []
 
 
+def media_seconds(path: str) -> float:
+    try:
+        res = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+            capture_output=True, text=True, timeout=60,
+        )
+        return float(res.stdout.strip() or 0)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0.0
+
+
+def believable(breaks: List[List[float]], seconds: float) -> bool:
+    """Comskip marks a short clip with no logo as one long ad. Skipping that would skip the show."""
+    if any(b - a > MAX_BREAK_SEC for a, b in breaks):
+        return False
+    marked = sum(b - a for a, b in breaks)
+    return not (seconds > 0 and marked > seconds / 2)
+
+
 def find_ads(path: str, side: Dict[str, Any]) -> Tuple[List[List[float]], str]:
     exe = comskip_path()
     if exe:
-        return comskip_ads(exe, path), "comskip"
+        breaks = comskip_ads(exe, path)
+        if believable(breaks, media_seconds(path)):
+            return breaks, "comskip"
     return ffmpeg_ads(path, side), "ffmpeg"
 
 
