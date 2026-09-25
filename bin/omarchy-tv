@@ -7,6 +7,7 @@ import os
 import sys
 import argparse
 import json
+import subprocess
 import time
 
 # Ensure project root is in sys.path (resolving symlinks)
@@ -689,11 +690,21 @@ def cmd_record(args):
         from engine.dvr import DvrManager
         from engine.guide import load_guide
         from engine.rules import arm_rules, note_recorded
-        from engine.schedule import drop_item, due_items, item_window, pick_due
-        for session in DvrManager.sweep_active():
-            print(f"Stopped {session.station} ({session.channel_number}).")
+        from engine.dvr import patch_sidecar
+        from engine.episodes import chain_from, episode_of, grow_runs, run_stop, waiting_splits
+        from engine.schedule import drop_item, due_items, load_schedule, pick_due
         for item in arm_rules(load_guide().get("channels") or {}):
             print(f"Queued {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
+        for item in grow_runs():
+            print(f"Kept recording into {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
+        for session in DvrManager.sweep_active():
+            print(f"Stopped {session.station} ({session.channel_number}).")
+        if waiting_splits(RECORDINGS_DIR):
+            subprocess.Popen(
+                [sys.executable, os.path.abspath(__file__), "record", "split"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
         ready = due_items()
         busy = bool(DvrManager.load_active_sessions())
         chosen = pick_due(ready, busy)
@@ -705,10 +716,10 @@ def cmd_record(args):
                 if item.get("id") == chosen.get("id"):
                     continue
                 print(f"Waiting. {item.get('title') or 'That show'} stays listed. Tuner 1 is busy.")
-            _end = item_window(chosen)[1]
-            remaining = max(60, int(_end - time.time()))
+            run = chain_from(load_schedule(), chosen)
+            remaining = max(60, int(run_stop(run) - time.time()))
             try:
-                DvrManager.start_recording(
+                session = DvrManager.start_recording(
                     chosen.get("tune_name") or "",
                     duration=remaining,
                     program_title=chosen.get("title") or "",
@@ -716,10 +727,25 @@ def cmd_record(args):
             except Exception as exc:
                 print(f"Waiting. {chosen.get('title') or 'That show'} did not start: {exc}")
             else:
-                drop_item(str(chosen.get("id") or ""))
-                note_recorded(str(chosen.get("rule_id") or ""), chosen.get("synopsis"))
-                print(f"Recording {chosen.get('title')} ({remaining // 60}m).")
+                patch_sidecar(
+                    session.file_path,
+                    episodes=[episode_of(row) for row in run],
+                    queue_tune=chosen.get("tune_name") or "",
+                )
+                for row in run:
+                    drop_item(str(row.get("id") or ""))
+                    note_recorded(str(row.get("rule_id") or ""), row.get("synopsis"))
+                extra = f", {len(run)} episodes in one run" if len(run) > 1 else ""
+                print(f"Recording {chosen.get('title')} ({remaining // 60}m{extra}).")
         _grab_guide_if_due()
+
+    elif action == "split":
+        from engine.episodes import split_waiting
+        made = split_waiting(RECORDINGS_DIR)
+        for path in made:
+            print(f"Episode {os.path.basename(path)}")
+        if made:
+            DvrManager.refresh_library_index()
 
     elif action == "list":
         recordings = DvrManager.refresh_library_index()
@@ -837,7 +863,7 @@ def main():
 
     # record / dvr
     p_rec = subparsers.add_parser("record", aliases=["dvr", "rec"], help="DVR recording control")
-    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "all", "unall"], default="list", help="Record action. all/unall: record every airing of a show")
+    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "all", "unall", "split"], default="list", help="Record action. all/unall: record every airing of a show. split: cut finished runs into episodes")
     p_rec.add_argument("target", nargs="?", help="Channel to record or file to delete")
     p_rec.add_argument("duration", nargs="?", help="Optional duration limit (e.g. 30m, 1h, 300s)")
     p_rec.add_argument("--title", default="", help="Program name for the file and the list")
