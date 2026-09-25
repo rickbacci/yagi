@@ -2218,12 +2218,24 @@ BarWidget {
                 readonly property bool ruled: !!root.ruleIds[modelData.id]
                 readonly property var airing: Model.showAiring(modelData)
                 readonly property string oneState: root.hitRecordState(airing)
+                readonly property bool onNow: !!(airing && airing.on_now)
+                readonly property bool willRecord: ruled || oneState !== ""
                 width: stripShowsCol.width
-                implicitHeight: Math.max(showText.implicitHeight, showActions.implicitHeight)
+                implicitHeight: Math.max(showText.implicitHeight, showActions.implicitHeight) + Style.space(4)
+
+                Rectangle {
+                  visible: showRow.willRecord || showRow.onNow
+                  anchors.left: parent.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
+                  width: Style.space(3)
+                  color: showRow.willRecord ? Color.urgent : Color.accent
+                }
 
                 Column {
                   id: showText
                   anchors.left: parent.left
+                  anchors.leftMargin: Style.space(8)
                   anchors.right: showActions.left
                   anchors.rightMargin: Style.space(6)
                   anchors.verticalCenter: parent.verticalCenter
@@ -2233,11 +2245,10 @@ BarWidget {
                     width: parent.width
                     textFormat: Text.PlainText
                     text: showRow.modelData.title || ""
-                    color: showRow.ruled ? Color.accent
-                           : (showRow.modelData.pattern ? root.bar.foreground : Color.muted)
+                    color: showRow.modelData.pattern || showRow.onNow || showRow.willRecord ? root.bar.foreground : Color.muted
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.bodySmall
-                    font.bold: showRow.ruled
+                    font.bold: showRow.onNow || showRow.willRecord
                     elide: Text.ElideRight
                   }
 
@@ -2329,12 +2340,24 @@ BarWidget {
                 required property int index
                 readonly property string recState: root.hitRecordState(modelData)
                 readonly property bool ruled: root.hitRuleId(modelData) !== ""
+                readonly property bool willRecord: ruled || recState !== ""
                 width: stripSearchCol.width
                 implicitHeight: Math.max(hitText.implicitHeight, hitActions.implicitHeight) + Style.space(8)
+
+                Rectangle {
+                  visible: hitRow.willRecord || !!hitRow.modelData.on_now
+                  anchors.left: parent.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
+                  anchors.margins: Style.space(2)
+                  width: Style.space(3)
+                  color: hitRow.willRecord ? Color.urgent : Color.accent
+                }
 
                 Column {
                   id: hitText
                   anchors.left: parent.left
+                  anchors.leftMargin: Style.space(8)
                   anchors.right: hitActions.left
                   anchors.rightMargin: Style.space(6)
                   anchors.verticalCenter: parent.verticalCenter
@@ -2344,10 +2367,10 @@ BarWidget {
                     width: parent.width
                     textFormat: Text.PlainText
                     text: (hitRow.modelData.title || "")
-                    color: hitRow.recState !== "" ? Color.accent : root.bar.foreground
+                    color: root.bar.foreground
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.bodySmall
-                    font.bold: hitRow.recState !== ""
+                    font.bold: hitRow.willRecord || !!hitRow.modelData.on_now
                     elide: Text.ElideRight
                   }
 

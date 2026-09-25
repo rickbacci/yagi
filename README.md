@@ -27,7 +27,7 @@ State: `~/.config/omarchy/tv/`. Library: `~/Videos/TV`. Optional `station_map.js
 This is a DualHD-shaped appliance, not a generic PVR.
 
 - Two ATSC adapters, shared: live TV, recordings, scans, and Guide updates each take a free one. A one-tuner box can watch, or record, not both. Nothing takes a tuner that is live, recording, or scanning; a Guide update gives way.
-- Ad skipping uses Comskip if installed (`yay -S comskip`), otherwise ffmpeg's black-frame and silence detection, which misses more.
+- Ad skipping uses Comskip if installed (`omarchy-pkg-aur-add comskip`), otherwise ffmpeg's black-frame and silence detection, which misses more.
 - First run: no stations until you scan, no Hidden list until you hide one, no Guide titles until `guide refresh` (what the stations send in PSIP). There is no canned Cleveland lineup in the engine.
 - Super+K is Omarchy’s keybindings overlay. It does not open this flyout. Use the antenna, or `omarchy-shell shell toggle richardb.omarchy-tv`.
 - State JSON is not all `0600`.
