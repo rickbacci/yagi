@@ -227,6 +227,7 @@ def _episode_side(side: Dict[str, Any], ep: Dict[str, Any], source: str, lo: int
         "start": int(a),
         "end": int(b),
         "byte_rate": round((hi - lo) / (b - a), 1) if b > a else None,
+        "rule_id": ep.get("rule_id") or side.get("rule_id") or "",
         "status": "complete",
         "split_from": os.path.basename(source),
     })
@@ -257,7 +258,8 @@ def split_recording(path: str) -> List[str]:
     folder = os.path.dirname(path)
     if len(pieces) < 2:
         only = pieces[0][0] if pieces else None
-        patch_sidecar(path, episodes=[], **({"title": only["title"], "synopsis": only.get("synopsis", "")} if only else {}))
+        named = {"title": only["title"], "synopsis": only.get("synopsis", ""), "rule_id": only.get("rule_id") or side.get("rule_id") or ""} if only else {}
+        patch_sidecar(path, episodes=[], **named)
         return [path]
     made: List[str] = []
     for i in range(len(pieces) - 1, -1, -1):

@@ -344,7 +344,7 @@ def cmd_pref(args):
             try:
                 gb = float(value)
             except ValueError:
-                print("Use: omarchy-tv pref library-max auto|20|50|off")
+                print("Use: omarchy-tv pref library-max auto|50|100|250|off")
                 return
             if gb < 0:
                 print("Library cap must be auto, off, or a size in GB.")
@@ -362,7 +362,7 @@ def cmd_pref(args):
             print(f"Recording library cap is {format_bytes(budget)}.")
         return
 
-    print("Unknown pref. Use: omarchy-tv pref filter favorites|watchable|all|hidden | pref library-max auto|20|50|off")
+    print("Unknown pref. Use: omarchy-tv pref filter favorites|watchable|all|hidden | pref library-max auto|50|100|250|off")
 
 
 def cmd_favorite(args):
@@ -680,6 +680,28 @@ def cmd_record(args):
         for item in arm_rules(load_guide().get("channels") or {}):
             print(f"Queued {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
 
+    elif action == "limit":
+        from engine.rules import set_keep_last
+        try:
+            keep = int(args.duration or 0)
+        except ValueError:
+            keep = -1
+        if not args.target or keep < 0 or not set_keep_last(args.target, keep):
+            print("Use: omarchy-tv record limit <show id> <how many to keep, 0 for all>")
+            sys.exit(1)
+        DvrManager.refresh_library_index()
+        print(f"Keeping the newest {keep} episodes." if keep else "Keeping every episode.")
+
+    elif action in ("keep", "unkeep"):
+        if not args.target:
+            print("Error: Name the recording.")
+            sys.exit(1)
+        file_path = args.target if os.path.isabs(args.target) else os.path.join(RECORDINGS_DIR, args.target)
+        if not DvrManager.set_keep(file_path, action == "keep"):
+            print(f"File not found: {args.target}")
+            sys.exit(1)
+        print("Kept. The size limit will not delete it." if action == "keep" else "The size limit may delete it again.")
+
     elif action == "unall":
         from engine.rules import remove_rule
         if not args.target or not remove_rule(args.target):
@@ -729,10 +751,12 @@ def cmd_record(args):
             except Exception as exc:
                 print(f"Waiting. {chosen.get('title') or 'That show'} did not start: {exc}")
             else:
+                rule_ids = {str(row.get("rule_id") or "") for row in run}
                 patch_sidecar(
                     session.file_path,
                     episodes=[episode_of(row) for row in run],
                     queue_tune=chosen.get("tune_name") or "",
+                    rule_id=rule_ids.pop() if len(rule_ids) == 1 else "",
                 )
                 for row in run:
                     drop_item(str(row.get("id") or ""))
@@ -866,7 +890,7 @@ def main():
 
     # record / dvr
     p_rec = subparsers.add_parser("record", aliases=["dvr", "rec"], help="DVR recording control")
-    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "all", "unall", "finish"], default="list", help="Record action. all/unall: record every airing of a show. finish: split finished runs into episodes and mark ad breaks")
+    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "all", "unall", "finish", "limit", "keep", "unkeep"], default="list", help="Record action. all/unall: record every airing of a show. limit: keep the newest N of a show. keep/unkeep: shield a recording from the size limit. finish: split runs and mark ad breaks")
     p_rec.add_argument("target", nargs="?", help="Channel to record or file to delete")
     p_rec.add_argument("duration", nargs="?", help="Optional duration limit (e.g. 30m, 1h, 300s)")
     p_rec.add_argument("--title", default="", help="Program name for the file and the list")

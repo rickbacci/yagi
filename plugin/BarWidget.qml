@@ -78,6 +78,7 @@ BarWidget {
   readonly property bool guideRefreshing: root.guideRefreshStarted || root.guideStatusRunning
   property var showItems: []
   property var ruleIds: ({})
+  property var ruleKeep: ({})
   property string showBucket: Model.bucketNow()
   readonly property var guideShowRows: Model.filterShows(root.showItems, root.showBucket)
   property var scheduleItems: []
@@ -157,14 +158,19 @@ BarWidget {
 
   function applyRules(raw) {
     var ids = {}
+    var keep = {}
     try {
       var rules = (JSON.parse(raw || "{}").rules) || []
       for (var i = 0; i < rules.length; i++) {
-        if (rules[i] && rules[i].id) ids[rules[i].id] = true
+        if (rules[i] && rules[i].id) {
+          ids[rules[i].id] = true
+          keep[rules[i].id] = Number(rules[i].keep_last) || 0
+        }
       }
     } catch (e) {
     }
     root.ruleIds = ids
+    root.ruleKeep = keep
   }
 
   function toggleRecordAll(show) {
@@ -617,10 +623,12 @@ BarWidget {
   function cycleLibraryCap() {
     var cur = root.libraryMaxGb
     var next = "auto"
-    if (cur === "auto" || cur === undefined || cur === null || cur === "") next = "20"
-    else if (cur === 20 || cur === "20") next = "50"
-    else if (cur === 50 || cur === "50") next = "off"
-    else next = "auto"
+    if (cur === "auto" || cur === undefined || cur === null || cur === "") next = "50"
+    else if (cur === 0 || cur === "0" || cur === "off") next = "auto"
+    else if (Number(cur) < 50) next = "50"
+    else if (Number(cur) < 100) next = "100"
+    else if (Number(cur) < 250) next = "250"
+    else next = "off"
     prefsProc.running = false
     prefsProc.command = [root.binPath, "pref", "library-max", next]
     prefsProc.running = true
@@ -628,10 +636,30 @@ BarWidget {
 
   function libraryCapButtonText() {
     var cur = root.libraryMaxGb
-    if (cur === 0 || cur === "0" || cur === "off") return "Cap off"
-    if (cur === 20 || cur === "20") return "20 GB"
-    if (cur === 50 || cur === "50") return "50 GB"
-    return "Auto cap"
+    if (cur === 0 || cur === "0" || cur === "off") return "No limit"
+    if (cur === "auto" || cur === undefined || cur === null || cur === "") return "Limit: auto"
+    return "Limit: " + cur + " GB"
+  }
+
+  function setRecordingKept(rec, keep) {
+    if (!rec) return
+    dvrProc.running = false
+    dvrProc.command = [root.binPath, "record", keep ? "keep" : "unkeep", rec.path || rec.name]
+    dvrProc.running = true
+  }
+
+  function cycleShowLimit(show) {
+    if (!show || !root.ruleIds[show.id]) return
+    var cur = root.ruleKeep[show.id] || 0
+    var next = cur === 0 ? 10 : (cur === 10 ? 30 : 0)
+    ruleProc.running = false
+    ruleProc.command = [root.binPath, "record", "limit", show.id, String(next)]
+    ruleProc.running = true
+  }
+
+  function showLimitText(show) {
+    var n = (show && root.ruleKeep[show.id]) || 0
+    return n ? "Keep " + n : "Keep all"
   }
 
   function applyChannels(jsonText) {
@@ -2036,7 +2064,7 @@ BarWidget {
                 Column {
                   id: showText
                   anchors.left: parent.left
-                  anchors.right: showRecord.left
+                  anchors.right: showLimit.visible ? showLimit.left : showRecord.left
                   anchors.rightMargin: Style.space(6)
                   anchors.verticalCenter: parent.verticalCenter
                   spacing: Style.space(1)
@@ -2062,6 +2090,19 @@ BarWidget {
                     font.pixelSize: Style.font.caption
                     elide: Text.ElideRight
                   }
+                }
+
+                Button {
+                  id: showLimit
+                  visible: showRow.ruled
+                  anchors.right: showRecord.left
+                  anchors.rightMargin: Style.space(4)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.showLimitText(showRow.modelData)
+                  tooltipText: "How many episodes to keep. Older ones are deleted"
+                  fontSize: Style.font.caption
+                  foreground: root.bar.foreground
+                  onClicked: root.cycleShowLimit(showRow.modelData)
                 }
 
                 Button {
@@ -2630,7 +2671,7 @@ BarWidget {
                   Column {
                     anchors.left: parent.left
                     anchors.leftMargin: Style.space(6)
-                    anchors.right: recDeleteBtn.left
+                    anchors.right: recKeepBtn.left
                     anchors.rightMargin: Style.space(8)
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: Style.space(2)
@@ -2651,6 +2692,7 @@ BarWidget {
                       text: ((recRow.modelData.channel_number || recRow.modelData.station)
                         ? ((recRow.modelData.channel_number || "") + " " + (recRow.modelData.station || "") + " · ")
                         : "") + (recRow.modelData.date_formatted || "") + " · " + (recRow.modelData.size_formatted || "")
+                        + (recRow.modelData.ads > 0 ? " · skips " + recRow.modelData.ads + (recRow.modelData.ads === 1 ? " ad break" : " ad breaks") : "")
                         + (recRow.modelData.playable === false ? " · empty dump" : "")
                       color: Color.muted
                       font.family: root.bar.fontFamily
@@ -2658,6 +2700,19 @@ BarWidget {
                       elide: Text.ElideRight
                       width: parent.width
                     }
+                  }
+
+                  PanelActionButton {
+                    id: recKeepBtn
+                    anchors.right: recDeleteBtn.left
+                    anchors.rightMargin: Style.space(2)
+                    anchors.verticalCenter: parent.verticalCenter
+                    iconText: recRow.modelData.keep ? "\uf023" : "\uf09c"
+                    tooltipText: recRow.modelData.keep ? "Kept. Click to let the size limit delete it" : "Keep. The size limit will never delete it"
+                    foreground: recRow.modelData.keep ? Color.accent : Color.muted
+                    hoverColor: root.bar.foreground
+                    fontFamily: root.bar.fontFamily
+                    onClicked: root.setRecordingKept(recRow.modelData, !recRow.modelData.keep)
                   }
 
                   PanelActionButton {

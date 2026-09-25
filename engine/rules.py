@@ -96,10 +96,27 @@ def add_rule(
                 rule["handled"] = list(old.get("handled") or [])
                 rule["seen"] = list(old.get("seen") or [])
                 rule["created"] = old.get("created") or rule["created"]
+                if old.get("keep_last"):
+                    rule["keep_last"] = old["keep_last"]
         rules = [r for r in rules if r.get("id") != ident]
         rules.append(rule)
         save_rules(rules, target)
     return rule
+
+
+def set_keep_last(rule_id: str, keep: int, path: Optional[str] = None) -> bool:
+    """Keep only the newest keep episodes of this show. 0 keeps all."""
+    target = path or RULES_PATH
+    with state_lock(target):
+        rules = load_rules(target)
+        hit = False
+        for rule in rules:
+            if rule.get("id") == rule_id:
+                rule["keep_last"] = max(0, int(keep))
+                hit = True
+        if hit:
+            save_rules(rules, target)
+    return hit
 
 
 def remove_rule(rule_id: str, path: Optional[str] = None) -> bool:

@@ -18,6 +18,7 @@ from engine.dvr import (
     disk_below_floor,
     stop_reason,
     read_sidecar,
+    write_sidecar,
     DvrSession,
     DvrManager,
     GIB,
@@ -165,11 +166,11 @@ class TestDvrEngine(unittest.TestCase):
             self.assertFalse(payload["recordings"][0]["playable"])
             self.assertIn("library_budget_bytes", payload)
 
-    def test_default_library_budget_is_small_on_large_disks(self):
+    def test_default_library_budget_is_100_gb_on_large_disks(self):
         usage = MagicMock(total=2 * 1024**4, used=1024**4, free=1024**4)
         with tempfile.TemporaryDirectory() as tmp_dir:
             with patch("engine.dvr.shutil.disk_usage", return_value=usage):
-                self.assertEqual(default_library_budget_bytes(tmp_dir), 20 * GIB)
+                self.assertEqual(default_library_budget_bytes(tmp_dir), 100 * GIB)
 
     def test_default_library_budget_shrinks_on_tight_disks(self):
         usage = MagicMock(total=32 * GIB, used=26 * GIB, free=6 * GIB)
@@ -194,11 +195,77 @@ class TestDvrEngine(unittest.TestCase):
                 removed = DvrManager.enforce_library_budget(
                     recordings_dir=tmp_dir,
                     active_path=os.path.join(tmp_dir, "active.json"),
+                    rules_path=os.path.join(tmp_dir, "rules.json"),
                 )
             self.assertEqual(removed, [paths[0]])
             self.assertFalse(os.path.exists(paths[0]))
             self.assertTrue(os.path.exists(paths[1]))
             self.assertTrue(os.path.exists(paths[2]))
+
+    def _library(self, tmp_dir, rows):
+        paths = {}
+        for i, (name, size, side) in enumerate(rows):
+            path = os.path.join(tmp_dir, name)
+            with open(path, "wb") as f:
+                f.write(b"x" * size)
+            if side is not None:
+                write_sidecar(path, side)
+            os.utime(path, (1000 + i, 1000 + i))
+            paths[name] = path
+        return paths
+
+    def _prune(self, tmp_dir, budget):
+        with patch("engine.dvr.resolve_library_budget_bytes", return_value=budget):
+            return DvrManager.enforce_library_budget(
+                recordings_dir=tmp_dir,
+                active_path=os.path.join(tmp_dir, "active.json"),
+                rules_path=os.path.join(tmp_dir, "rules.json"),
+            )
+
+    def test_series_episodes_go_before_a_game_you_recorded(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            p = self._library(tmp_dir, [
+                ("game.ts", 5000, {"status": "complete"}),
+                ("mash1.ts", 2000, {"status": "complete", "rule_id": "mash"}),
+                ("mash2.ts", 2000, {"status": "complete", "rule_id": "mash"}),
+                ("mash3.ts", 2000, {"status": "complete", "rule_id": "mash"}),
+            ])
+            removed = self._prune(tmp_dir, 9000)
+            self.assertEqual(removed, [p["mash1.ts"]])
+            self.assertTrue(os.path.exists(p["game.ts"]))
+
+    def test_kept_and_newest_are_never_deleted(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            p = self._library(tmp_dir, [
+                ("kept.ts", 5000, {"status": "complete", "keep": True}),
+                ("other.ts", 3000, {"status": "complete"}),
+                ("huge_game.ts", 30000, {"status": "complete"}),
+            ])
+            removed = self._prune(tmp_dir, 1000)
+            self.assertEqual(removed, [p["other.ts"]])
+            self.assertTrue(os.path.exists(p["kept.ts"]))
+            self.assertTrue(os.path.exists(p["huge_game.ts"]))
+
+    def test_a_show_keeps_only_its_newest(self):
+        from engine.rules import save_rules
+        from engine.shows import show_id
+
+        rid = show_id("mash", "19.2")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            save_rules([{"id": rid, "key": "mash", "channel": "19.2", "keep_last": 2}], os.path.join(tmp_dir, "rules.json"))
+            p = self._library(tmp_dir, [
+                (f"mash{i}.ts", 100, {"status": "complete", "rule_id": rid, "start": 100 + i}) for i in range(4)
+            ] + [("kept.ts", 100, {"status": "complete", "rule_id": rid, "keep": True, "start": 1})])
+            removed = self._prune(tmp_dir, None)
+            self.assertEqual(sorted(removed), [p["mash0.ts"], p["mash1.ts"]])
+            self.assertTrue(os.path.exists(p["kept.ts"]))
+
+    def test_set_keep_marks_the_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            p = self._library(tmp_dir, [("show.ts", 100, {"status": "complete"})])
+            self.assertTrue(DvrManager.set_keep(p["show.ts"], True, recordings_dir=tmp_dir))
+            self.assertTrue(DvrManager.list_recordings(recordings_dir=tmp_dir)[0]["keep"])
+            self.assertFalse(DvrManager.set_keep(os.path.join(tmp_dir, "..", "x.ts"), True, recordings_dir=tmp_dir))
 
     def test_enforce_library_budget_does_not_follow_symlinks(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -215,12 +282,17 @@ class TestDvrEngine(unittest.TestCase):
             with open(old, "wb") as f:
                 f.write(b"x" * 3000)
             os.utime(old, (1000, 1000))
+            new = os.path.join(lib, "new.ts")
+            with open(new, "wb") as f:
+                f.write(b"x" * 10)
+            os.utime(new, (2000, 2000))
             names = [item["name"] for item in DvrManager.list_recordings(recordings_dir=lib)]
-            self.assertEqual(names, ["old.ts"])
+            self.assertEqual(names, ["new.ts", "old.ts"])
             with patch("engine.dvr.resolve_library_budget_bytes", return_value=100):
                 removed = DvrManager.enforce_library_budget(
                     recordings_dir=lib,
                     active_path=os.path.join(lib, "active.json"),
+                    rules_path=os.path.join(lib, "rules.json"),
                 )
             self.assertEqual(removed, [old])
             self.assertFalse(os.path.exists(old))

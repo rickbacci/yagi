@@ -51,7 +51,7 @@ def format_bytes(bytes_count: int) -> str:
 # PAT/PMT-only dumps are ~4 KB. Real ATSC MPEG-TS grows by megabytes per second.
 MIN_PLAYABLE_BYTES = 256 * 1024
 GIB = 1024 ** 3
-DEFAULT_LIBRARY_BUDGET_GIB = 20
+DEFAULT_LIBRARY_BUDGET_GIB = 100
 MIN_LIBRARY_BUDGET_GIB = 2
 KEEP_FREE_GIB = 8
 # A locked ATSC dump passes this quickly. PAT/PMT alone does not.
@@ -78,7 +78,7 @@ def load_ui_prefs(prefs_path: Optional[str] = None) -> Dict[str, Any]:
 
 
 def default_library_budget_bytes(recordings_dir: str) -> int:
-    """Small starting cap: 20 GB, shrunk when the volume is tight."""
+    """100 GB, about three HD games, shrunk when the volume is small or tight."""
     try:
         ensure_private_dir(recordings_dir)
         usage = shutil.disk_usage(recordings_dir)
@@ -819,6 +819,9 @@ class DvrManager:
                         "full_mux": bool(side.get("full_mux")) if side else False,
                         "start": side.get("start"),
                         "end": side.get("end"),
+                        "keep": bool(side.get("keep")),
+                        "rule_id": str(side.get("rule_id") or ""),
+                        "ads": len(side.get("ads") or []),
                     })
                 except OSError:
                     continue
@@ -833,12 +836,16 @@ class DvrManager:
         prefs: Optional[Dict[str, Any]] = None,
         keep_paths: Optional[Set[str]] = None,
         active_path: Optional[str] = None,
+        rules_path: Optional[str] = None,
     ) -> List[str]:
-        """Deletes oldest finished recordings until the library is within cap."""
+        """Make room. A show's keep-newest limit goes first, then the size cap.
+
+        The cap deletes Record all episodes before anything you recorded by hand,
+        oldest first. It never deletes a kept recording, one still recording, or
+        the newest one, even when that one alone is over the cap.
+        """
         rec_dir = recordings_dir or RECORDINGS_DIR
         budget = resolve_library_budget_bytes(rec_dir, prefs=prefs)
-        if budget is None:
-            return []
 
         protected: Set[str] = set()
         for path in keep_paths or []:
@@ -854,39 +861,63 @@ class DvrManager:
                     continue
 
         recordings = cls.list_recordings(recordings_dir=rec_dir)
-        used = sum(item["size_bytes"] for item in recordings)
-        if used <= budget:
-            return []
-
+        if recordings:
+            newest = max(recordings, key=lambda rec: rec.get("mtime") or 0)
+            try:
+                protected.add(os.path.realpath(newest.get("path") or ""))
+            except OSError:
+                pass
         rec_real = os.path.realpath(rec_dir)
-        removed: List[str] = []
         quiet_before = time.time() - PRUNE_QUIET_SECS
-        for item in sorted(recordings, key=lambda rec: rec.get("mtime") or 0):
-            if used <= budget:
-                break
-            if float(item.get("mtime") or 0) > quiet_before:
-                continue
+
+        def remove(item: Dict[str, Any]) -> bool:
+            if item.get("keep") or float(item.get("mtime") or 0) > quiet_before:
+                return False
             path = item.get("path") or ""
             try:
                 if os.path.islink(path):
-                    continue
+                    return False
                 real_path = os.path.realpath(path)
-                if os.path.commonpath([rec_real, real_path]) != rec_real:
-                    continue
-            except (OSError, ValueError):
-                continue
-            if real_path in protected:
-                continue
-            try:
+                if os.path.commonpath([rec_real, real_path]) != rec_real or real_path in protected:
+                    return False
                 os.remove(path)
-            except OSError:
-                continue
+            except (OSError, ValueError):
+                return False
             try:
                 os.remove(sidecar_path(path))
             except OSError:
                 pass
-            used -= int(item.get("size_bytes") or 0)
-            removed.append(path)
+            return True
+
+        removed: List[str] = []
+        from engine.rules import load_rules
+
+        limits = {
+            str(rule.get("id")): int(rule.get("keep_last") or 0)
+            for rule in load_rules(rules_path)
+            if int(rule.get("keep_last") or 0) > 0
+        }
+        for rule_id, keep in limits.items():
+            mine = sorted(
+                [rec for rec in recordings if rec.get("rule_id") == rule_id and not rec.get("keep")],
+                key=lambda rec: rec.get("start") or rec.get("mtime") or 0,
+                reverse=True,
+            )
+            for item in mine[keep:]:
+                if remove(item):
+                    removed.append(item["path"])
+        recordings = [rec for rec in recordings if rec.get("path") not in removed]
+
+        if budget is None:
+            return removed
+        used = sum(item["size_bytes"] for item in recordings)
+        order = sorted(recordings, key=lambda rec: (0 if rec.get("rule_id") else 1, rec.get("mtime") or 0))
+        for item in order:
+            if used <= budget:
+                break
+            if remove(item):
+                used -= int(item.get("size_bytes") or 0)
+                removed.append(item["path"])
         return removed
 
     @classmethod
@@ -926,6 +957,18 @@ class DvrManager:
                 except OSError:
                     pass
         return recordings
+
+    @classmethod
+    def set_keep(cls, file_path: str, keep: bool, recordings_dir: Optional[str] = None) -> bool:
+        """A kept recording is never deleted to make room."""
+        rec_dir = os.path.realpath(recordings_dir or RECORDINGS_DIR)
+        real_file = os.path.realpath(file_path)
+        if os.path.commonpath([rec_dir, real_file]) != rec_dir or not os.path.isfile(real_file):
+            return False
+        patch_sidecar(real_file, keep=bool(keep))
+        if recordings_dir is None or os.path.realpath(recordings_dir) == os.path.realpath(RECORDINGS_DIR):
+            cls.refresh_library_index(recordings_dir=recordings_dir)
+        return True
 
     @classmethod
     def delete_recording(cls, file_path: str, recordings_dir: Optional[str] = None) -> bool:
