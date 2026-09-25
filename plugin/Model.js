@@ -11,22 +11,6 @@ function cleanChannelName(name) {
   return name.replace(/_/g, " ").trim();
 }
 
-function bandColor(band, accent, foreground, muted) {
-  if (band === "UHF") return accent
-  if (band === "VHF-High") return muted || foreground
-  if (band === "VHF-Low") return foreground
-  return foreground
-}
-
-function networkColor(network, accent, urgent, muted, foreground) {
-  var n = String(network || "").toUpperCase()
-  if (n === "NBC" || n === "CW" || n === "PBS") return accent
-  if (n === "FOX" || n === "UNIVISION") return urgent
-  if (n === "CBS") return muted || foreground
-  if (n === "ABC") return foreground
-  return accent
-}
-
 function minutesNow() {
   var d = new Date()
   return d.getHours() * 60 + d.getMinutes()

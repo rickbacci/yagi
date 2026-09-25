@@ -2625,7 +2625,7 @@ BarWidget {
                 readonly property real progress: Model.airingProgress(chItem.onNow, root.guideClockMin)
                 readonly property string stationName: Model.getDisplayTitle(modelData)
                 readonly property string channelBadge: Model.getChannelBadge(modelData)
-                readonly property color netColor: Model.networkColor(modelData.network, Color.accent, Color.urgent, Color.muted, root.bar.foreground)
+                readonly property bool isRecordingHere: root.isChannelRecording(modelData.tune_name || modelData.channel_number)
                 readonly property bool isFav: root.isFavorite(modelData.name) || (modelData.tune_name && root.isFavorite(modelData.tune_name))
 
                 width: channelListView.width
@@ -2636,11 +2636,12 @@ BarWidget {
                 current: isCurrent
 
                 Rectangle {
+                  visible: chItem.isRecordingHere || (root.liveOn && chItem.isCurrent)
                   anchors.left: parent.left
                   anchors.top: parent.top
                   anchors.bottom: parent.bottom
                   width: Style.space(3)
-                  color: chItem.netColor
+                  color: chItem.isRecordingHere ? Color.urgent : Color.accent
                 }
 
                 MouseArea {
