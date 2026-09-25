@@ -225,10 +225,22 @@ function _neighborShow(prog) {
   }
 }
 
+function _hasWord(text, word) {
+  var at = text.indexOf(word)
+  while (at !== -1) {
+    if (at === 0 || !/[a-z0-9]/.test(text.charAt(at - 1))) return true
+    at = text.indexOf(word, at + 1)
+  }
+  return false
+}
+
+// Games list as "NFL Football" with the teams only in the description, so a
+// title miss still counts when every word is in the description.
 function searchGuide(guideData, query, nowMin) {
   var words = String(query || "").toLowerCase().split(/\s+/).filter(function(w) { return w })
   if (words.join(" ").length < 2 || !guideData) return []
   var now = (nowMin === undefined || nowMin === null || nowMin < 0) ? minutesNow() : nowMin
+  var nowUnix = Date.now() / 1000
   var hits = []
   for (var num in guideData) {
     var row = guideData[num]
@@ -238,13 +250,19 @@ function searchGuide(guideData, query, nowMin) {
     for (i = 0; i < programs.length; i++) {
       var prog = programs[i]
       var title = String((prog && prog.title) || "")
+      if (!title || isFillerTitle(title)) continue
+      var began = programUnix(prog)
+      if (began > 0 && began + (Number(prog.duration_sec) || 1800) <= nowUnix) continue
       var folded = title.toLowerCase()
-      var ok = !!title && !isFillerTitle(title)
+      var about = String((prog && prog.synopsis) || "").toLowerCase()
+      var inTitle = true
+      var inAbout = !!about
       var w
       for (w = 0; w < words.length; w++) {
-        if (folded.indexOf(words[w]) === -1) ok = false
+        if (!_hasWord(folded, words[w])) inTitle = false
+        if (!_hasWord(folded, words[w]) && !_hasWord(about, words[w])) inAbout = false
       }
-      if (!ok) continue
+      if (!inTitle && !inAbout) continue
       var block = {
         title: title,
         start: prog.start || "",
@@ -266,6 +284,8 @@ function searchGuide(guideData, query, nowMin) {
         network: row.network || "",
         display_name: row.display_name || "",
         title: title,
+        synopsis: block.synopsis,
+        by_title: inTitle,
         start: block.start,
         end: block.end,
         gps_start: Number(prog.gps_start) || 0,
@@ -322,6 +342,17 @@ function showSubLine(show) {
   var n = show.next
   if (n) parts.push((n.on_now ? "on now" : "next " + (n.day || "") + " " + (n.clock || "")).trim())
   return parts.filter(function(p) { return p }).join(" · ")
+}
+
+// Live games run past their slot. The pregame and postgame shows do not.
+function gameExtraMin() {
+  return 45
+}
+
+function isGameTitle(title) {
+  var t = String(title || "").toLowerCase()
+  if (/pregame|postgame|kickoff|today|tonight|countdown|review|highlights|preview/.test(t)) return false
+  return /\b(football|baseball|basketball|hockey|soccer)\b|^(nfl|nba|mlb|nhl|mls|ncaa)\b/.test(t)
 }
 
 var FILLER_TITLES = ["paid programming", "paid program", "programa pagado", "to be announced"]

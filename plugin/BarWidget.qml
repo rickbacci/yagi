@@ -203,7 +203,7 @@ BarWidget {
     if (!show || !show.tune_name || !show.gps_start) return
     var dur = Math.max(60, Number(show.duration_sec) || 1800)
     schedProc.running = false
-    schedProc.command = [
+    var cmd = [
       root.binPath, "record", "later", show.tune_name, String(dur),
       "--title", show.title || "Scheduled",
       "--gps", String(show.gps_start),
@@ -211,7 +211,33 @@ BarWidget {
       "--end-clock", show.end || "",
       "--display-name", show.display_name || show.tune_name
     ]
+    if (Model.isGameTitle(show.title)) cmd.push("--extra", Model.gameExtraMin() + "m")
+    schedProc.command = cmd
     schedProc.running = true
+  }
+
+  function scheduledId(show) {
+    if (!show || !show.tune_name || !show.gps_start) return ""
+    var ident = show.tune_name + "-" + show.gps_start
+    var items = root.scheduleItems || []
+    for (var i = 0; i < items.length; i++) {
+      if (items[i] && items[i].id === ident) return ident
+    }
+    return ""
+  }
+
+  function hitRecordState(show) {
+    if (!show) return ""
+    if (show.on_now && root.isChannelRecording(show.tune_name)) return "recording"
+    if (root.scheduledId(show)) return "scheduled"
+    return ""
+  }
+
+  function toggleHitRecord(show) {
+    var state = root.hitRecordState(show)
+    if (state === "recording") root.stopRecord(show.tune_name)
+    else if (state === "scheduled") root.removeScheduled(root.scheduledId(show))
+    else root.useStripShow(show)
   }
 
   function removeScheduled(itemId) {
@@ -231,6 +257,7 @@ BarWidget {
     if (onNow) {
       if (root.tuner1Busy) return
       var left = Model.recordDurationArg(show, root.guideClockMin)
+      if (left && Model.isGameTitle(show.title)) left = (parseInt(left, 10) + Model.gameExtraMin()) + "m"
       root.startRecord(show.tune_name, left, show.title || "")
       return
     }
@@ -2140,33 +2167,90 @@ BarWidget {
             Repeater {
               model: root.guideSearchHits
               delegate: Item {
+                id: hitRow
                 required property var modelData
                 required property int index
+                readonly property string recState: root.hitRecordState(modelData)
                 width: stripSearchCol.width
-                implicitHeight: stripSearchLine.implicitHeight + Style.space(8)
+                implicitHeight: Math.max(hitText.implicitHeight, hitRecord.implicitHeight) + Style.space(8)
 
-                MouseArea {
-                  anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.useStripShow(modelData)
+                Column {
+                  id: hitText
+                  anchors.left: parent.left
+                  anchors.right: hitWatch.visible ? hitWatch.left : hitRecord.left
+                  anchors.rightMargin: Style.space(6)
+                  anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(1)
+
+                  Text {
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: (hitRow.modelData.title || "")
+                    color: hitRow.recState !== "" ? Color.accent : root.bar.foreground
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: hitRow.recState !== ""
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: [
+                      hitRow.modelData.channel_number || "",
+                      hitRow.modelData.display_name || hitRow.modelData.station || "",
+                      hitRow.modelData.on_now ? "on now" : (hitRow.modelData.start || ""),
+                      hitRow.modelData.by_title ? "" : (hitRow.modelData.synopsis || "")
+                    ].filter(function(p) { return p }).join(" · ")
+                    color: Color.muted
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
                 }
 
-                Text {
-                  id: stripSearchLine
-                  width: parent.width
-                  textFormat: Text.PlainText
-                  text: (modelData.display_name || modelData.tune_name || modelData.channel_number || "")
-                        + "  " + (modelData.title || "")
-                        + (modelData.start ? "  " + modelData.start : "")
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  elide: Text.ElideRight
+                Button {
+                  id: hitWatch
+                  visible: !!hitRow.modelData.on_now
+                  anchors.right: hitRecord.left
+                  anchors.rightMargin: Style.space(4)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Watch"
+                  tooltipText: "Watch this channel now"
+                  fontSize: Style.font.caption
+                  foreground: root.bar.foreground
+                  onClicked: root.selectChannel(hitRow.modelData.tune_name || hitRow.modelData.channel_number)
+                }
+
+                Button {
+                  id: hitRecord
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: hitRow.recState === "recording" ? "Recording"
+                        : (hitRow.recState === "scheduled" ? "Scheduled" : "Record")
+                  tooltipText: hitRow.recState === "recording" ? "Stop this recording"
+                        : (hitRow.recState === "scheduled" ? "Don't record this"
+                        : (hitRow.modelData.on_now ? "Record the rest of this show" : "Record this when it airs"))
+                  selected: hitRow.recState !== ""
+                  enabled: hitRow.recState !== "" || !hitRow.modelData.on_now || !root.tuner1Busy
+                  fontSize: Style.font.caption
+                  foreground: root.bar.foreground
+                  onClicked: root.toggleHitRecord(hitRow.modelData)
                 }
               }
             }
           }
+        }
+
+        Text {
+          visible: root.guideSearchActive && root.guideSearchHits.length === 0
+          width: parent.width
+          textFormat: Text.PlainText
+          text: "Nothing listed matches. Stations only list the next few hours, so search again closer to air time."
+          color: Color.muted
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
         }
 
         Text {
