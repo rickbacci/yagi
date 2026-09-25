@@ -8,7 +8,7 @@ Do not match the timeshift path in process args; that kills the PiP.
 
 Bars stay up until the first frame. A channel click keeps the window and blacks the picture until the new frame. mpv reopens the tuner and locks again for every station. j and k change channel. Left and right skip.
 
-Guide is Tuner 1 EIT only, every 3h, never inside 10 min of a recording. Listings reach ~5h. Rescan rewrites the lineup; each Guide read fixes PIDs from the PMT. All = not hidden.
+Guide is broadcast EIT only, every 3h on a free tuner; it yields to live at once. Listings reach ~5h. Network names are a hand-typed Cleveland map, not broadcast. Rescan rewrites the lineup; each Guide read fixes PIDs from the PMT. All = not hidden.
 
 Tests: `TMPDIR=/home/richardb/.cache/omarchy/tv-test-tmp`, `XDG_RUNTIME_DIR` set. Never `/tmp`.
 

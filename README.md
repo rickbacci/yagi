@@ -5,7 +5,7 @@
 
 OTA ATSC 1.0 for Omarchy: bar plugin, pinned PiP, dual-tuner record. Not MythTV, not Kaffeine.
 
-Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts. `omarchy-tv guide refresh` reads that on Tuner 1 into the flyout strip. Search looks at those saved titles. Record on Tuner 1 into `~/Videos/TV` while Tuner 0 keeps the live dump. Pause-live is that dump, read once through a fifo. Skip seeks inside the same window. Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
+Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts; the record timer reads it on a free tuner every few hours. Search looks at titles and descriptions. Record into `~/Videos/TV` on whichever tuner is free, one show or every airing (Record all); back-to-back episodes split into one file each and ad breaks are skipped on playback. Pause-live is the live dump, read once through a fifo. Skip seeks inside the same window. Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
 
 Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `omarchy-tv`.
 
@@ -26,7 +26,8 @@ State: `~/.config/omarchy/tv/`. Library: `~/Videos/TV`. Optional `station_map.js
 
 This is a DualHD-shaped appliance, not a generic PVR.
 
-- Two ATSC adapters. Tuner 0 is only the live dump. Tuner 1 is only scan, Guide, and library record. A one-tuner box can watch. It cannot record, scan, or refresh the Guide while that dump is up, and those jobs will not steal tuner 0.
+- Two ATSC adapters, shared: live TV, recordings, scans, and Guide updates each take a free one. A one-tuner box can watch, or record, not both. Nothing takes a tuner that is live, recording, or scanning; a Guide update gives way.
+- Ad skipping uses Comskip if installed (`yay -S comskip`), otherwise ffmpeg's black-frame and silence detection, which misses more.
 - First run: no stations until you scan, no Hidden list until you hide one, no Guide titles until `guide refresh` (what the stations send in PSIP). There is no canned Cleveland lineup in the engine.
 - Super+K is Omarchy’s keybindings overlay. It does not open this flyout. Use the antenna, or `omarchy-shell shell toggle richardb.omarchy-tv`.
 - State JSON is not all `0600`.
@@ -95,7 +96,7 @@ o.window("omarchy-tv", {
 hyprctl reload && hyprctl configerrors
 ```
 
-Scan from the bar (or `omarchy-tv scan`), pick a station. **Close TV** brings the list back. Then `omarchy-tv guide refresh` when tuner 1 is free.
+Scan from the bar (or `omarchy-tv scan`), pick a station. Then `omarchy-tv guide refresh`, or let the record timer do it.
 
 Optional, this RF map only:
 
@@ -110,8 +111,10 @@ cp markets/cleveland.json ~/.config/omarchy/tv/station_map.json
 omarchy-tv status | scan | scan --full | list | guide | guide refresh | guide search Browns
 omarchy-tv play "8.1 FOX" | next | prev | stop | sync | pause | live | seek 10 | fullscreen
 omarchy-tv record start 8.1 1h | stop | list | play <file> | delete <file>
+omarchy-tv record all <station> --title "M*A*S*H" --channel 19.2 | unall <id> | limit <id> 30
+omarchy-tv record keep <file> | unkeep <file> | finish | due
 omarchy-tv favorite toggle "8.1 FOX"
-omarchy-tv pref filter favorites|watchable|all|hidden | pref library-max auto|20|50|off
+omarchy-tv pref filter favorites|all|hidden | pref library-max auto|50|100|250|off
 omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
 ```
 
@@ -122,9 +125,11 @@ omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
 | Key | Live TV | Recording |
 | --- | --- | --- |
 | Space | Pause (writer stops an hour ahead); play stays behind until `l` | Pause / resume |
-| ← / → | Skip 10s (inside the last 10s, → is live) | Skip; last hop retunes live |
+| ← / → | Skip 10s (inside the last 10s, → is live) | Skip; ad breaks jump once, ← goes back into one |
+| j / k | Channel down / up | ignored |
 | l | Live write head (same window) | Return to live (new dump) |
-| r | Library record | ignored |
+| r | Record this station | ignored |
+| y | Save the paused stretch to Recordings | ignored |
 | Super+F | Fullscreen (unpins first) | same |
 | c | Captions | same |
 | m / middle-click | Mute this window | same |

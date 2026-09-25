@@ -11,25 +11,28 @@ description: >
 
 Project `~/Projects/personal/omarchy-tv`. CLI `omarchy-tv` (`PATH` or `bin/`). Rules: `AGENTS.md`. Facts: `MEMORY.md`.
 
-**Play path:** Tuner 0 dumps `live.ts`. Detached `follow_ts` copies it onto a fifo. The window reads that fifo once as `fd://0` (one read end; opening the path steals a non-aligned prefix). Channel change is the only `loadfile`, and it opens near the live edge and catches up. Skip and live SEEK the control socket. Pause freezes the cursor. Play behind paces at the measured dump rate, and that gap holds until you skip. mpv keeps a few seconds of readahead so the picture does not starve. A skip marks a TS discontinuity and then `drop-buffers` so that readahead is not the old picture. The HUD does not send `drop-buffers`. Behind is file end minus the live cursor, at that rate. The back arrow seeks from the live cursor. HUD `play` must not quit this mpv. One window.
+**Tuners** are one pool (`engine/pool.py`): live prefers 0, work prefers 1, a Guide update gives way. `omarchy-tv status` shows both.
+
+**Play path:** The live tuner dumps `live.ts`. Detached `follow_ts` copies it onto a fifo. The window reads that fifo once as `fd://0` (one read end; opening the path steals a non-aligned prefix). Channel change is the only `loadfile`, and it opens near the live edge and catches up. Skip and live SEEK the control socket. Pause freezes the cursor. Play behind paces at the measured dump rate, and that gap holds until you skip. mpv keeps a few seconds of readahead so the picture does not starve. A skip marks a TS discontinuity and then `drop-buffers` so that readahead is not the old picture. The HUD does not send `drop-buffers`. Behind is file end minus the live cursor, at that rate. The back arrow seeks from the live cursor. HUD `play` must not quit this mpv. One window.
 
 ## CLI
 
 ```bash
 omarchy-tv play "8.1 FOX" | next | prev | stop | sync | pause | live | seek 10
 omarchy-tv record start "8.1 FOX" 1h | stop | list | play <file> | delete <file>
+omarchy-tv record later | unlater | all | unall | limit | keep | unkeep | due | finish
 omarchy-tv list | guide | guide refresh | guide search Browns | status | scan | scan --full
 omarchy-tv favorite toggle "8.1 FOX"
-omarchy-tv pref filter favorites|watchable|all|hidden | pref library-max auto|20|50|off
+omarchy-tv pref filter favorites|all|hidden | pref library-max auto|50|100|250|off
 omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
 omarchy-shell shell broadcast richardb.omarchy-tv play "8.1 FOX"   # also: stop next prev live guide reloadChannels open close toggle
 ```
 
-A station with no video or audio ID is dumped as the whole channel group once; the next dump is just that station. Guide strip: search, one row per station, three hours, Earlier and Later, `record later` / `record due`. After HUD lua: Close TV and retune.
+A station with no video or audio ID is dumped as the whole channel group once; the next dump is just that station. Guide: search (titles and descriptions), time-of-day tabs, one row per show with Watch / Record / Record all. The record timer (`record due`, every minute) starts queued shows, joins back-to-back episodes into one run, and launches `record finish` to split runs and mark ads. After HUD lua: Close TV and retune.
 
 ## Keys
 
-Space pause / play still behind · `l` live · ←/→ skip 10s · inside the last 10s, → is live · r record · c captions · m / middle-click mute · wheel volume.
+Space pause / play still behind · `l` live · ←/→ skip 10s · inside the last 10s, → is live · j/k channel · r record · y save the pause · c captions · m / middle-click mute · wheel volume.
 
 ## Paths
 

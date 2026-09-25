@@ -4,7 +4,7 @@ ATSC 1.0 / Clear QAM on Linux `DVBv5`. This box: Hauppauge WinTV-dualHD.
 
 ## DualHD (`2040:826d`, 955D / 1595)
 
-LGDT3306A demod, Si2157 tuner, 8VSB + QAM64/256. Two adapters: `/dev/dvb/adapter0` (live dump to `live.ts`), `/dev/dvb/adapter1` (scan / library record). The PiP does not open `/dev/dvb`. Close `frontend0` before a new dump or Linux returns `EBUSY`.
+LGDT3306A demod, Si2157 tuner, 8VSB + QAM64/256. Two adapters, `/dev/dvb/adapter0` and `/dev/dvb/adapter1`, shared by live TV, recordings, scans, and the Guide (`engine/pool.py`). Live prefers 0, the rest prefer 1. The PiP does not open `/dev/dvb`. Close `frontend0` before a new dump or Linux returns `EBUSY`.
 
 Seat ACLs, not `video` group, not root:
 
@@ -18,7 +18,7 @@ loginctl show-session $(loginctl | awk '/seat0/{print $1}') -p Active
 
 ## Signal
 
-While a tune is running, the flyout watch row shows SNR in dB. This demod reports that number in tenths: 223 is 22.3 dB. ATSC 8VSB wants about 15 dB. The strength percent is the same reading, scaled. The picture overlay does not show it.
+While a tune is running, the flyout watch row shows SNR in dB. This demod reports that number in tenths: 223 is 22.3 dB. ATSC 8VSB wants about 15 dB. The strength percent is the same reading, scaled. The picture overlay only speaks up when it is Weak signal or No signal. `omarchy-tv signal` reads the tuner live TV is on.
 
 Height and line-of-sight matter. VHF-High (7–13) wants longer elements. UHF (14–36) is most modern stations. Inside about 15 miles, an amp can overload the LGDT3306A.
 
@@ -41,4 +41,4 @@ ATSC A/53: DTV pilot is 310 kHz above the lower band edge, i.e. nominal center *
 | Pause dump | `~/.cache/omarchy/tv/timeshift/live.ts` |
 | Sockets | `$XDG_RUNTIME_DIR/omarchy-tv-*.sock` |
 
-Pause does not appear in Recordings. Use Record (`r`) for `Videos/TV`. The pause writer stops when the file is an hour of air ahead of the playhead. Close TV still deletes it.
+Pause does not appear in Recordings. Use Record (`r`) or Save (`y`) for `Videos/TV`. The pause writer stops when the file is an hour of air ahead of the playhead. Close TV still deletes it.
