@@ -19,7 +19,7 @@ from engine.schedule import PAD_EARLY_SEC, PAD_LATE_SEC, item_window
 # middle does not make Tuner 1 let go; the split leaves its bytes out.
 CHAIN_GAP_SEC = 65 * 60
 MAX_MARKS = 2000
-SPLIT_LOCK_KEY = "episode-split"
+FINISH_LOCK_KEY = "recording-finish"
 TS_PACKET = 188
 COPY_CHUNK = 8 * 1024 * 1024
 
@@ -311,14 +311,32 @@ def waiting_splits(recordings_dir: str) -> List[str]:
 
 
 def split_waiting(recordings_dir: str) -> List[str]:
-    """Split every finished run nobody has open. One splitter at a time."""
+    """Split every finished run nobody has open."""
     made: List[str] = []
+    for path in waiting_splits(recordings_dir):
+        if in_use(path):
+            continue
+        made.extend(split_recording(path))
+    return made
+
+
+def finish_recordings(recordings_dir: str, min_bytes: int) -> List[str]:
+    """Split finished runs, then mark ad breaks. One finisher at a time; returns files touched."""
+    from engine.ads import mark_ads, waiting_marks
+
+    touched: List[str] = []
     try:
-        with state_lock(SPLIT_LOCK_KEY, timeout=0):
-            for path in waiting_splits(recordings_dir):
-                if in_use(path):
-                    continue
-                made.extend(split_recording(path))
+        with state_lock(FINISH_LOCK_KEY, timeout=0):
+            touched.extend(split_waiting(recordings_dir))
+            for path in waiting_marks(recordings_dir, min_bytes):
+                mark_ads(path)
+                touched.append(path)
     except TimeoutError:
         return []
-    return made
+    return touched
+
+
+def finish_waiting(recordings_dir: str, min_bytes: int) -> bool:
+    from engine.ads import waiting_marks
+
+    return bool(waiting_splits(recordings_dir) or waiting_marks(recordings_dir, min_bytes))

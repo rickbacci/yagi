@@ -692,7 +692,7 @@ def cmd_record(args):
         from engine.guide import load_guide
         from engine.rules import arm_rules, note_recorded
         from engine.dvr import patch_sidecar
-        from engine.episodes import chain_from, episode_of, grow_runs, run_stop, waiting_splits
+        from engine.episodes import chain_from, episode_of, finish_waiting, grow_runs, run_stop
         from engine.schedule import drop_item, due_items, load_schedule, pick_due
         for item in arm_rules(load_guide().get("channels") or {}):
             print(f"Queued {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
@@ -700,10 +700,10 @@ def cmd_record(args):
             print(f"Kept recording into {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
         for session in DvrManager.sweep_active():
             print(f"Stopped {session.station} ({session.channel_number}).")
-        if waiting_splits(RECORDINGS_DIR):
+        if finish_waiting(RECORDINGS_DIR, MIN_PLAYABLE_BYTES):
             from engine.paths import own_scope
             subprocess.Popen(
-                own_scope([sys.executable, os.path.abspath(__file__), "record", "split"]),
+                own_scope([sys.executable, os.path.abspath(__file__), "record", "finish"]),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
@@ -741,12 +741,13 @@ def cmd_record(args):
                 print(f"Recording {chosen.get('title')} ({remaining // 60}m{extra}).")
         _grab_guide_if_due()
 
-    elif action == "split":
-        from engine.episodes import split_waiting
-        made = split_waiting(RECORDINGS_DIR)
-        for path in made:
-            print(f"Episode {os.path.basename(path)}")
-        if made:
+    elif action == "finish":
+        from engine.episodes import finish_recordings
+        os.nice(10)
+        touched = finish_recordings(RECORDINGS_DIR, MIN_PLAYABLE_BYTES)
+        for path in touched:
+            print(f"Finished {os.path.basename(path)}")
+        if touched:
             DvrManager.refresh_library_index()
 
     elif action == "list":
@@ -865,7 +866,7 @@ def main():
 
     # record / dvr
     p_rec = subparsers.add_parser("record", aliases=["dvr", "rec"], help="DVR recording control")
-    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "all", "unall", "split"], default="list", help="Record action. all/unall: record every airing of a show. split: cut finished runs into episodes")
+    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "all", "unall", "finish"], default="list", help="Record action. all/unall: record every airing of a show. finish: split finished runs into episodes and mark ad breaks")
     p_rec.add_argument("target", nargs="?", help="Channel to record or file to delete")
     p_rec.add_argument("duration", nargs="?", help="Optional duration limit (e.g. 30m, 1h, 300s)")
     p_rec.add_argument("--title", default="", help="Program name for the file and the list")

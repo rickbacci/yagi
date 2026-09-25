@@ -323,13 +323,17 @@ end
 -- rate would end an SD episode after a few minutes.
 local lib_side_path = nil
 local lib_side = nil
-local function library_rate()
+local function library_side()
     local path = mp.get_property("path") or ""
     if path ~= lib_side_path then
         lib_side_path = path
         lib_side = read_sidecar(path)
     end
-    local side = lib_side
+    return lib_side
+end
+
+local function library_rate()
+    local side = library_side()
     if type(side) ~= "table" then return ATSC_BPS / 8 end
     local rate = tonumber(side.byte_rate)
     if rate and rate > 1000 then return rate end
@@ -1033,6 +1037,32 @@ apply_virt_seek = function()
     })
 end
 
+-- Each marked break is jumped once. Backing up into it plays it, so a wrong mark costs one key.
+local skipped_path = nil
+local skipped = {}
+local function skip_ads()
+    local path = mp.get_property("path") or ""
+    if path ~= skipped_path then
+        skipped_path = path
+        skipped = {}
+    end
+    local side = library_side()
+    local ads = type(side) == "table" and side.ads or nil
+    if type(ads) ~= "table" then return false end
+    for i, span in ipairs(ads) do
+        local a = type(span) == "table" and tonumber(span[1]) or nil
+        local b = type(span) == "table" and tonumber(span[2]) or nil
+        if a and b and not skipped[i] and virt_pos >= a and virt_pos < b - 2 then
+            skipped[i] = true
+            virt_pos = b
+            apply_virt_seek()
+            mp.osd_message("Skipped " .. fmt_clock(b - a) .. " of ads · ← to watch", 3)
+            return true
+        end
+    end
+    return false
+end
+
 local function seek_rel(delta)
     local step = math.abs(tonumber(delta) or SEEK_STEP)
     local signed = ((tonumber(delta) or 0) < 0) and -step or step
@@ -1209,6 +1239,7 @@ local banner_tune = ""
 mp.add_periodic_timer(0.4, function()
     if is_library_playback() then
         virt_update()
+        if skip_ads() then return end
         if at_file_end() then
             go_live()
             return
