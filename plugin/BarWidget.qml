@@ -59,7 +59,7 @@ BarWidget {
   readonly property bool tuner1Busy: root.isRecording || root.isScanning || root.guideRefreshing
   readonly property bool bothTunersBusy: root.tuner0Busy && root.tuner1Busy
   readonly property bool flyoutStatusOn: root.activeChannelName !== "" || root.isRecording || root.isScanning || root.guideRefreshing
-  readonly property bool showChannelBrowser: !root.bothTunersBusy && !root.guideStripOpen
+  readonly property bool showChannelBrowser: !root.guideStripOpen
   property int guideClockMin: -1
   property string channelFilter: "favorites" // favorites | all | hidden
   property var hiddenData: []
