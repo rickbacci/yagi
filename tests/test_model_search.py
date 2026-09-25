@@ -61,6 +61,18 @@ class TestGuideSearch(unittest.TestCase):
         res = subprocess.run(["node", "-e", runner, MODEL, json.dumps(titles)], capture_output=True, text=True)
         self.assertEqual(json.loads(res.stdout), [True, True, False, False, False, True])
 
+    def test_fold_title_matches_the_engine(self):
+        from engine.guide import _fold_title
+
+        runner = (
+            'const fs=require("fs"),vm=require("vm");const c={};vm.createContext(c);'
+            'vm.runInContext(fs.readFileSync(process.argv[1],"utf8"),c);'
+            'process.stdout.write(JSON.stringify(JSON.parse(process.argv[2]).map(t=>c.foldTitle(t))))'
+        )
+        titles = ["M*A*S*H", "That '70s Show", "  Law & Order:  SVU ", "Café 1-2-3", "NCIS: New Orleans"]
+        res = subprocess.run(["node", "-e", runner, MODEL, json.dumps(titles)], capture_output=True, text=True)
+        self.assertEqual(json.loads(res.stdout), [_fold_title(t) for t in titles])
+
     def test_words_match_whole_words(self):
         nfl, both = self._search("nfl", "browns steelers")
         self.assertEqual([t for t, _ in nfl], ["The NFL Today", "NFL Football"])

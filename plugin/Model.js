@@ -335,6 +335,22 @@ function filterShows(shows, bucket) {
   return regular.concat(once)
 }
 
+// Same as engine/guide.py _fold_title, so MASH and M*A*S*H are one show.
+function foldTitle(title) {
+  var out = ""
+  var s = String(title || "").toLowerCase()
+  for (var i = 0; i < s.length; i++) {
+    var ch = s.charAt(i)
+    if (/[0-9]/.test(ch) || ch.toLowerCase() !== ch.toUpperCase()) out += ch
+    else if (/\s/.test(ch)) out += " "
+  }
+  return out.split(/\s+/).filter(function(w) { return w }).join(" ")
+}
+
+function showKey(title, channel) {
+  return foldTitle(title) + "|" + String(channel || "")
+}
+
 // The show's next airing in the shape a search hit has, so Watch and Record treat them alike.
 function showAiring(show) {
   var n = show && show.next

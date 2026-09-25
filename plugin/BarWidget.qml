@@ -79,6 +79,7 @@ BarWidget {
   property var showItems: []
   property var ruleIds: ({})
   property var ruleKeep: ({})
+  property var ruleByShow: ({})
   property string deleteArmed: ""
 
   Timer {
@@ -181,24 +182,27 @@ BarWidget {
   function applyRules(raw) {
     var ids = {}
     var keep = {}
+    var byShow = {}
     try {
       var rules = (JSON.parse(raw || "{}").rules) || []
       for (var i = 0; i < rules.length; i++) {
         if (rules[i] && rules[i].id) {
           ids[rules[i].id] = true
           keep[rules[i].id] = Number(rules[i].keep_last) || 0
+          byShow[Model.showKey(rules[i].title, rules[i].channel)] = rules[i].id
         }
       }
     } catch (e) {
     }
     root.ruleIds = ids
     root.ruleKeep = keep
+    root.ruleByShow = byShow
   }
 
   function toggleRecordAll(show) {
-    if (!show || !show.id) return
+    if (!show) return
     ruleProc.running = false
-    if (root.ruleIds[show.id]) {
+    if (show.id && root.ruleIds[show.id]) {
       ruleProc.command = [root.binPath, "record", "unall", show.id]
     } else {
       if (!show.tune_name) return
@@ -255,6 +259,20 @@ BarWidget {
     return ""
   }
 
+  function freeTunerForRecording() {
+    return !root.tuner1Busy
+  }
+
+  function hitRuleId(hit) {
+    return hit ? (root.ruleByShow[Model.showKey(hit.title, hit.channel_number)] || "") : ""
+  }
+
+  function toggleHitRecordAll(hit) {
+    if (!hit) return
+    var ruled = root.hitRuleId(hit)
+    root.toggleRecordAll({ id: ruled, tune_name: hit.tune_name, title: hit.title, channel: hit.channel_number })
+  }
+
   function toggleHitRecord(show) {
     var state = root.hitRecordState(show)
     if (state === "recording") root.stopRecord(show.tune_name)
@@ -277,7 +295,7 @@ BarWidget {
     if (start > 0 && dur > 0 && (start + dur) <= now) return
     var onNow = (start > 0 && dur > 0) ? (start <= now) : !!show.on_now
     if (onNow) {
-      if (root.tuner1Busy) return
+      if (!root.freeTunerForRecording()) return
       var left = Model.recordDurationArg(show, root.guideClockMin)
       if (left && Model.isGameTitle(show.title)) left = (parseInt(left, 10) + Model.gameExtraMin()) + "m"
       root.startRecord(show.tune_name, left, show.title || "")
@@ -2167,7 +2185,7 @@ BarWidget {
                           : (showRow.airing && showRow.airing.on_now ? "Record the rest of this one"
                           : "Record the next one, " + ((showRow.modelData.next && showRow.modelData.next.day) || "") + " " + ((showRow.airing && showRow.airing.start) || "")))
                     selected: showRow.oneState !== ""
-                    enabled: showRow.oneState !== "" || !(showRow.airing && showRow.airing.on_now) || !root.tuner1Busy
+                    enabled: showRow.oneState !== "" || !(showRow.airing && showRow.airing.on_now) || root.freeTunerForRecording()
                     fontSize: Style.font.caption
                     foreground: root.bar.foreground
                     onClicked: root.toggleHitRecord(showRow.airing)
@@ -2219,13 +2237,14 @@ BarWidget {
                 required property var modelData
                 required property int index
                 readonly property string recState: root.hitRecordState(modelData)
+                readonly property bool ruled: root.hitRuleId(modelData) !== ""
                 width: stripSearchCol.width
-                implicitHeight: Math.max(hitText.implicitHeight, hitRecord.implicitHeight) + Style.space(8)
+                implicitHeight: Math.max(hitText.implicitHeight, hitActions.implicitHeight) + Style.space(8)
 
                 Column {
                   id: hitText
                   anchors.left: parent.left
-                  anchors.right: hitWatch.visible ? hitWatch.left : hitRecord.left
+                  anchors.right: hitActions.left
                   anchors.rightMargin: Style.space(6)
                   anchors.verticalCenter: parent.verticalCenter
                   spacing: Style.space(1)
@@ -2257,33 +2276,45 @@ BarWidget {
                   }
                 }
 
-                Button {
-                  id: hitWatch
-                  visible: !!hitRow.modelData.on_now
-                  anchors.right: hitRecord.left
-                  anchors.rightMargin: Style.space(4)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "Watch"
-                  tooltipText: "Watch this channel now"
-                  fontSize: Style.font.caption
-                  foreground: root.bar.foreground
-                  onClicked: root.selectChannel(hitRow.modelData.tune_name || hitRow.modelData.channel_number)
-                }
-
-                Button {
-                  id: hitRecord
+                Row {
+                  id: hitActions
                   anchors.right: parent.right
                   anchors.verticalCenter: parent.verticalCenter
-                  text: hitRow.recState === "recording" ? "Recording"
-                        : (hitRow.recState === "scheduled" ? "Scheduled" : "Record")
-                  tooltipText: hitRow.recState === "recording" ? "Stop this recording"
-                        : (hitRow.recState === "scheduled" ? "Don't record this"
-                        : (hitRow.modelData.on_now ? "Record the rest of this show" : "Record this when it airs"))
-                  selected: hitRow.recState !== ""
-                  enabled: hitRow.recState !== "" || !hitRow.modelData.on_now || !root.tuner1Busy
-                  fontSize: Style.font.caption
-                  foreground: root.bar.foreground
-                  onClicked: root.toggleHitRecord(hitRow.modelData)
+                  spacing: Style.space(4)
+
+                  Button {
+                    visible: !!hitRow.modelData.on_now
+                    text: "Watch"
+                    tooltipText: "Watch this channel now"
+                    fontSize: Style.font.caption
+                    foreground: root.bar.foreground
+                    onClicked: root.selectChannel(hitRow.modelData.tune_name || hitRow.modelData.channel_number)
+                  }
+
+                  Button {
+                    visible: !hitRow.ruled || hitRow.recState !== ""
+                    text: hitRow.recState === "recording" ? "Recording"
+                          : (hitRow.recState === "scheduled" ? "Scheduled" : "Record")
+                    tooltipText: hitRow.recState === "recording" ? "Stop this recording"
+                          : (hitRow.recState === "scheduled" ? "Don't record this"
+                          : (hitRow.modelData.on_now ? "Record the rest of this show" : "Record this one when it airs"))
+                    selected: hitRow.recState !== ""
+                    enabled: hitRow.recState !== "" || !hitRow.modelData.on_now || root.freeTunerForRecording()
+                    fontSize: Style.font.caption
+                    foreground: root.bar.foreground
+                    onClicked: root.toggleHitRecord(hitRow.modelData)
+                  }
+
+                  Button {
+                    text: hitRow.ruled ? "Recording all" : "Record all"
+                    tooltipText: hitRow.ruled ? "Stop recording this show"
+                          : "Record every new airing on " + (hitRow.modelData.channel_number || "this channel") + ", any time of day"
+                    selected: hitRow.ruled
+                    enabled: hitRow.ruled || !!hitRow.modelData.tune_name
+                    fontSize: Style.font.caption
+                    foreground: root.bar.foreground
+                    onClicked: root.toggleHitRecordAll(hitRow.modelData)
+                  }
                 }
               }
             }
