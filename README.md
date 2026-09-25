@@ -125,7 +125,9 @@ omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
 | Key | Live TV | Recording |
 | --- | --- | --- |
 | Space | Pause (writer stops an hour ahead); play stays behind until `l` | Pause / resume |
-| ← / → | Skip 10s (inside the last 10s, → is live) | Skip; ad breaks jump once, ← goes back into one |
+| ← / → | Skip 10s (inside the last 10s, → is live) | Skip; ad breaks jump once (not in games), ← goes back into one |
+| ↑ / ↓ | Skip 1 minute | same |
+| PgUp / PgDn | ignored | End of the next ad break / start of the last one |
 | j / k | Channel down / up | ignored |
 | l | Live write head (same window) | Return to live (new dump) |
 | r | Record this station | ignored |

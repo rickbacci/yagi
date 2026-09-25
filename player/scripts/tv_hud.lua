@@ -283,6 +283,7 @@ end
 -- ATSC 8VSB transport is ~19.39 Mbps. MPV duration/percent on raw .ts is often 0.
 local ATSC_BPS = 19390000
 local SEEK_STEP = 10
+local BIG_STEP = 60
 local virt_pos = 0
 local virt_last = nil
 local seek_reload = false
@@ -956,9 +957,9 @@ local function render_hud()
     local record = is_recording and "r Stop recording" or "r Record"
     local hints
     if is_library then
-        hints = string.format("← → 10s    %s    l Live TV    m Mute    %s", action, vol_label)
+        hints = string.format("← → 10s    ↑ ↓ 1 min    PgUp skip ads    %s    l Live TV    m Mute    %s", action, vol_label)
     elseif is_ts or delayed then
-        hints = string.format("j k Channel    ← → 10s    %s    y Save    %s    l Live    m Mute    %s", action, record, vol_label)
+        hints = string.format("j k Channel    ← → 10s    ↑ ↓ 1 min    %s    y Save    %s    l Live    m Mute    %s", action, record, vol_label)
     else
         hints = string.format("j k Channel    %s    %s    m Mute    %s", action, record, vol_label)
     end
@@ -1083,10 +1084,25 @@ apply_virt_seek = function()
     })
 end
 
+-- Same test as Model.isGameTitle. A wrong mark in a game skips a play, so games only jump on PgUp.
+local GAME_SPORTS = { "football", "baseball", "basketball", "hockey", "soccer" }
+local GAME_LEAGUES = { nfl = true, nba = true, mlb = true, nhl = true, mls = true, ncaa = true }
+local NOT_A_GAME = { "pregame", "postgame", "kickoff", "today", "tonight", "countdown", "review", "highlights", "preview" }
+local function is_game_title(title)
+    local t = string.lower(tostring(title or ""))
+    for _, word in ipairs(NOT_A_GAME) do
+        if t:find(word, 1, true) then return false end
+    end
+    for _, word in ipairs(GAME_SPORTS) do
+        if t:find("%f[%w]" .. word .. "%f[%W]") then return true end
+    end
+    return GAME_LEAGUES[t:match("^%s*(%w+)") or ""] == true
+end
+
 -- Each marked break is jumped once. Backing up into it plays it, so a wrong mark costs one key.
 local skipped_path = nil
 local skipped = {}
-local function skip_ads()
+local function marked_breaks()
     local path = mp.get_property("path") or ""
     if path ~= skipped_path then
         skipped_path = path
@@ -1094,7 +1110,13 @@ local function skip_ads()
     end
     local side = library_side()
     local ads = type(side) == "table" and side.ads or nil
-    if type(ads) ~= "table" then return false end
+    if type(ads) ~= "table" then return {}, side end
+    return ads, side
+end
+
+local function skip_ads()
+    local ads, side = marked_breaks()
+    if #ads == 0 or is_game_title(type(side) == "table" and side.title or "") then return false end
     for i, span in ipairs(ads) do
         local a = type(span) == "table" and tonumber(span[1]) or nil
         local b = type(span) == "table" and tonumber(span[2]) or nil
@@ -1107,6 +1129,36 @@ local function skip_ads()
         end
     end
     return false
+end
+
+-- mpv's chapter keys: PgUp is the next break's end, PgDn the last break's start.
+local function jump_break(direction)
+    if not is_library_playback() then
+        mp.osd_message("Ad breaks are marked after a recording finishes · ↑ ↓ jump 1 minute", 3)
+        return
+    end
+    virt_update()
+    local ads = marked_breaks()
+    local target, index = nil, nil
+    for i, span in ipairs(ads) do
+        local a = type(span) == "table" and tonumber(span[1]) or nil
+        local b = type(span) == "table" and tonumber(span[2]) or nil
+        if a and b then
+            if direction > 0 and b > virt_pos + 1 and (not target or b < target) then
+                target, index = b, i
+            elseif direction < 0 and a < virt_pos - 3 and (not target or a > target) then
+                target, index = a, i
+            end
+        end
+    end
+    if not target then
+        mp.osd_message(#ads == 0 and "No ad breaks marked in this recording" or "No more ad breaks that way", 2)
+        return
+    end
+    skipped[index] = true
+    virt_pos = target
+    apply_virt_seek()
+    show_hud()
 end
 
 local function seek_rel(delta)
@@ -1133,10 +1185,10 @@ local function seek_rel(delta)
     if is_timeshift_playback() then
         if signed > 0 then
             local shown = clock_shown or 0
-            if shown <= SEEK_STEP then
+            if shown <= step then
                 clock_shown = 0
             else
-                clock_shown = shown - SEEK_STEP
+                clock_shown = shown - step
             end
             clock_jump = clock_shown
             clock_raw = clock_shown
@@ -1177,6 +1229,10 @@ end
 
 mp.add_forced_key_binding("LEFT", "tv_seek_back", function() seek_rel(-SEEK_STEP) end)
 mp.add_forced_key_binding("RIGHT", "tv_seek_fwd", function() seek_rel(SEEK_STEP) end)
+mp.add_forced_key_binding("UP", "tv_seek_fwd_big", function() seek_rel(BIG_STEP) end)
+mp.add_forced_key_binding("DOWN", "tv_seek_back_big", function() seek_rel(-BIG_STEP) end)
+mp.add_forced_key_binding("PGUP", "tv_next_break", function() jump_break(1) end)
+mp.add_forced_key_binding("PGDWN", "tv_prev_break", function() jump_break(-1) end)
 mp.register_script_message("tv-seek", function(delta)
     seek_rel(tonumber(delta) or SEEK_STEP)
 end)

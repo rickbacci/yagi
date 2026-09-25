@@ -154,8 +154,6 @@ def media_seconds(path: str) -> float:
 
 def believable(breaks: List[List[float]], seconds: float) -> bool:
     """Comskip marks a short clip with no logo as one long ad. Skipping that would skip the show."""
-    if any(b - a > MAX_BREAK_SEC for a, b in breaks):
-        return False
     marked = sum(b - a for a, b in breaks)
     return not (seconds > 0 and marked > seconds / 2)
 
@@ -163,8 +161,9 @@ def believable(breaks: List[List[float]], seconds: float) -> bool:
 def find_ads(path: str, side: Dict[str, Any]) -> Tuple[List[List[float]], str]:
     exe = comskip_path()
     if exe:
-        breaks = comskip_ads(exe, path)
-        if believable(breaks, media_seconds(path)):
+        # A game's halftime reads as one long break. Drop that one, keep the rest.
+        breaks = [span for span in comskip_ads(exe, path) if span[1] - span[0] <= MAX_BREAK_SEC]
+        if breaks and believable(breaks, media_seconds(path)):
             return breaks, "comskip"
     return ffmpeg_ads(path, side), "ffmpeg"
 

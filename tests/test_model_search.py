@@ -60,6 +60,14 @@ class TestGuideSearch(unittest.TestCase):
         titles = ["NFL Football", "College Football", "The NFL Today", "Fox NFL Kickoff", "M*A*S*H", "NBA Basketball"]
         res = subprocess.run(["node", "-e", runner, MODEL, json.dumps(titles)], capture_output=True, text=True)
         self.assertEqual(json.loads(res.stdout), [True, True, False, False, False, True])
+        lua = shutil.which("lua") or shutil.which("luajit")
+        if lua:
+            with open(os.path.join(ROOT, "player", "scripts", "tv_hud.lua"), encoding="utf-8") as f:
+                src = f.read()
+            chunk = src[src.index("local GAME_SPORTS"):src.index("-- Each marked break is jumped once")]
+            script = chunk + "".join(f"print(is_game_title({json.dumps(t)}))\n" for t in titles)
+            out = subprocess.run([lua, "-"], input=script, capture_output=True, text=True).stdout.split()
+            self.assertEqual(out, ["true", "true", "false", "false", "false", "true"])
 
     def test_fold_title_matches_the_engine(self):
         from engine.guide import _fold_title

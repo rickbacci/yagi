@@ -50,20 +50,23 @@ if not near(library_rate(), ATSC_BPS / 8) then fail("full mux is not the tower r
 def _skip_source() -> str:
     with open(LUA, encoding="utf-8") as f:
         src = f.read()
-    return src[src.index("local skipped_path = nil"):src.index("local function seek_rel")]
+    return src[src.index("-- Same test as Model.isGameTitle"):src.index("local function seek_rel")]
 
 
 SKIP_HARNESS = r"""
 local virt_pos = 0
 local seeks = 0
 local shown = ""
-local SIDE = { ads = { {600, 750}, {1500, 1620} } }
+local SIDE = { title = "M*A*S*H", ads = { {600, 750}, {1500, 1620} } }
 mp = {
     get_property = function(name) return "/v/show.ts" end,
     osd_message = function(text) shown = text end,
 }
 local function library_side() return SIDE end
 local function apply_virt_seek() seeks = seeks + 1 end
+local function is_library_playback() return true end
+local function virt_update() end
+local function show_hud() end
 local function fmt_clock(sec) return string.format("%%d:%%02d", math.floor(sec / 60), math.floor(sec %% 60)) end
 
 %s
@@ -80,6 +83,25 @@ virt_pos = 740
 if skip_ads() then fail("backing up into a skipped break skipped again") end
 virt_pos = 1500.5
 if not skip_ads() or virt_pos ~= 1620 then fail("second break") end
+
+-- PgUp and PgDn walk the marks without skipping anything on their own.
+virt_pos = 100
+jump_break(1)
+if virt_pos ~= 750 then fail("PgUp from 100 landed at " .. virt_pos) end
+jump_break(1)
+if virt_pos ~= 1620 then fail("second PgUp landed at " .. virt_pos) end
+jump_break(-1)
+if virt_pos ~= 1500 then fail("PgDn landed at " .. virt_pos) end
+virt_pos = 1500.5
+if skip_ads() then fail("PgDn into a break should let it play") end
+
+-- A game only jumps when you press PgUp.
+skipped_path = nil
+SIDE = { title = "NFL Football", ads = { {600, 750} } }
+virt_pos = 600.3
+if skip_ads() then fail("a game skipped on its own") end
+jump_break(1)
+if virt_pos ~= 750 then fail("PgUp in a game landed at " .. virt_pos) end
 """
 
 

@@ -58,11 +58,15 @@ class TestComskipSanity(unittest.TestCase):
                 mock.patch.object(ads, "comskip_ads", return_value=[[480.2, 587.3], [1200.0, 1350.0]]):
             self.assertEqual(ads.find_ads("x.ts", {})[1], "comskip")
 
-    def test_one_break_longer_than_seven_minutes_is_not_believed(self):
-        from engine.ads import believable
+    def test_halftime_is_dropped_and_the_other_breaks_stay(self):
+        from unittest import mock
 
-        self.assertFalse(believable([[100.0, 600.0]], 3600))
-        self.assertTrue(believable([[100.0, 280.0]], 3600))
+        from engine import ads
+
+        with mock.patch.object(ads, "comskip_path", return_value="/usr/bin/comskip"), \
+                mock.patch.object(ads, "media_seconds", return_value=4 * 3600.0), \
+                mock.patch.object(ads, "comskip_ads", return_value=[[900.0, 1050.0], [5400.0, 6600.0], [7000.0, 7150.0]]):
+            self.assertEqual(ads.find_ads("game.ts", {}), ([[900.0, 1050.0], [7000.0, 7150.0]], "comskip"))
 
 
 class TestFinish(unittest.TestCase):
