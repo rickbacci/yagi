@@ -59,7 +59,7 @@ BarWidget {
   readonly property bool tuner1Busy: root.isRecording || root.isScanning || root.guideRefreshing
   readonly property bool bothTunersBusy: root.tuner0Busy && root.tuner1Busy
   readonly property bool flyoutStatusOn: root.activeChannelName !== "" || root.isRecording || root.isScanning || root.guideRefreshing
-  readonly property bool showChannelBrowser: !root.bothTunersBusy
+  readonly property bool showChannelBrowser: !root.bothTunersBusy && !root.guideStripOpen
   property int guideClockMin: -1
   property string channelFilter: "favorites" // favorites | watchable | all | hidden
   property var hiddenData: []
@@ -103,6 +103,21 @@ BarWidget {
     if (!(avail > 0)) avail = Style.space(720)
     var inset = popup.verticalContentInset || 0
     return Math.max(Style.space(96), Math.round(avail - inset - Math.max(0, chromeHeight)))
+  }
+
+  function stationFor(channelNumber) {
+    var list = root.channelsData || []
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] && String(list[i].channel_number) === String(channelNumber))
+        return Model.getDisplayTitle(list[i])
+    }
+    return ""
+  }
+
+  // Header, search, tabs, and the waiting list take the rest.
+  function guideListRoom() {
+    var waiting = (root.scheduleItems || []).length
+    return root.roomFor(Style.space(230) + (waiting ? Style.space(24) + waiting * Style.space(30) : 0))
   }
 
   function flyoutContentWidth() {
@@ -312,6 +327,7 @@ BarWidget {
 
   function listLen() {
     if (root.libraryModalOpen) return root.recordingsData ? root.recordingsData.length : 0
+    if (!root.showChannelBrowser) return 0
     return root.displayChannels ? root.displayChannels.length : 0
   }
 
@@ -2035,10 +2051,10 @@ BarWidget {
 
           Repeater {
             model: [
-              { key: "prime", label: "Prime" },
-              { key: "late", label: "Late" },
-              { key: "overnight", label: "Overnight" },
-              { key: "day", label: "Day" }
+              { key: "day", label: "Day 6 AM–8 PM" },
+              { key: "prime", label: "Prime 8–11 PM" },
+              { key: "late", label: "Late 11 PM–2 AM" },
+              { key: "overnight", label: "Overnight 2–6 AM" }
             ]
             delegate: Button {
               required property var modelData
@@ -2066,7 +2082,7 @@ BarWidget {
         Flickable {
           id: stripFlick
           width: parent.width
-          height: Math.min(stripShowsCol.implicitHeight, Style.space(300))
+          height: Math.min(stripShowsCol.implicitHeight, root.guideListRoom())
           contentWidth: width
           contentHeight: stripShowsCol.implicitHeight
           clip: true
@@ -2085,13 +2101,15 @@ BarWidget {
                 id: showRow
                 required property var modelData
                 readonly property bool ruled: !!root.ruleIds[modelData.id]
+                readonly property var airing: Model.showAiring(modelData)
+                readonly property string oneState: root.hitRecordState(airing)
                 width: stripShowsCol.width
-                implicitHeight: Math.max(showText.implicitHeight, showRecord.implicitHeight)
+                implicitHeight: Math.max(showText.implicitHeight, showActions.implicitHeight)
 
                 Column {
                   id: showText
                   anchors.left: parent.left
-                  anchors.right: showLimit.visible ? showLimit.left : showRecord.left
+                  anchors.right: showActions.left
                   anchors.rightMargin: Style.space(6)
                   anchors.verticalCenter: parent.verticalCenter
                   spacing: Style.space(1)
@@ -2111,7 +2129,7 @@ BarWidget {
                   Text {
                     width: parent.width
                     textFormat: Text.PlainText
-                    text: Model.showSubLine(showRow.modelData)
+                    text: Model.showSubLine(showRow.modelData, root.stationFor(showRow.modelData.channel))
                     color: Color.muted
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.caption
@@ -2119,30 +2137,54 @@ BarWidget {
                   }
                 }
 
-                Button {
-                  id: showLimit
-                  visible: showRow.ruled
-                  anchors.right: showRecord.left
-                  anchors.rightMargin: Style.space(4)
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: root.showLimitText(showRow.modelData)
-                  tooltipText: "How many episodes to keep. Older ones are deleted"
-                  fontSize: Style.font.caption
-                  foreground: root.bar.foreground
-                  onClicked: root.cycleShowLimit(showRow.modelData)
-                }
-
-                Button {
-                  id: showRecord
+                Row {
+                  id: showActions
                   anchors.right: parent.right
                   anchors.verticalCenter: parent.verticalCenter
-                  text: showRow.ruled ? "Recording all" : "Record all"
-                  tooltipText: showRow.ruled ? "Stop recording this show" : "Record every new airing on " + (showRow.modelData.channel || "this channel") + ", any time of day"
-                  selected: showRow.ruled
-                  enabled: showRow.ruled || !!showRow.modelData.tune_name
-                  fontSize: Style.font.caption
-                  foreground: root.bar.foreground
-                  onClicked: root.toggleRecordAll(showRow.modelData)
+                  spacing: Style.space(4)
+
+                  Button {
+                    visible: !!(showRow.airing && showRow.airing.on_now)
+                    text: "Watch"
+                    tooltipText: "Watch this channel now"
+                    fontSize: Style.font.caption
+                    foreground: root.bar.foreground
+                    onClicked: root.selectChannel(showRow.modelData.tune_name)
+                  }
+
+                  Button {
+                    visible: !!showRow.airing && !showRow.ruled
+                    text: showRow.oneState === "recording" ? "Recording"
+                          : (showRow.oneState === "scheduled" ? "Scheduled" : "Record")
+                    tooltipText: showRow.oneState === "recording" ? "Stop this recording"
+                          : (showRow.oneState === "scheduled" ? "Don't record this"
+                          : (showRow.airing && showRow.airing.on_now ? "Record the rest of this one"
+                          : "Record the next one, " + ((showRow.modelData.next && showRow.modelData.next.day) || "") + " " + ((showRow.airing && showRow.airing.start) || "")))
+                    selected: showRow.oneState !== ""
+                    enabled: showRow.oneState !== "" || !(showRow.airing && showRow.airing.on_now) || !root.tuner1Busy
+                    fontSize: Style.font.caption
+                    foreground: root.bar.foreground
+                    onClicked: root.toggleHitRecord(showRow.airing)
+                  }
+
+                  Button {
+                    visible: showRow.ruled
+                    text: root.showLimitText(showRow.modelData)
+                    tooltipText: "How many episodes to keep. Older ones are deleted"
+                    fontSize: Style.font.caption
+                    foreground: root.bar.foreground
+                    onClicked: root.cycleShowLimit(showRow.modelData)
+                  }
+
+                  Button {
+                    text: showRow.ruled ? "Recording all" : "Record all"
+                    tooltipText: showRow.ruled ? "Stop recording this show" : "Record every new airing on " + (showRow.modelData.channel || "this channel") + ", any time of day"
+                    selected: showRow.ruled
+                    enabled: showRow.ruled || !!showRow.modelData.tune_name
+                    fontSize: Style.font.caption
+                    foreground: root.bar.foreground
+                    onClicked: root.toggleRecordAll(showRow.modelData)
+                  }
                 }
               }
             }
@@ -2152,7 +2194,7 @@ BarWidget {
         Flickable {
           id: stripSearchFlick
           width: parent.width
-          height: Math.min(stripSearchCol.implicitHeight, Style.space(220))
+          height: Math.min(stripSearchCol.implicitHeight, root.guideListRoom())
           contentWidth: width
           contentHeight: stripSearchCol.implicitHeight
           clip: true
@@ -2296,7 +2338,7 @@ BarWidget {
       }
 
       Row {
-        visible: !root.bothTunersBusy
+        visible: root.showChannelBrowser
         width: parent.width
         spacing: Style.space(6)
 

@@ -11,6 +11,8 @@ from engine.psip import GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
 # A minute early, three minutes late. A game adds extra_end_sec on its own row.
 PAD_EARLY_SEC = 60
 PAD_LATE_SEC = 180
+# A missed show stays listed a day so you see it, then goes.
+MISSED_SHOWN_SEC = 24 * 3600
 
 
 def unix_from_gps(gps_start: Any) -> int:
@@ -130,7 +132,12 @@ def due_items(now: Optional[float] = None, path: Optional[str] = None) -> List[D
     ready = []
     with state_lock(path or SCHEDULE_PATH):
         items = load_schedule(path)
-        changed = False
+        kept = [
+            row for row in items
+            if not (str(row.get("status") or "") == "missed" and item_window(row)[1] < stamp - MISSED_SHOWN_SEC)
+        ]
+        changed = len(kept) != len(items)
+        items = kept
         for row in items:
             if str(row.get("status") or "waiting") == "missed":
                 continue

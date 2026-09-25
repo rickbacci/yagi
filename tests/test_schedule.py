@@ -80,6 +80,10 @@ class TestSchedule(unittest.TestCase):
             rows = load_schedule(path)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["status"], "missed")
+            self.assertEqual(due_items(now + 21 * 3600, path), [])
+            self.assertEqual(len(load_schedule(path)), 1)
+            due_items(now + 23 * 3600, path)
+            self.assertEqual(load_schedule(path), [])
 
     def test_pick_due_runs_one_show(self):
         ready = [{"id": "a", "title": "First"}, {"id": "b", "title": "Second"}]

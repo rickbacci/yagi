@@ -335,10 +335,27 @@ function filterShows(shows, bucket) {
   return regular.concat(once)
 }
 
-function showSubLine(show) {
+// The show's next airing in the shape a search hit has, so Watch and Record treat them alike.
+function showAiring(show) {
+  var n = show && show.next
+  if (!n || !show.tune_name || !(Number(n.start_unix) > 0)) return null
+  return {
+    tune_name: show.tune_name,
+    channel_number: show.channel || "",
+    title: show.title || "",
+    gps_start: Number(n.start_unix) - 315964800 + 18,
+    duration_sec: Number(n.duration_sec) || 1800,
+    start: n.clock || "",
+    end: "",
+    on_now: !!n.on_now,
+    display_name: show.tune_name
+  }
+}
+
+function showSubLine(show, stationName) {
   if (!show) return ""
-  var parts = [show.channel || ""]
-  parts.push(show.label || show.when || "")
+  var parts = [(show.channel || "") + (stationName ? " " + stationName : "")]
+  parts.push(show.pattern ? (show.label || show.when || "") : "One airing " + (show.when || ""))
   var n = show.next
   if (n) parts.push((n.on_now ? "on now" : "next " + (n.day || "") + " " + (n.clock || "")).trim())
   return parts.filter(function(p) { return p }).join(" · ")
