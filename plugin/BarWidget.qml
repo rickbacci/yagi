@@ -61,7 +61,7 @@ BarWidget {
   readonly property bool flyoutStatusOn: root.activeChannelName !== "" || root.isRecording || root.isScanning || root.guideRefreshing
   readonly property bool showChannelBrowser: !root.bothTunersBusy && !root.guideStripOpen
   property int guideClockMin: -1
-  property string channelFilter: "favorites" // favorites | watchable | all | hidden
+  property string channelFilter: "favorites" // favorites | all | hidden
   property var hiddenData: []
   property string playerMode: "live"
   property string lastLiveChannel: ""
@@ -79,6 +79,13 @@ BarWidget {
   property var showItems: []
   property var ruleIds: ({})
   property var ruleKeep: ({})
+  property string deleteArmed: ""
+
+  Timer {
+    id: deleteDisarm
+    interval: 3000
+    onTriggered: root.deleteArmed = ""
+  }
   property string showBucket: Model.bucketNow()
   readonly property var guideShowRows: Model.filterShows(root.showItems, root.showBucket)
   property var scheduleItems: []
@@ -92,7 +99,7 @@ BarWidget {
       var missed = one.status === "missed" ? "Missed · " : ""
       return missed + who + (one.title ? " · " + one.title : "") + (when ? " · " + when : "")
     }
-    return items.length + " scheduled"
+    return items.length + " waiting to record"
   }
   property string guideSearchText: ""
   readonly property bool guideSearchActive: root.guideSearchText.replace(/\s+/g, " ").trim().length >= 2
@@ -519,7 +526,6 @@ BarWidget {
     if (root.channelFilter === "hidden") {
       return list.filter(function(ch) { return root.channelIsHidden(ch) })
     }
-    if (root.channelFilter === "all") return list
     list = list.filter(function(ch) { return !root.channelIsHidden(ch) })
     if (root.channelFilter === "favorites") {
       list = list.filter(function(ch) { return root.channelIsFavorite(ch) })
@@ -752,7 +758,7 @@ BarWidget {
       root.hiddenData = []
     }
     if (root.channelFilter === "hidden" && !(root.hiddenData && root.hiddenData.length))
-      root.channelFilter = "watchable"
+      root.channelFilter = "all"
   }
 
   function hideListed(ch) {
@@ -1481,7 +1487,7 @@ BarWidget {
         else if (t === "f" || t === "F") {
           root.setChannelFilter("favorites")
         }
-        else if (t === "s" || t === "S") root.startScan()
+        else if (t === "S") root.startScan()
         else if (t === "r" || t === "R") {
           var ident = root.activeChannelName || root.cursorChannelIdent()
           if (ident) root.toggleRecord(ident)
@@ -1576,10 +1582,10 @@ BarWidget {
             Text {
               textFormat: Text.PlainText
               text: {
-                if (root.isScanning) return "Scanning Broadcast Frequencies..."
+                if (root.isScanning) return "Scanning for channels…"
                 return root.listedChannelCount > 0
-                  ? (root.listedChannelCount + " channels · " + (root.favoritesData ? root.favoritesData.length : 0) + " favorites")
-                  : "No channels scanned"
+                  ? ((root.watchableChannels || []).length + " channels · " + root.favoriteVisibleCount + " favorites")
+                  : "No channels yet"
               }
               color: root.isScanning ? Color.accent : Color.muted
               font.family: root.bar.fontFamily
@@ -1615,7 +1621,7 @@ BarWidget {
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
-              text: "󰛳  RF TUNER LOCK"
+              text: "Scanning for channels"
               color: Color.accent
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
@@ -1626,7 +1632,7 @@ BarWidget {
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               textFormat: Text.PlainText
-              text: "✨ " + root.scanTotalFound + " Discovered"
+              text: root.scanTotalFound + " found"
               color: Color.accent
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
@@ -1667,7 +1673,7 @@ BarWidget {
 
                 Text {
                   textFormat: Text.PlainText
-                  text: (root.scanBand !== "" ? root.scanBand : "ATSC") + " Band"
+                  text: root.scanBand !== "" ? root.scanBand : "Broadcast"
                   color: root.bar.foreground
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.caption
@@ -1692,7 +1698,7 @@ BarWidget {
               Text {
                 anchors.right: parent.right
                 textFormat: Text.PlainText
-                text: root.scanSignal !== null ? (root.scanSignal.toFixed(1) + " dBm") : "Searching..."
+                text: root.scanSignal === null ? "Listening…" : (root.scanSignal > -55 ? "Strong signal" : "Signal found")
                 color: root.scanSignal !== null && root.scanSignal > -55 ? Color.accent : (root.scanSignal !== null ? root.bar.foreground : Color.muted)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1702,7 +1708,7 @@ BarWidget {
               Text {
                 anchors.right: parent.right
                 textFormat: Text.PlainText
-                text: root.scanSignal !== null && root.scanSignal > -55 ? "Strong Signal" : (root.scanSignal !== null ? "Carrier Locked" : "Scanning")
+                text: root.scanSignal !== null ? (root.scanSignal.toFixed(1) + " dBm") : ""
                 color: Color.muted
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1793,7 +1799,7 @@ BarWidget {
           onClicked: root.playChannel(root.activeChannelName)
           PanelToolTip {
             visible: tuneAgainArea.containsMouse
-            text: "Tune again"
+            text: "Click to retune this channel"
             fontFamily: root.bar.fontFamily
           }
         }
@@ -1817,8 +1823,8 @@ BarWidget {
             Button {
               id: npKeepBtn
               visible: root.isLiveSession && !root.pauseKept
-              text: "Keep"
-              tooltipText: "Copy this pause into the library"
+              text: "Save"
+              tooltipText: "Save what you paused to Recordings"
               foreground: root.bar.foreground
               fontSize: Style.font.caption
               onClicked: root.keepPause()
@@ -1827,7 +1833,7 @@ BarWidget {
             Button {
               id: npCloseBtn
               text: "Close"
-              tooltipText: "Close TV"
+              tooltipText: "Close TV and drop the pause"
               foreground: root.bar.foreground
               fontSize: Style.font.caption
               onClicked: root.stopPlayer()
@@ -2040,7 +2046,7 @@ BarWidget {
         TextField {
           id: guideStripSearch
           width: parent.width
-          placeholderText: "Search titles"
+          placeholderText: "Search shows and teams"
           font.family: root.bar.fontFamily
           onTextChanged: root.guideSearchText = text
         }
@@ -2347,8 +2353,8 @@ BarWidget {
           spacing: Style.space(4)
 
           Button {
-            text: "Favs (" + root.favoriteVisibleCount + ")"
-            tooltipText: "Favorite channels"
+            text: "Favorites (" + root.favoriteVisibleCount + ")"
+            tooltipText: "Channels you starred"
             selected: root.channelFilter === "favorites"
             fontSize: Style.font.caption
             foreground: root.bar.foreground
@@ -2356,17 +2362,8 @@ BarWidget {
           }
 
           Button {
-            text: "Watchable (" + (root.watchableChannels ? root.watchableChannels.length : 0) + ")"
-            tooltipText: "Stations worth watching"
-            selected: root.channelFilter === "watchable"
-            fontSize: Style.font.caption
-            foreground: root.bar.foreground
-            onClicked: root.setChannelFilter("watchable")
-          }
-
-          Button {
-            text: "All (" + (root.channelsData ? root.channelsData.length : 0) + ")"
-            tooltipText: "Every scanned station"
+            text: "All (" + (root.watchableChannels ? root.watchableChannels.length : 0) + ")"
+            tooltipText: "Every channel you haven't hidden"
             selected: root.channelFilter === "all"
             fontSize: Style.font.caption
             foreground: root.bar.foreground
@@ -2376,12 +2373,28 @@ BarWidget {
           Button {
             visible: root.hiddenData && root.hiddenData.length > 0
             text: "Hidden (" + root.hiddenData.length + ")"
-            tooltipText: "Stations set aside"
+            tooltipText: "Channels you hid"
             selected: root.channelFilter === "hidden"
             fontSize: Style.font.caption
             foreground: root.bar.foreground
             onClicked: root.setChannelFilter("hidden")
           }
+        }
+
+        Item {
+          width: Math.max(0, parent.width - filterTabRow.width - rescanBtn.width - parent.spacing * 2)
+          height: 1
+        }
+
+        Button {
+          id: rescanBtn
+          visible: root.channelsData.length > 0 && !root.isScanning
+          text: "Rescan"
+          tooltipText: "Look for channels again. Takes Tuner 1 for a few minutes"
+          enabled: !root.tuner1Busy
+          fontSize: Style.font.caption
+          foreground: root.bar.foreground
+          onClicked: root.startScan()
         }
       }
 
@@ -2396,14 +2409,14 @@ BarWidget {
           spacing: Style.space(8)
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "No channels found yet"
+            text: "No channels yet"
             color: Color.muted
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
           }
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "Scan for local Over-The-Air stations."
+            text: "Scan to find the channels your antenna picks up."
             color: Color.muted
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
@@ -2429,7 +2442,7 @@ BarWidget {
           spacing: Style.space(4)
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "⭐ No favorite channels yet"
+            text: "No favorites yet"
             color: Color.muted
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -2437,7 +2450,7 @@ BarWidget {
           }
           Text {
             anchors.horizontalCenter: parent.horizontalCenter
-            text: "Click the ☆ star on any station below to pin it here."
+            text: "Open All and click ☆ on a channel to add it here."
             color: Color.muted
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
@@ -2676,9 +2689,9 @@ BarWidget {
             id: libraryBackBtn
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            iconText: "󰅖"
+            iconText: "\udb80\udc4d"
             text: "Back"
-            tooltipText: "Back"
+            tooltipText: "Back to channels"
             foreground: root.bar.foreground
             onClicked: root.toggleLibrary()
           }
@@ -2689,7 +2702,7 @@ BarWidget {
             anchors.rightMargin: Style.space(6)
             anchors.verticalCenter: parent.verticalCenter
             text: root.libraryCapButtonText()
-            tooltipText: "Library size cap"
+            tooltipText: "Over the limit, the oldest recordings are deleted, series episodes first. Locked ones never are. Click to change"
             fontSize: Style.font.caption
             foreground: root.bar.foreground
             onClicked: root.cycleLibraryCap()
@@ -2717,7 +2730,8 @@ BarWidget {
             Text {
               textFormat: Text.PlainText
               text: (root.recordingsData.length > 0)
-                ? (root.libraryBytesLabel + " of " + root.libraryBudgetLabel + " · " + root.recordingsData.length + " in Videos/TV")
+                ? (root.recordingsData.length + (root.recordingsData.length === 1 ? " recording · " : " recordings · ")
+                   + root.libraryBytesLabel + (root.libraryBudgetLabel && root.libraryBudgetLabel !== "Unlimited" ? " of " + root.libraryBudgetLabel : ""))
                 : "Nothing recorded yet"
               color: Color.muted
               font.family: root.bar.fontFamily
@@ -2819,7 +2833,7 @@ BarWidget {
                         ? ((recRow.modelData.channel_number || "") + " " + (recRow.modelData.station || "") + " · ")
                         : "") + (recRow.modelData.date_formatted || "") + " · " + (recRow.modelData.size_formatted || "")
                         + (recRow.modelData.ads > 0 ? " · skips " + recRow.modelData.ads + (recRow.modelData.ads === 1 ? " ad break" : " ad breaks") : "")
-                        + (recRow.modelData.playable === false ? " · empty dump" : "")
+                        + (recRow.modelData.playable === false ? " · nothing recorded" : "")
                       color: Color.muted
                       font.family: root.bar.fontFamily
                       font.pixelSize: Style.font.caption
@@ -2834,7 +2848,7 @@ BarWidget {
                     anchors.rightMargin: Style.space(2)
                     anchors.verticalCenter: parent.verticalCenter
                     iconText: recRow.modelData.keep ? "\uf023" : "\uf09c"
-                    tooltipText: recRow.modelData.keep ? "Kept. Click to let the size limit delete it" : "Keep. The size limit will never delete it"
+                    tooltipText: recRow.modelData.keep ? "Locked. The size limit won't delete it. Click to unlock" : "Lock it so the size limit never deletes it"
                     foreground: recRow.modelData.keep ? Color.accent : Color.muted
                     hoverColor: root.bar.foreground
                     fontFamily: root.bar.fontFamily
@@ -2846,12 +2860,22 @@ BarWidget {
                     anchors.right: parent.right
                     anchors.rightMargin: Style.space(2)
                     anchors.verticalCenter: parent.verticalCenter
+                    readonly property bool armed: root.deleteArmed === (recRow.modelData.path || recRow.modelData.name)
                     iconText: "󰅙"
-                    tooltipText: "Delete"
-                    foreground: root.bar.foreground
-                    hoverColor: root.bar.foreground
+                    tooltipText: armed ? "Click again to delete" : "Delete"
+                    foreground: armed ? Color.urgent : root.bar.foreground
+                    hoverColor: armed ? Color.urgent : root.bar.foreground
                     fontFamily: root.bar.fontFamily
-                    onClicked: root.deleteRecording(recRow.modelData.path || recRow.modelData.name)
+                    onClicked: {
+                      var target = recRow.modelData.path || recRow.modelData.name
+                      if (!armed) {
+                        root.deleteArmed = target
+                        deleteDisarm.restart()
+                        return
+                      }
+                      root.deleteArmed = ""
+                      root.deleteRecording(target)
+                    }
                   }
                 }
               }

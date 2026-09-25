@@ -325,11 +325,11 @@ def cmd_pref(args):
         elif value in ("all",):
             prefs["channel_filter"] = "all"
         elif value in ("watchable", "watch"):
-            prefs["channel_filter"] = "watchable"
+            prefs["channel_filter"] = "all"
         elif value in ("hidden",):
             prefs["channel_filter"] = "hidden"
         else:
-            print("Use: omarchy-tv pref filter favorites|watchable|all|hidden")
+            print("Use: omarchy-tv pref filter favorites|all|hidden")
             return
         save_ui_prefs(prefs)
         print(f"Channel list filter is {prefs['channel_filter']}.")
@@ -362,7 +362,7 @@ def cmd_pref(args):
             print(f"Recording library cap is {format_bytes(budget)}.")
         return
 
-    print("Unknown pref. Use: omarchy-tv pref filter favorites|watchable|all|hidden | pref library-max auto|50|100|250|off")
+    print("Unknown pref. Use: omarchy-tv pref filter favorites|all|hidden | pref library-max auto|50|100|250|off")
 
 
 def cmd_favorite(args):
@@ -490,7 +490,7 @@ def cmd_keep(args):
     except Exception as exc:
         print(f"Error: {exc}")
         sys.exit(1)
-    print(f"Kept {os.path.basename(path)}")
+    print(f"Saved {os.path.basename(path)} to Recordings")
 
 
 def cmd_stop(args):
@@ -842,7 +842,7 @@ def main():
 
     p_pref = subparsers.add_parser("pref", help="UI preferences")
     p_pref.add_argument("key", help="Preference key (filter, library-max)")
-    p_pref.add_argument("value", nargs="?", default="", help="favorites, watchable, all, hidden, or a library cap")
+    p_pref.add_argument("value", nargs="?", default="", help="favorites, all, hidden, or a library cap")
     p_pref.set_defaults(func=cmd_pref)
 
     # play

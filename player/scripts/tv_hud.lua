@@ -809,11 +809,11 @@ local function render_hud()
     local delayed = is_ts and (paused or ts_delay > LIVE_SLACK) or ((not is_file) and (paused or behind_live()))
     local status = "LIVE"
     if is_library then
-        status = "PLAY"
+        status = "PLAYBACK"
     elseif is_ts and (paused or ts_delay > LIVE_SLACK) then
-        status = fmt_clock(ts_delay) .. " behind"
+        status = fmt_clock(ts_delay) .. " BEHIND"
     elseif delayed then
-        status = "BEHIND"
+        status = "BEHIND LIVE"
     end
 
     local function ass_escape(s)
@@ -908,13 +908,15 @@ local function render_hud()
 
     local vol = math.floor(mp.get_property_number("volume", 100) or 100)
     local vol_label = is_muted and "{\\1c&H3333F0&\\b1}Muted{\\1c&Hcdd6f4&\\b0}" or ("Vol " .. tostring(vol))
-    local action = paused and "Play (Space)" or "Pause (Space)"
-    local record = is_recording and "Stop (r)" or "Record (r)"
+    local action = paused and "Space Play" or "Space Pause"
+    local record = is_recording and "r Stop recording" or "r Record"
     local hints
-    if is_library or is_ts or delayed then
-        hints = string.format("Prev (j)    Back 10s (←)    %s    Ahead 10s (→)    Next (k)    Keep (y)    Live (l)    Mute (m)    %s", action, vol_label)
+    if is_library then
+        hints = string.format("← → 10s    %s    l Live TV    m Mute    %s", action, vol_label)
+    elseif is_ts or delayed then
+        hints = string.format("j k Channel    ← → 10s    %s    y Save    %s    l Live    m Mute    %s", action, record, vol_label)
     else
-        hints = string.format("Prev (j)    %s    Next (k)    Keep (y)    %s    Live (l)    Mute (m)    %s", action, record, vol_label)
+        hints = string.format("j k Channel    %s    %s    m Mute    %s", action, record, vol_label)
     end
     ass = ass .. box(0, 676, 1280, 44, "&H12141C&", "18")
     ass = ass .. string.format(
@@ -1447,8 +1449,14 @@ mp.add_forced_key_binding("y", "tv_keep_pause", function()
     mp.command_native_async({
         name = "subprocess",
         playback_only = false,
-        args = {cli, "keep"}
-    }, function()
+        args = {cli, "keep"},
+        capture_stdout = true,
+    }, function(ok, res)
+        if ok and type(res) == "table" and res.status == 0 then
+            mp.osd_message("Saved to Recordings", 3)
+        else
+            mp.osd_message("Nothing paused to save yet", 3)
+        end
         show_hud()
     end)
 end)
