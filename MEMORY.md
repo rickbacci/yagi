@@ -2,18 +2,18 @@
 
 Plugin `richardb.omarchy-tv` (`bar-widget`). QML `plugin/BarWidget.qml`. Timezone America/New_York.
 
-Pause dump stops when it is an hour of air ahead of the playhead. `l` jumps to that saved end, about an hour behind the air. Picking the station again starts a fresh dump. Close TV still deletes the file. It is not a library recording. An hour of ordinary live watching does not stop the writer.
+Pause dump stops an hour of air ahead of the playhead. `l` jumps to that end. Picking the station again starts a fresh dump. Close TV deletes it. Ordinary live watching does not stop the writer.
 
 Do not match the timeshift path in process args; that kills the PiP.
 
-Bars stay up until the first frame. A channel click keeps the window and blacks the picture until the new frame. This mpv reopens the tuner and locks again for every station, including a subchannel. The banner re-reads the live station while the picture is up. j and k change channel. Left and right stay skip.
+Bars stay up until the first frame. A channel click keeps the window and blacks the picture until the new frame. mpv reopens the tuner and locks again for every station. j and k change channel. Left and right skip.
 
-Guide is Tuner 1 EIT only, read every 3h. Guide stays. Next: Record all any time of day; a marathon is one recording cut per episode; ads marked and skipped, not cut. A rescan rewrites the lineup. Scan PIDs are wrong; each Guide read rewrites them from the tower's PMT. Favorites and hidden stay. All is every station.
+Guide is Tuner 1 EIT only, every 3h, never inside 10 min of a recording. Listings reach ~5h. Rescan rewrites the lineup; each Guide read fixes PIDs from the PMT. All = not hidden.
 
-Tests: `TMPDIR=/home/richardb/.cache/omarchy/tv-test-tmp`. Do not use `/tmp` for IPC or tests.
+Tests: `TMPDIR=/home/richardb/.cache/omarchy/tv-test-tmp`, `XDG_RUNTIME_DIR` set. Never `/tmp`.
 
 Richard: ADD. Dry sarcasm, short. One task in the first sentence. Park the rest on the todo list.
 
-Super+W quits the window. The HUD starts detached `sync --reap`. That child deletes `live.ts` after the window pid is gone and the tune lock is free, and it leaves the dump if a player is up. Close TV still uses stop, which waits, then deletes.
+Super+W quits. The HUD starts detached `sync --reap`; it deletes `live.ts` once the window and tune lock are gone.
 
-Channel zap reuses the dump and locks again. A 0:0 or copied video id plays the whole tower by service id. A missed tune lock fails. Channel rows use the airing date. Library dumps use that full-mux rule and a sidecar. Active only after the file grows; a failed partial stays. Under 8 GB free, the writer stops. HUD r is the station on screen. A user timer runs record due each minute. Keep copies that pause into the library. Live picture is one fd://0 reader on the follow fifo. Skip and live SEEK. Behind = file end - cursor - live_lag (zap gap, set at first pause), at dump rate. A zap is live. A skip drops a few seconds of readahead.
+Channel zap reuses the dump. A 0:0 or copied video id plays the whole tower by service id. Recordings: sidecar JSON, full-mux rule, active once growing, stop under 8 GB free. Recorders run via `own_scope` (systemd scope); the oneshot record timer kills its children. Timer runs `record due` each minute. Record all = title + channel, any hour. Back-to-back airings record as one run, then `record finish` splits per episode and marks ads (ffmpeg, Comskip if installed). HUD skips each ad break once; library seeks use sidecar `byte_rate`. Cap: per-show keep_last, then series first; never locked or newest. Save (y) copies the pause into the library. Live picture is one fd://0 reader on the follow fifo.
