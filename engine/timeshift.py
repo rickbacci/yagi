@@ -1317,6 +1317,7 @@ class Timeshift:
             "playhead_t": 0,
             "play_from": 0,
             "full_mux": cls._conf_needs_full_mux(name),
+            "started_at": time.time(),
             "updated_at": time.time(),
         }
         if keep_follow and follow_pid:

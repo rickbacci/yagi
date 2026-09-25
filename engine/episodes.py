@@ -166,7 +166,7 @@ def plan_pieces(side: Dict[str, Any], size: int) -> List[Tuple[Dict[str, Any], i
         hi = _align_up(byte_at(clean, b), total)
         if hi - lo < TS_PACKET * 64:
             continue
-        pieces.append((ep, lo, hi))
+        pieces.append((dict(ep, span=[a, b]), lo, hi))
     return pieces
 
 
@@ -218,14 +218,15 @@ def _free_name(folder: str, name: str, mine: str) -> str:
     return os.path.join(folder, f"{root}-{n}{ext}")
 
 
-def _episode_side(side: Dict[str, Any], ep: Dict[str, Any], source: str) -> Dict[str, Any]:
+def _episode_side(side: Dict[str, Any], ep: Dict[str, Any], source: str, lo: int, hi: int) -> Dict[str, Any]:
     keep = {k: side.get(k) for k in ("station", "channel", "tune_name", "service_id", "full_mux")}
-    start = int(ep.get("start_unix") or 0)
+    a, b = (ep.get("span") or [0, 0])[:2]
     keep.update({
         "title": ep.get("title") or side.get("title") or "",
         "synopsis": ep.get("synopsis") or "",
-        "start": start,
-        "end": start + int(ep.get("duration_sec") or 0),
+        "start": int(a),
+        "end": int(b),
+        "byte_rate": round((hi - lo) / (b - a), 1) if b > a else None,
         "status": "complete",
         "split_from": os.path.basename(source),
     })
@@ -262,7 +263,7 @@ def split_recording(path: str) -> List[str]:
     for i in range(len(pieces) - 1, -1, -1):
         ep, lo, hi = pieces[i]
         dest = _free_name(folder, episode_filename(side, ep), path)
-        meta = _episode_side(side, ep, path)
+        meta = _episode_side(side, ep, path, lo, hi)
         if i == 0 and lo == 0:
             with open(path, "r+b") as f:
                 f.truncate(min(hi, os.path.getsize(path)))

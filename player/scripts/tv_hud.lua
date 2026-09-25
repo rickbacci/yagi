@@ -309,10 +309,47 @@ local function file_bytes()
     return mp.get_property_number("file-size") or 0
 end
 
+local function read_sidecar(path)
+    local f = io.open((path:gsub("%.[^./]+$", "")) .. ".json", "r")
+    if not f then return nil end
+    local content = f:read("*a")
+    f:close()
+    local data = utils.parse_json(content or "")
+    if type(data) == "table" then return data end
+    return nil
+end
+
+-- One station alone is far below the tower's 19.39 Mbps. Byte math at the tower
+-- rate would end an SD episode after a few minutes.
+local lib_side_path = nil
+local lib_side = nil
+local function library_rate()
+    local path = mp.get_property("path") or ""
+    if path ~= lib_side_path then
+        lib_side_path = path
+        lib_side = read_sidecar(path)
+    end
+    local side = lib_side
+    if type(side) ~= "table" then return ATSC_BPS / 8 end
+    local rate = tonumber(side.byte_rate)
+    if rate and rate > 1000 then return rate end
+    if side.full_mux then return ATSC_BPS / 8 end
+    local start = tonumber(side.start) or 0
+    local stop = tonumber(side["end"]) or 0
+    if stop <= start then
+        stop = os.time()
+    end
+    local size = file_bytes()
+    if start > 0 and stop - start >= 10 and size > 0 then
+        return size / (stop - start)
+    end
+    return ATSC_BPS / 8
+end
+
 local function atsc_duration()
     local size = file_bytes()
     if size < 1024 then return 0 end
-    return (size * 8) / ATSC_BPS
+    return size / library_rate()
 end
 
 local function virt_update()
@@ -979,7 +1016,7 @@ apply_virt_seek = function()
     local path = mp.get_property("path") or ""
     if path == "" then return end
     local size = file_bytes()
-    local bytes = math.floor((virt_pos * ATSC_BPS) / 8)
+    local bytes = math.floor(virt_pos * library_rate())
     if size > 188 then
         bytes = math.max(0, math.min(bytes, size - 188))
     else
@@ -1113,6 +1150,7 @@ local prev_was_file = false
 mp.register_event("file-loaded", function()
     local ok, err = pcall(function()
     returning_live = false
+    lib_side_path = nil
     if is_library_playback() then
         prev_was_file = true
         if seek_reload then

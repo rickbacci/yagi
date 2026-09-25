@@ -154,6 +154,17 @@ def patch_sidecar(file_path: str, **fields: Any) -> Dict[str, Any]:
     return data
 
 
+ATSC_BYTES_PER_SEC = 19_390_000 / 8
+
+
+def byte_rate(size: int, start: float, end: float) -> Optional[float]:
+    """Bytes a second of this file. The player turns seconds into byte seeks with it."""
+    span = float(end) - float(start)
+    if span < 10 or size <= 0:
+        return None
+    return round(size / span, 1)
+
+
 def disk_below_floor(path: str) -> bool:
     """True when the volume holding path has less than the keep-free floor left."""
     try:
@@ -363,12 +374,14 @@ class DvrManager:
         side = read_sidecar(session.file_path)
         if str(side.get("status") or "") != "recording":
             return
-        playable = session.get_file_size() >= MIN_PLAYABLE_BYTES
+        size = session.get_file_size()
+        end = int(os.path.getmtime(session.file_path))
         patch_sidecar(
             session.file_path,
-            status="complete" if playable else "failed",
-            end=int(os.path.getmtime(session.file_path)),
+            status="complete" if size >= MIN_PLAYABLE_BYTES else "failed",
+            end=end,
             stopped_reason="exited",
+            byte_rate=byte_rate(size, session.start_time, end),
         )
 
     @classmethod
@@ -485,15 +498,25 @@ class DvrManager:
             service = 0
         if service <= 0:
             service = Timeshift.service_id(tune)
+        full_mux = bool(live.get("full_mux"))
+        ended = os.path.getmtime(source)
+        if full_mux:
+            rate: Optional[float] = ATSC_BYTES_PER_SEC
+        elif live.get("started_at"):
+            rate = byte_rate(size, float(live["started_at"]), ended)
+        else:
+            rate = None
+        kept = size - start
         write_sidecar(dest, {
             "title": tune,
             "station": tune,
             "channel": str(live.get("channel") or tune),
             "tune_name": tune,
             "service_id": service,
-            "full_mux": bool(live.get("full_mux")),
-            "start": int(time.time()),
-            "end": int(time.time()),
+            "full_mux": full_mux,
+            "start": int(ended - kept / rate) if rate else int(time.time()),
+            "end": int(ended),
+            "byte_rate": rate,
             "status": "complete",
             "kept_from": "pause",
         })
@@ -735,7 +758,9 @@ class DvrManager:
             if match:
                 s.stop()
                 if s.file_path:
-                    patch_sidecar(s.file_path, status="complete", end=int(time.time()))
+                    end = int(time.time())
+                    patch_sidecar(s.file_path, status="complete", end=end,
+                                  byte_rate=byte_rate(s.get_file_size(), s.start_time, end))
                 stopped.append(s)
             else:
                 remaining.append(s)

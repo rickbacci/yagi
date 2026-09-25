@@ -75,6 +75,7 @@ class TestSplit(unittest.TestCase):
         sides = [read_sidecar(p) for p in made]
         self.assertEqual([s["title"] for s in sides], ["Ep A", "Ep B", "Ep C"])
         self.assertEqual([s["synopsis"] for s in sides], ["story 0", "story 1", "story 2"])
+        self.assertEqual([s["byte_rate"] for s in sides], [RATE] * 3)
         spans = [(0, 2040), (1800, 3840), (3600, 5640)]
         for p, (a, b) in zip(made, spans):
             with open(p, "rb") as f:
