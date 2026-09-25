@@ -29,7 +29,7 @@ This is a DualHD-shaped appliance, not a generic PVR.
 - Two ATSC adapters, shared: live TV, recordings, scans, and Guide updates each take a free one. A one-tuner box can watch, or record, not both. Nothing takes a tuner that is live, recording, or scanning; a Guide update gives way.
 - Ad skipping uses Comskip if installed (`omarchy-pkg-aur-add comskip`), otherwise ffmpeg's black-frame and silence detection, which misses more.
 - First run: no stations until you scan, no Hidden list until you hide one, no Guide titles until `guide refresh` (what the stations send in PSIP). There is no canned Cleveland lineup in the engine.
-- Super+K is Omarchy’s keybindings overlay. It does not open this flyout. Use the antenna, or `omarchy-shell shell toggle richardb.omarchy-tv`.
+- Super+K is Omarchy’s keybindings overlay. It does not open this flyout. Use the antenna, or bind `omarchy-shell -q shell toggle richardb.omarchy-tv` (this box: Super+Shift+T in `~/.config/hypr/bindings.lua`).
 - State JSON is not all `0600`.
 - Version in `manifest.json` is `0.1.0`. Not a published 1.0.
 
@@ -120,7 +120,16 @@ omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
 
 `pause` is throwaway `live.ts`. The writer stops when that file is an hour of air ahead of the playhead. `record` is a keepable file. `live` seeks the dump write head, or retunes after a recording. Channel change is the only `loadfile`, in the same window.
 
-## HUD (pointer in the PiP — not the plugin, not Super+K)
+## Panel keys
+
+| Where | Keys |
+| --- | --- |
+| Everywhere | j/k or ↑/↓ move · Enter picks · Esc closes · `g` Guide · `v` Recordings · `f` Favorites · `a` All · Shift+S scan |
+| Channels | Enter watches (the TV window takes focus) · `r` records the station |
+| Guide | h/l or ←/→ time tabs · `/` search (Enter or ↓ back to the list) · Enter watches if on now, else records · `r` record this one · `a` Record all |
+| Recordings | Enter plays · `x` twice deletes · Shift+K locks |
+
+## HUD (the TV window has focus — not the plugin, not Super+K)
 
 | Key | Live TV | Recording |
 | --- | --- | --- |

@@ -85,6 +85,10 @@ BarWidget {
   property var ruleKeep: ({})
   property var ruleByShow: ({})
   property string deleteArmed: ""
+  property int guideCursor: 0
+  property bool focusAfterTune: false
+  onGuideSearchActiveChanged: root.guideCursor = 0
+  onShowBucketChanged: root.guideCursor = 0
 
   Timer {
     id: deleteDisarm
@@ -337,8 +341,15 @@ BarWidget {
   }
 
   function selectChannel(chName) {
+    root.focusAfterTune = true
     root.playChannel(chName)
     if (!root.pendingWatch) root.close()
+  }
+
+  function focusTv() {
+    focusProc.running = false
+    focusProc.command = [root.binPath, "focus"]
+    focusProc.running = true
   }
 
   function stopToWatch(rec) {
@@ -362,7 +373,7 @@ BarWidget {
 
   function listLen() {
     if (root.libraryModalOpen) return root.recordingsData ? root.recordingsData.length : 0
-    if (!root.showChannelBrowser) return 0
+    if (root.guideStripOpen) return root.guideItems().length
     return root.displayChannels ? root.displayChannels.length : 0
   }
 
@@ -371,13 +382,29 @@ BarWidget {
     if (n <= 0) return
     if (!root.cursorActive) {
       root.cursorActive = true
-      return
-    }
-    if (root.libraryModalOpen) {
+    } else if (root.libraryModalOpen) {
       root.recCursorIndex = Math.max(0, Math.min(n - 1, root.recCursorIndex + delta))
+    } else if (root.guideStripOpen) {
+      root.guideCursor = Math.max(0, Math.min(n - 1, root.guideCursor + delta))
     } else {
       root.cursorIndex = Math.max(0, Math.min(n - 1, root.cursorIndex + delta))
     }
+    Qt.callLater(root.revealCursor)
+  }
+
+  function revealIn(flick, repeater, index) {
+    var item = repeater ? repeater.itemAt(index) : null
+    if (!flick || !item) return
+    if (item.y < flick.contentY) flick.contentY = item.y
+    else if (item.y + item.height > flick.contentY + flick.height)
+      flick.contentY = item.y + item.height - flick.height
+  }
+
+  function revealCursor() {
+    if (root.libraryModalOpen) root.revealIn(recFlick, recRepeater, root.recCursorIndex)
+    else if (root.guideStripOpen && root.guideSearchActive) root.revealIn(stripSearchFlick, hitsRepeater, root.guideCursor)
+    else if (root.guideStripOpen) root.revealIn(stripFlick, showsRepeater, root.guideCursor)
+    else root.revealIn(channelFlickable, channelRepeater, root.cursorIndex)
   }
 
   function activateCursor() {
@@ -387,8 +414,61 @@ BarWidget {
       if (rec) root.playRecording(rec.path || rec.name, rec.playable)
       return
     }
+    if (root.guideStripOpen) {
+      root.guideActivate()
+      return
+    }
     var ch = root.displayChannels[root.cursorIndex]
     if (ch) root.useListedChannel(root.listedKey(ch))
+  }
+
+  function guideItems() {
+    return root.guideSearchActive ? (root.guideSearchHits || []) : (root.guideShowRows || [])
+  }
+
+  function guideCurrent() {
+    return root.guideItems()[root.guideCursor] || null
+  }
+
+  function guideCurrentAiring() {
+    var item = root.guideCurrent()
+    if (!item) return null
+    return root.guideSearchActive ? item : Model.showAiring(item)
+  }
+
+  function guideActivate() {
+    var item = root.guideCurrent()
+    if (!item) return
+    var airing = root.guideCurrentAiring()
+    if (airing && airing.on_now) root.selectChannel(airing.tune_name || airing.channel_number)
+    else if (airing) root.toggleHitRecord(airing)
+    else root.toggleRecordAll(item)
+  }
+
+  function guideRecordAll() {
+    var item = root.guideCurrent()
+    if (!item) return
+    if (root.guideSearchActive) root.toggleHitRecordAll(item)
+    else root.toggleRecordAll(item)
+  }
+
+  function shiftBucket(dx) {
+    var order = ["day", "prime", "late", "overnight"]
+    var i = Math.max(0, order.indexOf(root.showBucket))
+    root.showBucket = order[Math.max(0, Math.min(order.length - 1, i + dx))]
+    root.guideCursor = 0
+  }
+
+  function deleteWithConfirm(rec) {
+    if (!rec) return
+    var target = rec.path || rec.name
+    if (root.deleteArmed !== target) {
+      root.deleteArmed = target
+      deleteDisarm.restart()
+      return
+    }
+    root.deleteArmed = ""
+    root.deleteRecording(target)
   }
 
   function listedKey(ch) {
@@ -1353,10 +1433,17 @@ BarWidget {
   Process {
     id: tuneProc
     command: []
-    onExited: {
+    onExited: function(code) {
       playerStateFile.reload()
       tuneStatusFile.reload()
+      if (root.focusAfterTune && code === 0) root.focusTv()
+      root.focusAfterTune = false
     }
+  }
+
+  Process {
+    id: focusProc
+    command: []
   }
 
   Process {
@@ -1366,6 +1453,7 @@ BarWidget {
       playerStateFile.reload()
       if (code === 0) {
         root.close()
+        root.focusTv()
       }
     }
   }
@@ -1463,6 +1551,7 @@ BarWidget {
       if (root.watchAfterStop) {
         var watch = root.watchAfterStop
         root.watchAfterStop = ""
+        root.focusAfterTune = true
         root.tuneNow(watch)
         root.close()
       }
@@ -1526,13 +1615,33 @@ BarWidget {
       }
       onMoveRequested: function(dx, dy) {
         if (dy !== 0) root.moveCursor(dy)
+        else if (dx !== 0 && root.guideStripOpen && !root.libraryModalOpen && !root.guideSearchActive) root.shiftBucket(dx)
       }
       onActivateRequested: root.activateCursor()
+      onDeleteRequested: {
+        if (root.libraryModalOpen && root.cursorActive) root.deleteWithConfirm(root.recordingsData[root.recCursorIndex])
+      }
       onTabRequested: function(direction) {
         if (root.bar && typeof root.bar.switchPanelFrom === "function")
           root.bar.switchPanelFrom(root, direction)
       }
       onTextKey: function(t) {
+        if (root.guideStripOpen && !root.libraryModalOpen && (t === "/" || t === "r" || t === "a")) {
+          if (t === "/") {
+            guideStripSearch.forceActiveFocus()
+          } else if (t === "r") {
+            var airing = root.guideCurrentAiring()
+            if (airing) root.toggleHitRecord(airing)
+          } else {
+            root.guideRecordAll()
+          }
+          return
+        }
+        if (root.libraryModalOpen && t === "K") {
+          var rec = root.recordingsData[root.recCursorIndex]
+          if (root.cursorActive && rec) root.setRecordingKept(rec, !rec.keep)
+          return
+        }
         if (t === "g" || t === "G") root.toggleGuide()
         else if (t === "v" || t === "V") root.toggleLibrary()
         else if (t === "a" || t === "A") {
@@ -2156,6 +2265,20 @@ BarWidget {
           id: guideStripSearch
           width: parent.width
           placeholderText: "Search shows and teams"
+          Keys.onEscapePressed: {
+            text = ""
+            keyCatcher.forceActiveFocus()
+          }
+          Keys.onReturnPressed: {
+            keyCatcher.forceActiveFocus()
+            root.cursorActive = true
+            root.guideCursor = 0
+          }
+          Keys.onDownPressed: {
+            keyCatcher.forceActiveFocus()
+            root.cursorActive = true
+            root.guideCursor = 0
+          }
           font.family: root.bar.fontFamily
           onTextChanged: root.guideSearchText = text
         }
@@ -2211,10 +2334,12 @@ BarWidget {
             spacing: Style.space(6)
 
             Repeater {
+              id: showsRepeater
               model: root.guideShowRows
               delegate: Item {
                 id: showRow
                 required property var modelData
+                required property int index
                 readonly property bool ruled: !!root.ruleIds[modelData.id]
                 readonly property var airing: Model.showAiring(modelData)
                 readonly property string oneState: root.hitRecordState(airing)
@@ -2222,6 +2347,13 @@ BarWidget {
                 readonly property bool willRecord: ruled || oneState !== ""
                 width: stripShowsCol.width
                 implicitHeight: Math.max(showText.implicitHeight, showActions.implicitHeight) + Style.space(4)
+
+                Rectangle {
+                  anchors.fill: parent
+                  visible: root.cursorActive && !root.guideSearchActive && root.guideCursor === showRow.index
+                  radius: Style.spacing.labelGap
+                  color: Style.hoverFillFor(root.bar.foreground, Color.accent)
+                }
 
                 Rectangle {
                   visible: showRow.willRecord || showRow.onNow
@@ -2333,6 +2465,7 @@ BarWidget {
             width: stripSearchFlick.width
 
             Repeater {
+              id: hitsRepeater
               model: root.guideSearchHits
               delegate: Item {
                 id: hitRow
@@ -2343,6 +2476,13 @@ BarWidget {
                 readonly property bool willRecord: ruled || recState !== ""
                 width: stripSearchCol.width
                 implicitHeight: Math.max(hitText.implicitHeight, hitActions.implicitHeight) + Style.space(8)
+
+                Rectangle {
+                  anchors.fill: parent
+                  visible: root.cursorActive && root.guideSearchActive && root.guideCursor === hitRow.index
+                  radius: Style.spacing.labelGap
+                  color: Style.hoverFillFor(root.bar.foreground, Color.accent)
+                }
 
                 Rectangle {
                   visible: hitRow.willRecord || !!hitRow.modelData.on_now
@@ -2635,6 +2775,7 @@ BarWidget {
             spacing: Style.space(4)
 
               Repeater {
+              id: channelRepeater
               model: root.displayChannels
 
               CursorSurface {
@@ -2917,6 +3058,7 @@ BarWidget {
           clip: true
 
           Flickable {
+            id: recFlick
             anchors.fill: parent
             contentWidth: width
             contentHeight: recCol.implicitHeight
@@ -2930,6 +3072,7 @@ BarWidget {
               spacing: Style.space(6)
 
               Repeater {
+                id: recRepeater
                 model: root.recordingsData
 
                 CursorSurface {
@@ -3012,16 +3155,7 @@ BarWidget {
                     foreground: armed ? Color.urgent : root.bar.foreground
                     hoverColor: armed ? Color.urgent : root.bar.foreground
                     fontFamily: root.bar.fontFamily
-                    onClicked: {
-                      var target = recRow.modelData.path || recRow.modelData.name
-                      if (!armed) {
-                        root.deleteArmed = target
-                        deleteDisarm.restart()
-                        return
-                      }
-                      root.deleteArmed = ""
-                      root.deleteRecording(target)
-                    }
+                    onClicked: root.deleteWithConfirm(recRow.modelData)
                   }
                 }
               }

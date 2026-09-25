@@ -472,6 +472,13 @@ def cmd_fullscreen(args):
     MpvController().toggle_fullscreen(target_tv=bool(getattr(args, "player", False)))
 
 
+def cmd_focus(args):
+    from player.controller import focus_tv_window
+    if not focus_tv_window():
+        print("The TV window is not open.")
+        sys.exit(1)
+
+
 def cmd_seek(args):
     if not MpvController().seek(args.seconds):
         print("Failed to seek.")
@@ -881,6 +888,9 @@ def main():
         help="Target the omarchy-tv window even if it is not focused",
     )
     p_fs.set_defaults(func=cmd_fullscreen)
+
+    p_focus = subparsers.add_parser("focus", help="Give the TV window keyboard focus")
+    p_focus.set_defaults(func=cmd_focus)
 
     p_seek = subparsers.add_parser("seek", help="Seek the live dump or a recording by seconds")
     p_seek.add_argument("seconds", type=float, help="Relative seconds, e.g. 10 or -10")

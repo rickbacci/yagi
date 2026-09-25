@@ -93,6 +93,18 @@ def _hypr_json(subcommand: str):
         return None
 
 
+def focus_tv_window(wait: float = 3.0) -> bool:
+    """Keyboard focus to the TV window, so the HUD keys work. A new window takes a moment to map."""
+    deadline = time.time() + wait
+    while True:
+        clients = _hypr_json("clients") or []
+        if any(isinstance(c, dict) and c.get("class") == "omarchy-tv" for c in clients):
+            return _hypr_dispatch('hl.dsp.focus({ window = "class:^omarchy-tv$" })')
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.2)
+
+
 def _hypr_dispatch(lua: str) -> bool:
     result = subprocess.run(
         ["hyprctl", "dispatch", lua],

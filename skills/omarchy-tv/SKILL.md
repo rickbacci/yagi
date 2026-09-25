@@ -32,6 +32,10 @@ A station with no video or audio ID is dumped as the whole channel group once; t
 
 ## Keys
 
+Panel (Super+Shift+T): j/k move, Enter picks, Esc closes, `g` Guide, `v` Recordings. Guide: h/l time tabs, `/` search, `r` record one, `a` Record all. Recordings: `x` twice deletes, Shift+K locks. Picking a channel or recording focuses the TV window (`omarchy-tv focus`).
+
+TV window:
+
 Space pause / play still behind · `l` live · ←/→ skip 10s · ↑/↓ 1 minute · PgUp/PgDn next/last ad break (games never auto-skip) · inside the last 10s, → is live · j/k channel · r record · y save the pause · c captions · m / middle-click mute · wheel volume.
 
 ## Paths
