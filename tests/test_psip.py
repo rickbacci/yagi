@@ -21,7 +21,7 @@ from engine.psip import (
 
 
 # The live timer holds the real Tuner 1 lock during a Guide update.
-_TUNER_LOCK = patch("engine.psip.TUNER1_LOCK_KEY", f"test-tuner1-psip-{os.getpid()}")
+_TUNER_LOCK = patch("engine.pool.LOCK_PREFIX", f"test-tuner-psip-{os.getpid()}-")
 
 
 def setUpModule():

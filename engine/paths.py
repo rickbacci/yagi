@@ -105,8 +105,6 @@ def get_runtime_socket(name: str) -> str:
     return os.path.join(runtime_dir, name)
 
 
-TUNER1_LOCK_KEY = "tuner1"
-
 _lock_depth = threading.local()
 
 

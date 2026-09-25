@@ -381,6 +381,13 @@ def apply_program_events(channels: Dict[str, Any], events: Dict[str, List[Dict[s
             channels[number]["next_title"] = ""
 
 
+def guide_tuner_free() -> bool:
+    """A tuner nothing but a Guide update holds."""
+    from engine import pool
+    held = {a: job for a, job in pool.claims().items() if job != "guide"}
+    return pool.pick_work(held, wait_for_guide=False) is not None
+
+
 def epg_tuner_held(sessions: Optional[List[Any]] = None) -> bool:
     """Tuner 1 is the EPG/record tuner. A live recording holds it."""
     if sessions is None:
@@ -895,7 +902,7 @@ def refresh_guide(
 ) -> Dict[str, Any]:
     """
     Write guide.json from the scanned lineup.
-    Optional grabber fills programs; it must not run while a recording holds Tuner 1.
+    Optional grabber fills programs on whichever tuner is free.
     reread marks the listings stale so the next timer tick reads them.
     """
     target = guide_path or GUIDE_JSON_PATH
@@ -919,7 +926,7 @@ def refresh_guide(
         merged = dict(existing) if existing else {}
     skipped = False
     if grabber is not None:
-        if epg_tuner_held(sessions):
+        if (epg_tuner_held(sessions) if sessions is not None else not guide_tuner_free()):
             skipped = True
         else:
             apply_program_events(merged, grabber() or {})

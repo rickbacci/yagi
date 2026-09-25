@@ -55,9 +55,13 @@ BarWidget {
   property string libraryBudgetLabel: ""
   property var libraryMaxGb: "auto"
   property int recCursorIndex: 0
-  readonly property bool tuner0Busy: root.activeChannelName !== "" && root.isLiveSession
-  readonly property bool tuner1Busy: root.isRecording || root.isScanning || root.guideRefreshing
-  readonly property bool bothTunersBusy: root.tuner0Busy && root.tuner1Busy
+  // Two tuners, one pool. A Guide update gives its tuner up, so it never counts.
+  readonly property bool liveOn: root.activeChannelName !== "" && root.isLiveSession
+  readonly property int tunersFree: Math.max(0, 2 - (root.liveOn ? 1 : 0)
+                                             - (root.activeRecordings ? root.activeRecordings.length : 0)
+                                             - (root.isScanning ? 1 : 0))
+  property string pendingWatch: ""
+  property string watchAfterStop: ""
   readonly property bool flyoutStatusOn: root.activeChannelName !== "" || root.isRecording || root.isScanning || root.guideRefreshing
   readonly property bool showChannelBrowser: !root.guideStripOpen
   property int guideClockMin: -1
@@ -142,7 +146,7 @@ BarWidget {
 
   function refreshGuide() {
     if (guideRefreshProc.running || root.guideStatusRunning) return
-    if (root.isRecording) return
+    if (root.tunersFree === 0) return
     root.guideRefreshStarted = true
     guideRefreshProc.running = false
     guideRefreshProc.command = [root.binPath, "guide", "refresh"]
@@ -260,7 +264,7 @@ BarWidget {
   }
 
   function freeTunerForRecording() {
-    return !root.tuner1Busy
+    return root.tunersFree > 0
   }
 
   function hitRuleId(hit) {
@@ -334,7 +338,13 @@ BarWidget {
 
   function selectChannel(chName) {
     root.playChannel(chName)
-    root.close()
+    if (!root.pendingWatch) root.close()
+  }
+
+  function stopToWatch(rec) {
+    root.watchAfterStop = root.pendingWatch
+    root.pendingWatch = ""
+    root.stopRecord(root.recordingIdent(rec))
   }
 
   function playRecording(filePath, playable) {
@@ -582,6 +592,16 @@ BarWidget {
   function playChannel(chName) {
     if (tuneProc.running && root.activeChannelName === chName)
       return
+    if (!root.liveOn && root.tunersFree === 0 && (root.activeRecordings || []).length > 0) {
+      root.pendingWatch = chName
+      root.open()
+      return
+    }
+    root.pendingWatch = ""
+    root.tuneNow(chName)
+  }
+
+  function tuneNow(chName) {
     root.activeChannelName = chName
     tuneProc.running = false
     tuneProc.command = [root.binPath, "play", chName]
@@ -833,6 +853,16 @@ BarWidget {
       }
     }
     return root.activeChannelName
+  }
+
+  function getActiveDisplayNameFor(ident) {
+    var list = root.channelsData || []
+    for (var i = 0; i < list.length; i++) {
+      var ch = list[i]
+      if (ch && (ch.name === ident || ch.tune_name === ident || String(ch.channel_number) === String(ident)))
+        return Model.getDisplayTitle(ch)
+    }
+    return ident || "that channel"
   }
 
   function getActiveProgram() {
@@ -1430,6 +1460,12 @@ BarWidget {
     onExited: function(code) {
       recordingsActiveFile.reload()
       recordingsFile.reload()
+      if (root.watchAfterStop) {
+        var watch = root.watchAfterStop
+        root.watchAfterStop = ""
+        root.tuneNow(watch)
+        root.close()
+      }
     }
   }
 
@@ -1981,6 +2017,61 @@ BarWidget {
       }
 
       BorderSurface {
+        id: bothBusyCard
+        visible: root.pendingWatch !== ""
+        width: parent.width
+        implicitHeight: bothBusyCol.implicitHeight + Style.space(12)
+        radius: Style.spacing.labelGap
+        color: Style.selectedFillFor(root.bar.foreground, Color.urgent)
+        borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.urgent)
+
+        Column {
+          id: bothBusyCol
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.margins: Style.space(6)
+          spacing: Style.space(6)
+
+          Text {
+            width: parent.width
+            textFormat: Text.PlainText
+            text: "Both tuners are recording. Stop one to watch " + root.getActiveDisplayNameFor(root.pendingWatch) + "?"
+            color: root.bar.foreground
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            font.bold: true
+            wrapMode: Text.Wrap
+          }
+
+          Flow {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Repeater {
+              model: root.activeRecordings
+              delegate: Button {
+                required property var modelData
+                text: "Stop " + (modelData.program_title || root.recordingTitle(modelData))
+                tooltipText: "Stop this recording and watch. What it recorded so far is kept"
+                fontSize: Style.font.caption
+                foreground: Color.urgent
+                onClicked: root.stopToWatch(modelData)
+              }
+            }
+
+            Button {
+              text: "Keep recording"
+              tooltipText: "Don't watch right now"
+              fontSize: Style.font.caption
+              foreground: root.bar.foreground
+              onClicked: root.pendingWatch = ""
+            }
+          }
+        }
+      }
+
+      BorderSurface {
         id: guideUpdateCard
         visible: root.guideRefreshing
         width: parent.width
@@ -2421,8 +2512,8 @@ BarWidget {
           id: rescanBtn
           visible: root.channelsData.length > 0 && !root.isScanning
           text: "Rescan"
-          tooltipText: "Look for channels again. Takes Tuner 1 for a few minutes"
-          enabled: !root.tuner1Busy
+          tooltipText: "Look for channels again. Takes a free tuner for a few minutes"
+          enabled: root.tunersFree > 0
           fontSize: Style.font.caption
           foreground: root.bar.foreground
           onClicked: root.startScan()

@@ -30,6 +30,7 @@ from engine.paths import (
 )
 from engine.dvr import MIN_PLAYABLE_BYTES
 from engine.hidden import is_hidden_channel, load_hidden
+from engine.pool import BothTunersBusy
 from engine.timeshift import (
     LIVE_SLACK,
     Timeshift,
@@ -537,7 +538,11 @@ class MpvController:
                     self.send_command(["script-message", "tv-retuned"])
                 dump_path = Timeshift.retune_keep_window(target_name)
             else:
-                dump_path = Timeshift.start_dump(target_name)
+                try:
+                    dump_path = Timeshift.start_dump(target_name)
+                except BothTunersBusy as exc:
+                    Timeshift.fail_tune(target_name, station, message=str(exc))
+                    return False
             if not dump_path:
                 if keep_window:
                     self.send_command(["script-message", "tv-unblank"])

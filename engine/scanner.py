@@ -95,11 +95,13 @@ class AtscScanner:
     def _resolve_adapter(self) -> int:
         if self.adapter_id is not None:
             return self.adapter_id
-        return WORK_ADAPTER
+        from engine import pool
+        picked = pool.pick_work(wait_for_guide=False)
+        return WORK_ADAPTER if picked is None else picked
 
     def _work_tuner_ready(self, adapter: int) -> bool:
-        from engine.guide import epg_tuner_held
-        if epg_tuner_held():
+        from engine import pool
+        if adapter in pool.claims():
             return False
         return TunerManager.adapter_is_free(adapter)
 
@@ -117,7 +119,7 @@ class AtscScanner:
                 "status": "error",
                 "is_scanning": False,
                 "adapter_id": adapter,
-                "message": "Tuner 1 is busy.",
+                "message": "Both tuners are busy.",
                 "percent": 0,
             }
             write_scan_status(ev_busy)

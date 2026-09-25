@@ -25,12 +25,12 @@ from engine.paths import (
     UI_PREFS_PATH,
     chmod_private_file,
     ensure_private_dir,
-    TUNER1_LOCK_KEY,
     get_runtime_socket,
     own_scope,
     state_lock,
     touch_private_file,
 )
+from engine import pool
 from engine.tuner import TunerManager, WORK_ADAPTER
 from engine.enrichment import match_channel
 from engine.guide import current_program_title, get_channel_program, load_guide
@@ -155,6 +155,7 @@ def patch_sidecar(file_path: str, **fields: Any) -> Dict[str, Any]:
 
 
 ATSC_BYTES_PER_SEC = 19_390_000 / 8
+BOTH_BUSY_MESSAGE = "Both tuners are busy. Stop a recording or close the TV."
 
 
 def byte_rate(size: int, start: float, end: float) -> Optional[float]:
@@ -526,16 +527,21 @@ class DvrManager:
 
     @classmethod
     def start_recording(cls, channel_query: str, **kwargs: Any) -> DvrSession:
-        """Record a channel on Tuner 1. A Guide update gives it up between towers."""
+        """Record on a free tuner, 1 first. A Guide update gives its tuner up between towers."""
+        adapter = kwargs.get("adapter_override")
+        if adapter is None:
+            adapter = pool.pick_work(pool.claims(kwargs.get("active_path")))
+            if adapter is None:
+                raise RuntimeError(BOTH_BUSY_MESSAGE)
+            kwargs["adapter_override"] = adapter
+        key = pool.lock_key(adapter)
         try:
-            with state_lock(TUNER1_LOCK_KEY, timeout=TUNER1_WAIT_SECS):
+            with state_lock(key, timeout=TUNER1_WAIT_SECS):
                 return cls._start_recording_locked(channel_query, **kwargs)
         except TimeoutError as exc:
-            if str(exc) != TUNER1_LOCK_KEY:
+            if str(exc) != key:
                 raise
-            raise RuntimeError(
-                "Tuner 1 is busy. Stop the recording or wait for the Guide update."
-            ) from None
+            raise RuntimeError(BOTH_BUSY_MESSAGE) from None
 
     @classmethod
     def _wait_tuner_free(cls, adapter_id: int, timeout: Optional[float] = None) -> bool:
@@ -597,20 +603,10 @@ class DvrManager:
             if s.is_active() and (s.channel_number == channel_number or s.station == station):
                 raise RuntimeError(f"Channel {station} ({channel_number}) is already being recorded (PID {s.pid})")
 
-        # 2. Tuner 1 only. Do not take the live dump card.
-        if adapter_override is not None:
-            adapter_id = adapter_override
-        else:
-            adapter_id = WORK_ADAPTER
-            held = {
-                s.adapter_id
-                for s in current_sessions
-                if s.is_active() and s.adapter_id == WORK_ADAPTER
-            }
-            if held or not cls._wait_tuner_free(adapter_id):
-                raise RuntimeError(
-                    "Tuner 1 is busy. Stop the recording or wait for the Guide update."
-                )
+        # 2. The tuner start_recording picked. Live TV, a scan, or another recording may have taken it since.
+        adapter_id = WORK_ADAPTER if adapter_override is None else adapter_override
+        if pool.claims(act_path).get(adapter_id) in ("live", "record", "scan") or not cls._wait_tuner_free(adapter_id):
+            raise RuntimeError(BOTH_BUSY_MESSAGE)
 
         # 3. Lookup Program Metadata — clicked title wins; else the block on now
         chosen = str(program_title or "").strip()

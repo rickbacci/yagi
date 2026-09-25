@@ -36,7 +36,6 @@ from engine.paths import (
     state_lock,
     touch_private_file,
 )
-from engine.tuner import LIVE_ADAPTER
 
 FOLLOW_TS_PY = os.path.join(os.path.dirname(os.path.realpath(__file__)), "follow_ts.py")
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -410,7 +409,7 @@ class Timeshift:
         })
 
     @classmethod
-    def fail_tune(cls, tune_name: str, display_name: str = "") -> None:
+    def fail_tune(cls, tune_name: str, display_name: str = "", message: str = "") -> None:
         prior = cls.load_tune_status()
         label = (display_name or tune_name or "That station").strip()
         cls._write_tune_status({
@@ -418,7 +417,7 @@ class Timeshift:
             "tune_name": tune_name,
             "display_name": label,
             "snr_db": prior.get("snr_db"),
-            "message": f"{label} did not come up",
+            "message": message or f"{label} did not come up",
         })
 
     @classmethod
@@ -1271,6 +1270,14 @@ class Timeshift:
         if not name:
             return None
 
+        from engine import pool
+
+        held = pool.claims()
+        if adapter_id is None:
+            adapter_id = pool.pick_live(held)
+        if held.get(adapter_id) == "guide":
+            pool.ask_guide_to_yield(adapter_id)
+
         follow_pid = 0
         follow_socket = FOLLOW_SOCKET_PATH
         if keep_follow:
@@ -1284,13 +1291,12 @@ class Timeshift:
             cls.wipe()
             cls.ensure_dir()
 
-        if adapter_id is None:
-            adapter_id = LIVE_ADAPTER
-
         cls._reap_orphan_dumps()
-        cls._wait_frontend_free(timeout=0.8, adapter_id=adapter_id)
+        # A Guide tower asked to yield lets go within a second or two.
+        cls._wait_frontend_free(timeout=4.0 if held.get(adapter_id) == "guide" else 0.8, adapter_id=adapter_id)
         sock = TIMESHIFT_SOCKET_PATH
         proc = cls._capture_dump(name, adapter_id, TIMESHIFT_FILE, sock, "dump.log")
+        pool.clear_yield()
         if proc is None:
             if keep_follow:
                 cls._write_state({
@@ -1349,7 +1355,7 @@ class Timeshift:
 
     @classmethod
     def retune_keep_window(cls, tune_name: str) -> Optional[str]:
-        """Reuse the tuner 0 dump. This mpv locks again for every station.
+        """Reuse the live dump on its tuner. This mpv locks again for every station.
 
         The picture opens at play_from. Picking the same station again still
         starts a fresh dump.
@@ -1357,4 +1363,4 @@ class Timeshift:
         name = (tune_name or "").strip()
         if name and cls._retune_running_dump(name):
             return TIMESHIFT_FILE
-        return cls.start_dump(name, adapter_id=LIVE_ADAPTER, keep_follow=True)
+        return cls.start_dump(name, keep_follow=True)

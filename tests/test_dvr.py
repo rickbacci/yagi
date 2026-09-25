@@ -28,7 +28,7 @@ from engine.dvr import (
 from engine.tuner import TunerAdapter
 
 # The live timer holds the real Tuner 1 lock during a Guide update.
-_TUNER_LOCK = patch("engine.dvr.TUNER1_LOCK_KEY", f"test-tuner1-dvr-{os.getpid()}")
+_TUNER_LOCK = patch("engine.pool.LOCK_PREFIX", f"test-tuner-dvr-{os.getpid()}-")
 
 
 def setUpModule():
@@ -373,7 +373,7 @@ class TestDvrEngine(unittest.TestCase):
                     channels_file=channels_file,
                     active_path=active_file,
                 )
-            self.assertIn("Tuner 1", str(ctx.exception))
+            self.assertIn("Both tuners are busy", str(ctx.exception))
             mock_popen.assert_not_called()
 
     @patch("subprocess.Popen")

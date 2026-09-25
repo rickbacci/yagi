@@ -51,6 +51,10 @@ def _print_signal_plain(adapter_id: int) -> None:
 
 def cmd_signal(args):
     adapter_id = args.adapter
+    if adapter_id is None:
+        from engine import pool
+        live = pool.live_adapter()
+        adapter_id = 0 if live is None else live
     if args.plain:
         _print_signal_plain(adapter_id)
         return
@@ -437,7 +441,10 @@ def cmd_play(args):
     print(f"📺 Tuning to: {args.channel}...")
     success = player.tune(args.channel)
     if not success:
-        print("Failed to launch player or tune channel. Is channels.conf generated?")
+        from engine.timeshift import Timeshift
+        status = Timeshift.load_tune_status()
+        reason = status.get("message") if status.get("phase") == "failed" else ""
+        print(reason or "That channel did not come up.")
         sys.exit(1)
 
 
@@ -525,14 +532,17 @@ def parse_duration_str(d_str):
 def _grab_guide_if_due():
     """A few times a day, when Tuner 1 is not recording."""
     try:
-        from engine.guide import epg_tuner_held, guide_grab_due, load_guide, refresh_guide
+        from engine import pool
+        from engine.guide import guide_grab_due, guide_tuner_free, load_guide, refresh_guide
         from engine.psip import clear_stale_guide_status, guide_update_running
         clear_stale_guide_status()
         if guide_update_running():
             return
         from engine.schedule import next_window
         guide = load_guide()
-        if not guide_grab_due(time.time(), guide.get("updated_at"), epg_tuner_held(), next_record_at=next_window()):
+        # With both tuners free a coming recording takes the other one.
+        soon = next_window() if pool.free_count() < 2 else None
+        if not guide_grab_due(time.time(), guide.get("updated_at"), not guide_tuner_free(), next_record_at=soon):
             return
         from engine.psip import collect_guide_events
         result = refresh_guide(grabber=collect_guide_events)
@@ -715,7 +725,7 @@ def cmd_record(args):
         from engine.rules import arm_rules, note_recorded
         from engine.dvr import patch_sidecar
         from engine.episodes import chain_from, episode_of, finish_waiting, grow_runs, run_stop
-        from engine.schedule import drop_item, due_items, load_schedule, pick_due
+        from engine.schedule import drop_item, due_items, load_schedule
         for item in arm_rules(load_guide().get("channels") or {}):
             print(f"Queued {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
         for item in grow_runs():
@@ -729,18 +739,17 @@ def cmd_record(args):
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
+        from engine import pool
         ready = due_items()
-        busy = bool(DvrManager.load_active_sessions())
-        chosen = pick_due(ready, busy)
-        if chosen is None:
-            for item in ready:
-                print(f"Waiting. {item.get('title') or 'That show'} stays listed. Tuner 1 is busy.")
-        else:
-            for item in ready:
-                if item.get("id") == chosen.get("id"):
-                    continue
-                print(f"Waiting. {item.get('title') or 'That show'} stays listed. Tuner 1 is busy.")
+        taken = set()
+        for chosen in ready:
+            if chosen.get("id") in taken:
+                continue
+            if pool.pick_work() is None:
+                print(f"Waiting. {chosen.get('title') or 'That show'} stays listed. Both tuners are busy.")
+                continue
             run = chain_from(load_schedule(), chosen)
+            taken.update(row.get("id") for row in run)
             remaining = max(60, int(run_stop(run) - time.time()))
             try:
                 session = DvrManager.start_recording(
@@ -801,7 +810,7 @@ def main():
     p_signal = subparsers.add_parser("signal", help="Show SNR and strength for the picture tuner")
     p_signal.add_argument("action", nargs="?", choices=["watch"], help="Print a new reading each second")
     p_signal.add_argument("--plain", action="store_true", help=argparse.SUPPRESS)
-    p_signal.add_argument("--adapter", type=int, default=0, help="0 is the picture, 1 is scan and record")
+    p_signal.add_argument("--adapter", type=int, default=None, help="Tuner to read. Default: the one live TV is on")
     p_signal.set_defaults(func=cmd_signal)
 
     # scan

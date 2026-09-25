@@ -9,7 +9,7 @@ Plugin `richardb.omarchy-tv`, kind `bar-widget`, QML `plugin/BarWidget.qml`. Hyp
 1. `$USER` only. No `sudo` / `pkexec`.
 2. IPC: `engine.paths.get_runtime_socket()` in `$XDG_RUNTIME_DIR` (0700). Never `/tmp/`.
 3. ATSC keeps `+28615` Hz. Never `000000`.
-4. Tuner 0 live; Tuner 1 scan, EPG, record. Do not steal Tuner 1 while recording. Channel change dumps Tuner 0, then `loadfile` in the same PiP.
+4. Tuners are one pool (`engine/pool.py`). Live prefers 0, work prefers 1. Never take a tuner that is live, recording, or scanning. A Guide update gives way: to live at once, to a recording between towers. A channel change keeps its tuner, dumps, then `loadfile` in the same PiP.
 5. State JSON: `.tmp`, then `os.replace`.
 6. QML: `Color.*` / `Style.*` / `root.bar.*` only. HUD owns key chords.
 7. Class `omarchy-tv`: float, pin, 16:9, bottom-right, height `monitor/3`. Like `pip.lua`, not tag `pip` or 600×338. Super+F unpins, then fullscreen. No HUD `f`. Move is Super+LMB.

@@ -24,7 +24,6 @@ from engine.paths import (
     CHANNELS_JSON_PATH,
     GUIDE_STATUS_PATH,
     TIMESHIFT_DIR,
-    TUNER1_LOCK_KEY,
     chmod_private_file,
     state_lock,
 )
@@ -512,6 +511,10 @@ def _event_description(descriptions: Dict[tuple, List[tuple]], source_id: int, e
     return "".join(by_section[n] for n in sorted(by_section)).strip()
 
 
+class GuideYield(Exception):
+    """Live TV asked for this tuner mid-tower."""
+
+
 def dump_mux(adapter_id: int, frequency: int, dwell_sec: float = EPG_DWELL_SECS) -> bytes:
     from engine.timeshift import Timeshift
     Timeshift._wait_frontend_free(timeout=0.8, adapter_id=adapter_id)
@@ -542,10 +545,13 @@ def dump_mux(adapter_id: int, frequency: int, dwell_sec: float = EPG_DWELL_SECS)
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        from engine import pool
+        deadline = time.time() + max(20, int(dwell_sec) + 12)
         try:
-            proc.wait(timeout=max(20, int(dwell_sec) + 12))
-        except subprocess.TimeoutExpired:
-            pass
+            while proc.poll() is None and time.time() < deadline:
+                if pool.guide_must_yield(adapter_id):
+                    raise GuideYield()
+                time.sleep(0.2)
         finally:
             if proc.poll() is None:
                 proc.kill()
@@ -559,40 +565,58 @@ def dump_mux(adapter_id: int, frequency: int, dwell_sec: float = EPG_DWELL_SECS)
     return b""
 
 
+def _guide_tuner(sessions: Optional[List[Any]], preferred: Optional[int]) -> Optional[int]:
+    """A tuner nothing else holds, for one tower. Tests pass sessions and a fixed tuner."""
+    if sessions is not None:
+        return None if epg_tuner_held(sessions) else preferred
+    from engine import pool
+    held = {a: job for a, job in pool.claims().items() if job != "guide"}
+    if preferred is not None:
+        return None if preferred in held else preferred
+    return pool.pick_work(held, wait_for_guide=False)
+
+
 def collect_guide_events(
     channels: Optional[List[Dict[str, Any]]] = None,
     dump_fn: Optional[Callable[[int, int], bytes]] = None,
     sessions: Optional[List[Any]] = None,
-    adapter_id: int = EPG_ADAPTER,
+    adapter_id: Optional[int] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    if epg_tuner_held(sessions):
+    """Read every tower's listings on whichever tuner is free, one tower per hold.
+
+    A recording that wants the tuner gets it between towers. Live TV gets it mid-tower.
+    """
+    from engine import pool
+    if dump_fn is not None and adapter_id is None:
+        adapter_id = EPG_ADAPTER
+    if _guide_tuner(sessions, adapter_id) is None:
         return {}
-    from engine.tuner import TunerManager
-    if dump_fn is None:
-        tuners = {t.adapter_id: t for t in TunerManager.list_tuners()}
-        tuner = tuners.get(adapter_id)
-        if tuner is None or not tuner.supports_atsc or tuner.is_busy:
-            return {}
     if channels is None:
         from engine.guide import _read_channels_file
         channels = _read_channels_file(CHANNELS_JSON_PATH)
-    zap = dump_fn or (lambda _adapter, freq: dump_mux(adapter_id, freq))
+    zap = dump_fn or dump_mux
     events: Dict[str, List[Dict[str, Any]]] = {}
     freqs = unique_frequencies(channels)
     live = dump_fn is None
     try:
         for i, freq in enumerate(freqs, start=1):
+            tuner = _guide_tuner(sessions, adapter_id)
+            if tuner is None:
+                break
             if live:
-                write_guide_status(True, i, len(freqs))
-            # One tower per hold. A recording waiting on Tuner 1 gets it next,
-            # and then this loop sees it and stops.
-            with state_lock(TUNER1_LOCK_KEY):
-                if epg_tuner_held(sessions):
+                write_guide_status(True, i, len(freqs), adapter=tuner)
+            with state_lock(pool.lock_key(tuner)):
+                if _guide_tuner(sessions, tuner) is None:
                     break
                 if live:
-                    print(f"EPG mux {i}/{len(freqs)} {freq} Hz", flush=True)
+                    print(f"EPG mux {i}/{len(freqs)} {freq} Hz on tuner {tuner}", flush=True)
                 try:
-                    raw = zap(adapter_id, freq) or b""
+                    raw = zap(tuner, freq) or b""
+                except GuideYield:
+                    if live:
+                        print(f"EPG gave tuner {tuner} to live TV", flush=True)
+                    time.sleep(1.0)
+                    continue
                 except Exception as exc:
                     if live:
                         print(f"EPG mux {freq} Hz failed: {exc}", flush=True)
@@ -671,14 +695,17 @@ def lineup_programs(channels: Optional[List[Dict[str, Any]]], frequency: int) ->
     return {program: nums[0] for program, nums in found.items() if len(set(nums)) == 1}
 
 
-def write_guide_status(running: bool, tower: int, towers: int, path: Optional[str] = None) -> None:
-    """What the flyout shows while any Guide update holds Tuner 1."""
+def write_guide_status(
+    running: bool, tower: int, towers: int, path: Optional[str] = None, adapter: Optional[int] = None,
+) -> None:
+    """What the flyout shows while a Guide update runs, and which tuner it holds."""
     target = path or GUIDE_STATUS_PATH
     payload = {
         "running": bool(running),
         "pid": os.getpid() if running else 0,
         "tower": int(tower),
         "towers": int(towers),
+        "adapter": adapter if running else None,
         "updated_at": time.time(),
     }
     try:

@@ -994,7 +994,7 @@ class TestTimeshift(unittest.TestCase):
             self.assertEqual(len(started), 1)
             self.assertTrue(os.path.isfile(started[0][0]))
 
-    def test_channel_change_does_not_borrow_tuner_1(self):
+    def test_channel_change_keeps_its_tuner(self):
         src = os.path.join(
             os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
             "engine",
@@ -1004,7 +1004,7 @@ class TestTimeshift(unittest.TestCase):
             text = f.read()
         start = text.index("def retune_keep_window")
         chunk = text[start:start + 900]
-        self.assertIn("LIVE_ADAPTER", chunk)
+        self.assertIn("cls.start_dump(name, keep_follow=True)", chunk)
         self.assertNotIn("get_available_tuner", chunk)
         self.assertNotIn("TIMESHIFT_NEXT_FILE", chunk)
 
