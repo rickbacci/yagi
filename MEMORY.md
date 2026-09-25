@@ -12,7 +12,7 @@ Guide is broadcast EIT only, every 3h on a free tuner; it yields to live at once
 
 Tests: `TMPDIR=/home/richardb/.cache/omarchy/tv-test-tmp`, `XDG_RUNTIME_DIR` set. Never `/tmp`.
 
-Richard: ADD. Dry sarcasm, short. One task in the first sentence. Park the rest on the todo list.
+Richard: ADD. Dry sarcasm, short. One task in the first sentence. Park the rest on the todo list. Before any install, say what, from where, and how trusted.
 
 Super+W quits. The HUD starts detached `sync --reap`; it deletes `live.ts` once the window and tune lock are gone.
 
