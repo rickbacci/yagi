@@ -184,6 +184,24 @@ def remaining_record_minutes(
     return int(remain)
 
 
+FILLER_TITLES = {"paid programming", "paid program", "programa pagado", "to be announced"}
+
+
+def collapse_repeats(text: str) -> str:
+    """One copy of a text an older parser glued to itself."""
+    n = len(text)
+    for period in range(20, n // 2 + 1):
+        chunk = text[:period]
+        if text.startswith(chunk * 2) and (chunk * (n // period + 1)).startswith(text):
+            return chunk.strip()
+    return text
+
+
+def is_filler_title(title: Any) -> bool:
+    """Infomercials and placeholders. Kept in guide.json, left out of the guide."""
+    return str(title or "").strip().lower() in FILLER_TITLES
+
+
 def search_guide(
     channels: Optional[Dict[str, Any]],
     query: str,
@@ -201,9 +219,11 @@ def search_guide(
         for index, prog in enumerate(programs):
             title = str(prog.get("title") or "")
             folded = title.lower()
-            if not title or not all(word in folded for word in words):
+            if not title or is_filler_title(title) or not all(word in folded for word in words):
                 continue
+            when = _program_when(prog)
             hits.append({
+                "_sort": (0, when.timestamp()) if when else (1, parse_minutes(str(prog.get("start") or ""))),
                 "channel_number": str(number),
                 "callsign": row.get("callsign") or row.get("station") or "",
                 "tune_name": row.get("tune_name") or "",
@@ -218,7 +238,9 @@ def search_guide(
                 "before": _neighbor_program(programs[index - 1] if index else None),
                 "after": _neighbor_program(programs[index + 1] if index + 1 < len(programs) else None),
             })
-    hits.sort(key=lambda hit: (parse_minutes(str(hit.get("start") or "")), _channel_sort_key(hit.get("channel_number"))))
+    hits.sort(key=lambda hit: (hit["_sort"], _channel_sort_key(hit.get("channel_number"))))
+    for hit in hits:
+        del hit["_sort"]
     return hits
 
 
@@ -398,9 +420,10 @@ _WEEKDAY_NAMES = (
     "Saturdays",
     "Sundays",
 )
-_HISTORY_RAW_SEC = 31 * 24 * 3600
+_HISTORY_RAW_SEC = 28 * 24 * 3600
 _HISTORY_USUAL_SEC = 120 * 24 * 3600
-GUIDE_GRAB_GAP_SEC = 6 * 3600
+# Most stations send about five hours ahead. Three hours leaves no gap.
+GUIDE_GRAB_GAP_SEC = 3 * 3600
 
 
 def _fold_title(title: str) -> str:
@@ -668,7 +691,7 @@ def guide_grab_due(
     tuner_busy: bool,
     gap: int = GUIDE_GRAB_GAP_SEC,
 ) -> bool:
-    """A few times a day, and only when Tuner 1 is free."""
+    """Every few hours, and only when Tuner 1 is free."""
     if tuner_busy:
         return False
     try:
@@ -863,23 +886,27 @@ def refresh_guide(
     channels_path: Optional[str] = None,
     grabber: Optional[Callable[[], Dict[str, List[Dict[str, Any]]]]] = None,
     sessions: Optional[List[Any]] = None,
+    reread: bool = False,
 ) -> Dict[str, Any]:
     """
     Write guide.json from the scanned lineup.
     Optional grabber fills programs; it must not run while a recording holds Tuner 1.
+    reread marks the listings stale so the next timer tick reads them.
     """
     target = guide_path or GUIDE_JSON_PATH
     lineup = channels
     if lineup is None:
         lineup = _read_channels_file(channels_path or CHANNELS_JSON_PATH)
     existing: Dict[str, Any] = {}
+    read_at = 0.0
     if os.path.exists(target):
         try:
             with open(target, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
             if isinstance(loaded, dict) and isinstance(loaded.get("channels"), dict):
                 existing = loaded["channels"]
-        except (OSError, json.JSONDecodeError):
+                read_at = float(loaded.get("updated_at") or 0)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
             existing = {}
     if lineup:
         merged = merge_lineup(lineup, existing)
@@ -891,18 +918,27 @@ def refresh_guide(
             skipped = True
         else:
             apply_program_events(merged, grabber() or {})
+            read_at = time.time()
     remember_guide_history(
         merged,
         history_path=os.path.join(os.path.dirname(target), "guide_history.json"),
         now=time.time(),
     )
-    payload = {"updated_at": time.time(), "channels": merged, "source": "lineup"}
+    for row in merged.values():
+        for prog in (row.get("programs") or []) if isinstance(row, dict) else []:
+            if isinstance(prog, dict) and prog.get("synopsis"):
+                prog["synopsis"] = collapse_repeats(str(prog["synopsis"]))
+    # updated_at is when the broadcast was last read. A lineup sync is not a read.
+    if reread and grabber is None:
+        read_at = 0.0
+    payload = {"updated_at": read_at, "channels": merged, "source": "lineup"}
     _write_guide(payload, target)
     return {"skipped": skipped, "channels": merged}
 
 
 def sync_guide_from_channels(channels: List[Dict[str, Any]], guide_path: Optional[str] = None) -> Dict[str, Any]:
-    return refresh_guide(channels=channels, guide_path=guide_path, grabber=None, sessions=[])
+    """A new lineup. The listings are re-read on the next timer tick."""
+    return refresh_guide(channels=channels, guide_path=guide_path, grabber=None, sessions=[], reread=True)
 
 
 def load_guide(guide_path: Optional[str] = None) -> Dict[str, Any]:

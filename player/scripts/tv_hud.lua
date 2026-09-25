@@ -26,8 +26,11 @@ local function make_overlay(z)
 end
 
 local overlay = make_overlay(10)
+-- Weak or lost signal, shown on the picture while the HUD is hidden.
+local badge = make_overlay(11)
 local signal_label = ""
 local signal_bgr = "&Hc8d0e0&"
+local update_badge = function() end
 
 local pointer_in = false
 local hud_visible = false
@@ -896,6 +899,7 @@ local function hide_hud()
         hide_timer:kill()
         hide_timer = nil
     end
+    update_badge()
 end
 
 local function show_hud()
@@ -903,6 +907,7 @@ local function show_hud()
         reload_data()
         render_hud()
         hud_visible = true
+        update_badge()
 
         if hide_timer then
             hide_timer:kill()
@@ -1195,25 +1200,79 @@ mp.observe_property("path", "string", function(_, path)
 end)
 
 local signal_busy = false
+-- A good picture says nothing. Weak below 25 dB; good again at 26 so it
+-- does not flicker. Two bad readings in a row before anything shows.
+local WEAK_DB = 25
+local GOOD_AGAIN_DB = 26
+local signal_state = "good"
+local bad_streak = 0
+local last_poll = 0
 
 local function signal_color(db)
-    if db < 18 then return "&H3333F0&" end
-    if db < 25 then return "&H30C0F0&" end
-    return "&H50D070&"
+    if db and db < 18 then return "&H3333F0&" end
+    return "&H30C0F0&"
 end
 
-local function note_signal(text, bgr)
-    signal_label = text or ""
-    signal_bgr = bgr or "&Hc8d0e0&"
+local function clear_signal()
+    signal_state = "good"
+    bad_streak = 0
+    signal_label = ""
+end
+
+update_badge = function()
+    local show = signal_label ~= "" and not hud_visible and not blanking
+        and picture_ready() and not is_library_playback()
+    if show then
+        badge.data = string.format(
+            "{\\an9\\pos(1252,28)\\bord2\\3c&H000000&\\shad0\\fnSans-Serif\\b1\\fs26\\1c%s}%s",
+            signal_bgr, signal_label
+        )
+    else
+        badge.data = ""
+    end
+    badge:update()
+end
+
+local function note_reading(db)
+    local state = "good"
+    if db == nil then
+        state = "lost"
+    elseif db < WEAK_DB or (signal_state ~= "good" and db < GOOD_AGAIN_DB) then
+        state = "weak"
+    end
+    if state == "good" then
+        clear_signal()
+    else
+        bad_streak = bad_streak + 1
+        if bad_streak >= 2 then
+            signal_state = state
+            if state == "lost" then
+                signal_label = "No signal"
+                signal_bgr = "&H3333F0&"
+            else
+                signal_label = "Weak signal"
+                signal_bgr = signal_color(db)
+            end
+        end
+    end
     if hud_visible then pcall(render_hud) end
+    update_badge()
 end
 
 local function poll_signal()
-    if is_library_playback() then
-        note_signal("")
+    if is_library_playback() or blanking or not picture_ready() then
+        -- A tune in progress has no lock yet. That is not a weak signal.
+        if signal_label ~= "" or bad_streak > 0 then
+            clear_signal()
+            update_badge()
+        end
         return
     end
+    local every = (signal_state ~= "good" or bad_streak > 0 or hud_visible) and 2 or 5
+    local now = mp.get_time()
+    if now - last_poll < every - 0.05 then return end
     if signal_busy then return end
+    last_poll = now
     signal_busy = true
     mp.command_native_async({
         name = "subprocess",
@@ -1229,16 +1288,11 @@ local function poll_signal()
             return
         end
         local line = (result.stdout or ""):gsub("^%s+", ""):gsub("%s+$", "")
-        local db = tonumber(line)
-        if not db then
-            note_signal("No lock", "&H3333F0&")
-            return
-        end
-        note_signal(string.format("%d dB", math.floor(db + 0.5)), signal_color(db))
+        note_reading(tonumber(line))
     end)
 end
 
-mp.add_periodic_timer(2, poll_signal)
+mp.add_periodic_timer(1, poll_signal)
 poll_signal()
 
 mp.register_event("shutdown", function()

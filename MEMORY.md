@@ -8,7 +8,7 @@ Do not match the timeshift path in process args; that kills the PiP.
 
 Bars stay up until the first frame. A channel click keeps the window and blacks the picture until the new frame. This mpv reopens the tuner and locks again for every station, including a subchannel. The banner re-reads the live station while the picture is up. j and k change channel. Left and right stay skip.
 
-Guide is Tuner 1 EIT only. A rescan rewrites the lineup. This scanner copies some subchannel video ids (43.1 copies 19.1, 3.3 copies 3.1). Favorites and hidden stay. All is every station.
+Guide is Tuner 1 EIT only, read every 3h. Guide stays. Next: Record all any time of day; a marathon is one recording cut per episode; ads marked and skipped, not cut. A rescan rewrites the lineup. Scan PIDs are wrong; each Guide read rewrites them from the tower's PMT. Favorites and hidden stay. All is every station.
 
 Tests: `TMPDIR=/home/richardb/.cache/omarchy/tv-test-tmp`. Do not use `/tmp` for IPC or tests.
 

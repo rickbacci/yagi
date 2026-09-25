@@ -868,11 +868,31 @@ class Timeshift:
                 learned[sid] = (video, audio)
         if not learned:
             return False
-        cls._write_learned_pids(learned, frequency)
+        cls._write_learned_pids(learned, frequency, trust=True)
         return True
 
     @classmethod
-    def _write_learned_pids(cls, learned: Dict[int, tuple], frequency: Optional[int] = None) -> None:
+    def _write_learned_pids(
+        cls,
+        learned: Dict[int, tuple],
+        frequency: Optional[int] = None,
+        trust: bool = False,
+    ) -> None:
+        """Save video and audio IDs by service id.
+
+        trust: the IDs came from the tower's PMT or a probe of it, so any
+        service on that tower that differs is corrected, not only a copy.
+        """
+        with state_lock(MPV_CHANNELS_CONF):
+            cls._write_learned_pids_locked(learned, frequency, trust)
+
+    @classmethod
+    def _write_learned_pids_locked(
+        cls,
+        learned: Dict[int, tuple],
+        frequency: Optional[int],
+        trust: bool,
+    ) -> None:
         try:
             with open(MPV_CHANNELS_CONF, encoding="utf-8") as f:
                 lines = f.read().splitlines()
@@ -909,7 +929,7 @@ class Timeshift:
                     sid = -1
                 on_tower = frequency is None or freq == frequency
                 copied = old_video > 0 and sid > 0 and sid != lowest.get((freq, old_video))
-                if on_tower and sid in learned and (old_video <= 0 or old_audio <= 0 or copied):
+                if on_tower and sid in learned and (trust or old_video <= 0 or old_audio <= 0 or copied):
                     video, audio = learned[sid]
                     if old_video != video or old_audio != audio:
                         parts[3] = str(video)
@@ -921,6 +941,7 @@ class Timeshift:
             tmp = f"{MPV_CHANNELS_CONF}.tmp.{os.getpid()}"
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write("\n".join(out) + ("\n" if out else ""))
+            chmod_private_file(tmp)
             os.replace(tmp, MPV_CHANNELS_CONF)
         try:
             with open(CHANNELS_JSON_PATH, encoding="utf-8") as f:
@@ -954,7 +975,7 @@ class Timeshift:
                 and old_video > 0
                 and sid != lowest.get((ch_freq, old_video))
             )
-            if old_video <= 0 or old_audio <= 0 or copied:
+            if (trust or old_video <= 0 or old_audio <= 0 or copied) and (old_video, old_audio) != (video, audio):
                 ch["video_pid"] = video
                 ch["audio_pid"] = audio
                 touched = True
@@ -963,6 +984,7 @@ class Timeshift:
         tmp = f"{CHANNELS_JSON_PATH}.tmp.{os.getpid()}"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
+        chmod_private_file(tmp)
         os.replace(tmp, CHANNELS_JSON_PATH)
 
     @classmethod

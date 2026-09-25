@@ -71,9 +71,15 @@ BarWidget {
   readonly property bool isPlayback: root.isLibraryPlayback || root.playerMode === "timeshift"
   property bool cursorActive: false
   property int cursorIndex: 0
-  property bool guideRefreshing: false
-  property var slotItems: []
-  readonly property var guideStripRows: root.slotItems
+  property bool guideRefreshStarted: false
+  property bool guideStatusRunning: false
+  property int guideStatusTower: 0
+  property int guideStatusTowers: 0
+  readonly property bool guideRefreshing: root.guideRefreshStarted || root.guideStatusRunning
+  property var showItems: []
+  property var ruleIds: ({})
+  property string showBucket: Model.bucketNow()
+  readonly property var guideShowRows: Model.filterShows(root.showItems, root.showBucket)
   property var scheduleItems: []
   readonly property string scheduleLine: {
     var items = root.scheduleItems || []
@@ -111,9 +117,9 @@ BarWidget {
   }
 
   function refreshGuide() {
-    if (guideRefreshProc.running) return
+    if (guideRefreshProc.running || root.guideStatusRunning) return
     if (root.isRecording) return
-    root.guideRefreshing = true
+    root.guideRefreshStarted = true
     guideRefreshProc.running = false
     guideRefreshProc.command = [root.binPath, "guide", "refresh"]
     guideRefreshProc.running = true
@@ -128,45 +134,55 @@ BarWidget {
     return h + ":" + (min < 10 ? "0" : "") + min + " " + (h24 >= 12 ? "PM" : "AM")
   }
 
-  function applySlots(raw) {
-    var days = ["Mondays", "Tuesdays", "Wednesdays", "Thursdays", "Fridays", "Saturdays", "Sundays"]
+  onGuideStripOpenChanged: {
+    if (!root.guideStripOpen) return
+    root.showBucket = Model.bucketNow()
+    root.loadShows()
+  }
+
+  function loadShows() {
+    showsProc.running = false
+    showsProc.command = [root.binPath, "guide", "shows"]
+    showsProc.running = true
+  }
+
+  function applyShows(raw) {
     try {
       var data = JSON.parse(raw || "{}")
-      var usual = data.usual || []
-      var out = []
-      var i, slot, weeks
-      for (i = 0; i < usual.length; i++) {
-        slot = usual[i] || {}
-        weeks = slot.weeks || []
-        if (!(weeks.length >= 2 || slot.manual || slot.record)) continue
-        out.push({
-          id: slot.id || "",
-          title: slot.title || "",
-          clock: slot.clock || "",
-          day: days[Number(slot.weekday)] || "",
-          tune: slot.tune_name || slot.channel || "",
-          minutes: Math.max(1, Math.round((Number(slot.duration_sec) || 0) / 60)),
-          record: !!slot.record
-        })
-      }
-      root.slotItems = out
+      root.showItems = data.shows || []
     } catch (e) {
-      root.slotItems = []
+      root.showItems = []
     }
   }
 
-  function markSlot(id, record) {
-    if (!id) return
-    slotProc.running = false
-    slotProc.command = [root.binPath, "guide", "slot", record ? "record" : "unrecord", "--id", id]
-    slotProc.running = true
+  function applyRules(raw) {
+    var ids = {}
+    try {
+      var rules = (JSON.parse(raw || "{}").rules) || []
+      for (var i = 0; i < rules.length; i++) {
+        if (rules[i] && rules[i].id) ids[rules[i].id] = true
+      }
+    } catch (e) {
+    }
+    root.ruleIds = ids
   }
 
-  function removeSlot(id) {
-    if (!id) return
-    slotProc.running = false
-    slotProc.command = [root.binPath, "guide", "slot", "delete", "--id", id]
-    slotProc.running = true
+  function toggleRecordAll(show) {
+    if (!show || !show.id) return
+    ruleProc.running = false
+    if (root.ruleIds[show.id]) {
+      ruleProc.command = [root.binPath, "record", "unall", show.id]
+    } else {
+      if (!show.tune_name) return
+      ruleProc.command = [
+        root.binPath, "record", "all", show.tune_name,
+        "--id", show.id,
+        "--title", show.title || "",
+        "--channel", show.channel || "",
+        "--when", (show.buckets || []).join(",")
+      ]
+    }
+    ruleProc.running = true
   }
 
   function applySchedule(raw) {
@@ -1022,7 +1038,10 @@ BarWidget {
     path: root.tvConfigDir + "/guide.json"
     watchChanges: true
     printErrors: false
-    onLoaded: root.applyGuide(text())
+    onLoaded: {
+      root.applyGuide(text())
+      if (root.guideStripOpen) root.loadShows()
+    }
     onFileChanged: reload()
   }
 
@@ -1043,6 +1062,26 @@ BarWidget {
     printErrors: false
     onLoaded: root.applyScanStatus(text())
     onFileChanged: reload()
+  }
+
+  FileView {
+    id: guideStatusFile
+    path: root.tvConfigDir + "/guide_status.json"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.applyGuideStatus(text())
+    onFileChanged: reload()
+  }
+
+  function applyGuideStatus(raw) {
+    try {
+      var s = JSON.parse(raw) || {}
+      root.guideStatusRunning = !!s.running
+      root.guideStatusTower = Number(s.tower) || 0
+      root.guideStatusTowers = Number(s.towers) || 0
+    } catch (e) {
+      root.guideStatusRunning = false
+    }
   }
 
   // Watch active DVR recordings
@@ -1066,8 +1105,6 @@ BarWidget {
   property string tunePhase: ""
   property string tuneMessage: ""
   property string tuneSnr: ""
-  property string liveSnr: ""
-  property string liveSnrTone: ""
   property string tuneName: ""
   property string tuneDisplay: ""
 
@@ -1088,25 +1125,6 @@ BarWidget {
     }
   }
 
-  function applyLiveSnr(raw) {
-    var line = String(raw || "").trim()
-    if (!root.isLiveSession) {
-      root.liveSnr = ""
-      root.liveSnrTone = ""
-      return
-    }
-    var n = Number(line)
-    if (!line || line === "none" || isNaN(n)) {
-      root.liveSnr = "No lock"
-      root.liveSnrTone = "low"
-      return
-    }
-    root.liveSnr = Math.round(n) + " dB"
-    if (n < 18) root.liveSnrTone = "low"
-    else if (n < 25) root.liveSnrTone = "mid"
-    else root.liveSnrTone = "high"
-  }
-
   function applyPlayerState(jsonText) {
     try {
       var raw = (jsonText || "").trim()
@@ -1121,8 +1139,6 @@ BarWidget {
         if (s.last_live) root.lastLiveChannel = s.last_live
       } else if (s.running === false) {
         root.pauseKept = false
-        root.liveSnr = ""
-        root.liveSnrTone = ""
         root.activeChannelName = ""
         root.playerMode = "live"
         if (s.last_live) root.lastLiveChannel = s.last_live
@@ -1143,19 +1159,28 @@ BarWidget {
   }
 
   FileView {
-    id: historyFile
-    path: root.tvConfigDir + "/guide_history.json"
+    id: rulesFile
+    path: root.tvConfigDir + "/record_rules.json"
     watchChanges: true
     printErrors: false
-    onLoaded: root.applySlots(text())
+    onLoaded: root.applyRules(text())
     onFileChanged: reload()
   }
 
   Process {
-    id: slotProc
+    id: showsProc
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.applyShows(text)
+    }
+  }
+
+  Process {
+    id: ruleProc
     command: []
     onExited: function(code) {
-      historyFile.reload()
+      rulesFile.reload()
     }
   }
 
@@ -1278,28 +1303,6 @@ BarWidget {
   }
 
   Timer {
-    id: signalTimer
-    interval: 2000
-    running: root.isLiveSession && !tuneProc.running
-    repeat: true
-    triggeredOnStart: true
-    onTriggered: {
-      if (signalProc.running) return
-      signalProc.command = [root.binPath, "signal", "--plain"]
-      signalProc.running = true
-    }
-  }
-
-  Process {
-    id: signalProc
-    command: []
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.applyLiveSnr(text)
-    }
-  }
-
-  Timer {
     id: guideClockTimer
     interval: 30000
     repeat: true
@@ -1343,12 +1346,12 @@ BarWidget {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        root.guideRefreshing = false
+        root.guideRefreshStarted = false
         guideFile.reload()
       }
     }
     onExited: function(code) {
-      root.guideRefreshing = false
+      root.guideRefreshStarted = false
       guideFile.reload()
     }
   }
@@ -1742,17 +1745,6 @@ BarWidget {
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(6)
 
-            Text {
-              visible: root.isLiveSession && root.liveSnr !== ""
-              textFormat: Text.PlainText
-              text: root.liveSnr
-              color: root.liveSnrTone === "low" ? Color.urgent : (root.liveSnrTone === "high" ? Color.accent : root.bar.foreground)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              anchors.verticalCenter: parent.verticalCenter
-            }
-
             Button {
               id: npKeepBtn
               visible: root.isLiveSession && !root.pauseKept
@@ -1919,7 +1911,9 @@ BarWidget {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
-            text: "Updating the Guide"
+            text: root.guideStatusTowers > 0
+              ? "Updating the Guide · tower " + root.guideStatusTower + " of " + root.guideStatusTowers
+              : "Updating the Guide"
             color: Color.accent
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -1982,11 +1976,34 @@ BarWidget {
           onTextChanged: root.guideSearchText = text
         }
 
+        Row {
+          visible: !root.guideSearchActive
+          spacing: Style.space(4)
+
+          Repeater {
+            model: [
+              { key: "prime", label: "Prime" },
+              { key: "late", label: "Late" },
+              { key: "overnight", label: "Overnight" },
+              { key: "day", label: "Day" }
+            ]
+            delegate: Button {
+              required property var modelData
+              text: modelData.label
+              selected: root.showBucket === modelData.key
+              fontSize: Style.font.caption
+              foreground: root.bar.foreground
+              onClicked: root.showBucket = modelData.key
+            }
+          }
+        }
+
         Text {
-          visible: root.guideStripOpen && !root.guideSearchActive && root.guideStripRows.length === 0
+          visible: !root.guideSearchActive && root.guideShowRows.length === 0
           width: parent.width
           textFormat: Text.PlainText
-          text: "No repeated shows yet."
+          text: showsProc.running ? "Reading the Guide…"
+                : "Nothing listed for this time yet. Each Guide update adds what the stations send."
           color: Color.muted
           font.family: root.bar.fontFamily
           font.pixelSize: Style.font.caption
@@ -1996,55 +2013,70 @@ BarWidget {
         Flickable {
           id: stripFlick
           width: parent.width
-          height: Math.min(stripShowsCol.implicitHeight, Style.space(280))
+          height: Math.min(stripShowsCol.implicitHeight, Style.space(300))
           contentWidth: width
           contentHeight: stripShowsCol.implicitHeight
           clip: true
-          visible: !root.guideSearchActive && root.guideStripRows.length > 0
+          visible: !root.guideSearchActive && root.guideShowRows.length > 0
           flickableDirection: Flickable.VerticalFlick
           boundsBehavior: Flickable.StopAtBounds
 
           Column {
             id: stripShowsCol
             width: stripFlick.width
-            spacing: Style.space(4)
+            spacing: Style.space(6)
 
             Repeater {
-              model: root.guideStripRows
-              delegate: Row {
+              model: root.guideShowRows
+              delegate: Item {
+                id: showRow
                 required property var modelData
+                readonly property bool ruled: !!root.ruleIds[modelData.id]
                 width: stripShowsCol.width
-                spacing: Style.space(6)
+                implicitHeight: Math.max(showText.implicitHeight, showRecord.implicitHeight)
 
-                Text {
-                  width: Math.max(0, parent.width - slotRecord.width - slotDrop.width - parent.spacing * 2)
-                  textFormat: Text.PlainText
-                  text: (modelData.day || "")
-                        + (modelData.clock ? " · " + modelData.clock : "")
-                        + " · " + (modelData.title || "")
-                        + (modelData.minutes ? " · " + modelData.minutes + "m" : "")
-                        + (modelData.tune ? " · " + modelData.tune : "")
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
+                Column {
+                  id: showText
+                  anchors.left: parent.left
+                  anchors.right: showRecord.left
+                  anchors.rightMargin: Style.space(6)
                   anchors.verticalCenter: parent.verticalCenter
+                  spacing: Style.space(1)
+
+                  Text {
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: showRow.modelData.title || ""
+                    color: showRow.ruled ? Color.accent
+                           : (showRow.modelData.pattern ? root.bar.foreground : Color.muted)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: showRow.ruled
+                    elide: Text.ElideRight
+                  }
+
+                  Text {
+                    width: parent.width
+                    textFormat: Text.PlainText
+                    text: Model.showSubLine(showRow.modelData)
+                    color: Color.muted
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
                 }
 
                 Button {
-                  id: slotRecord
-                  text: modelData.record ? "Clear" : "Record"
+                  id: showRecord
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: showRow.ruled ? "Recording all" : "Record all"
+                  tooltipText: showRow.ruled ? "Stop recording this show" : "Record every airing on this channel at this time"
+                  selected: showRow.ruled
+                  enabled: showRow.ruled || !!showRow.modelData.tune_name
                   fontSize: Style.font.caption
                   foreground: root.bar.foreground
-                  onClicked: root.markSlot(modelData.id, !modelData.record)
-                }
-
-                Button {
-                  id: slotDrop
-                  text: "Remove"
-                  fontSize: Style.font.caption
-                  foreground: root.bar.foreground
-                  onClicked: root.removeSlot(modelData.id)
+                  onClicked: root.toggleRecordAll(showRow.modelData)
                 }
               }
             }
@@ -2290,13 +2322,8 @@ BarWidget {
                 readonly property var program: root.getProgram(modelData)
                 readonly property var onNow: Model.currentProgram(program, root.guideClockMin)
                 readonly property var onNext: Model.nextProgram(program, root.guideClockMin)
-                readonly property string nowNextLine: {
-                  var now = chItem.onNow && chItem.onNow.title ? chItem.onNow.title : ""
-                  var nxt = chItem.onNext && chItem.onNext.title ? chItem.onNext.title : ""
-                  if (!now) return ""
-                  if (!nxt || nxt === now) return now
-                  return now + " · " + nxt
-                }
+                readonly property real progress: Model.airingProgress(chItem.onNow, root.guideClockMin)
+                readonly property string stationName: Model.getDisplayTitle(modelData)
                 readonly property string channelBadge: Model.getChannelBadge(modelData)
                 readonly property color netColor: Model.networkColor(modelData.network, Color.accent, Color.urgent, Color.muted, root.bar.foreground)
                 readonly property bool isFav: root.isFavorite(modelData.name) || (modelData.tune_name && root.isFavorite(modelData.tune_name))
@@ -2358,63 +2385,69 @@ BarWidget {
                   onClicked: root.toggleFavorite(chItem.modelData.tune_name || chItem.modelData.name)
                 }
 
-                Row {
+                Column {
                   id: chLine
                   anchors.left: parent.left
                   anchors.right: favBtn.left
                   anchors.leftMargin: Style.space(10)
                   anchors.rightMargin: Style.space(8)
                   anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(4)
+                  spacing: Style.space(3)
+                  readonly property real textX: chNum.width + Style.space(6)
 
-                  Text {
-                    id: chNum
-                    textFormat: Text.PlainText
-                    text: chItem.channelBadge
-                    color: chItem.isCurrent ? Color.accent : root.bar.foreground
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    font.bold: true
-                    width: Math.max(implicitWidth, Style.space(40))
-                    anchors.verticalCenter: parent.verticalCenter
-                  }
+                  Row {
+                    width: parent.width
+                    spacing: Style.space(6)
 
-                  Text {
-                    id: chName
-                    textFormat: Text.PlainText
-                    text: Model.getDisplayTitle(chItem.modelData)
-                    color: root.bar.foreground
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    font.bold: chItem.isCurrent
-                    anchors.verticalCenter: parent.verticalCenter
-                  }
-
-                  Text {
-                    id: chDot
-                    visible: !!chItem.onNow
-                    textFormat: Text.PlainText
-                    text: "·"
-                    color: Color.accent
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    anchors.verticalCenter: parent.verticalCenter
-                  }
-
-                  Text {
-                    visible: !!chItem.onNow
-                    width: {
-                      var used = chNum.width + chName.width + chLine.spacing * 2
-                      if (chDot.visible) used += chDot.width + chLine.spacing
-                      return Math.max(0, chLine.width - used)
+                    Text {
+                      id: chNum
+                      textFormat: Text.PlainText
+                      text: chItem.channelBadge
+                      color: chItem.isCurrent ? Color.accent : root.bar.foreground
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      font.bold: true
+                      width: Math.max(implicitWidth, Style.space(40))
                     }
+
+                    Text {
+                      width: Math.max(0, chLine.width - chLine.textX)
+                      textFormat: Text.PlainText
+                      text: chItem.onNow && chItem.onNow.title ? chItem.onNow.title : chItem.stationName
+                      color: chItem.isCurrent ? Color.accent : root.bar.foreground
+                      font.family: root.bar.fontFamily
+                      font.pixelSize: Style.font.bodySmall
+                      font.bold: chItem.isCurrent
+                      elide: Text.ElideRight
+                    }
+                  }
+
+                  Rectangle {
+                    visible: chItem.progress >= 0
+                    x: chLine.textX
+                    width: Math.max(0, chLine.width - chLine.textX)
+                    height: Style.space(2)
+                    radius: height / 2
+                    color: Style.normalFillFor(root.bar.foreground, Color.accent)
+
+                    Rectangle {
+                      width: parent.width * Math.max(0, chItem.progress)
+                      height: parent.height
+                      radius: parent.radius
+                      color: Color.accent
+                    }
+                  }
+
+                  Text {
+                    visible: !!chItem.onNow
+                    x: chLine.textX
+                    width: Math.max(0, chLine.width - chLine.textX)
                     textFormat: Text.PlainText
-                    text: chItem.nowNextLine
-                    color: chItem.isCurrent ? Color.accent : Color.muted
+                    text: Model.channelSubLine(chItem.stationName, chItem.onNext)
+                    color: Color.muted
                     font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.bodySmall
+                    font.pixelSize: Style.font.caption
                     elide: Text.ElideRight
-                    anchors.verticalCenter: parent.verticalCenter
                   }
                 }
               }

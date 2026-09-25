@@ -85,6 +85,65 @@ class TestGuide(unittest.TestCase):
             abc_prog = get_channel_program("ABC", guide_data=data)
             self.assertIsNone(abc_prog)
 
+    def test_updated_at_moves_only_when_the_broadcast_is_read(self):
+        from engine.guide import refresh_guide
+        lineup = [{"channel_number": "3.1", "tune_name": "WKYC", "name": "WKYC"}]
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            guide_file = os.path.join(tmp_dir, "guide.json")
+            with open(guide_file, "w", encoding="utf-8") as f:
+                json.dump({"updated_at": 1234, "channels": {}}, f)
+
+            refresh_guide(channels=lineup, guide_path=guide_file, grabber=None, sessions=[])
+            with open(guide_file, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["updated_at"], 1234)
+
+            class Held:
+                def is_active(self):
+                    return True
+
+            refresh_guide(channels=lineup, guide_path=guide_file, grabber=lambda: {}, sessions=[Held()])
+            with open(guide_file, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["updated_at"], 1234)
+
+            refresh_guide(channels=lineup, guide_path=guide_file, grabber=lambda: {}, sessions=[])
+            with open(guide_file, encoding="utf-8") as f:
+                self.assertGreater(json.load(f)["updated_at"], 1234)
+
+    def test_collapse_repeats_keeps_one_copy(self):
+        from engine.guide import collapse_repeats
+        one = "Top news anchors report on the stories that explore c"
+        self.assertEqual(collapse_repeats(one * 7), one)
+        self.assertEqual(collapse_repeats((one * 3)[:-5]), one)
+        plain = "A real description that mentions a word twice: word word."
+        self.assertEqual(collapse_repeats(plain), plain)
+
+    def test_a_new_lineup_asks_for_a_fresh_read(self):
+        from engine.guide import sync_guide_from_channels
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            guide_file = os.path.join(tmp_dir, "guide.json")
+            with open(guide_file, "w", encoding="utf-8") as f:
+                json.dump({"updated_at": 1234, "channels": {}}, f)
+            sync_guide_from_channels([{"channel_number": "3.1", "tune_name": "WKYC"}], guide_path=guide_file)
+            with open(guide_file, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["updated_at"], 0)
+
+    def test_search_drops_filler_and_sorts_by_air_date(self):
+        from engine.guide import search_guide
+        channels = {
+            "3.1": {"programs": [
+                {"title": "Late News", "start": "11:00 PM", "gps_start": 1474930000},
+                {"title": "Paid Programming", "start": "3:00 AM", "gps_start": 1474940000},
+            ]},
+            "5.1": {"programs": [
+                {"title": "News 5", "start": "6:00 PM", "gps_start": 1474990000},
+                {"title": "Morning News", "start": "5:00 AM", "gps_start": 1474950000},
+            ]},
+        }
+        hits = search_guide(channels, "news")
+        self.assertEqual([h["title"] for h in hits], ["Late News", "Morning News", "News 5"])
+        self.assertEqual(search_guide(channels, "paid"), [])
+        self.assertNotIn("_sort", hits[0])
+
     def test_get_timeline_grid(self):
         from engine.guide import get_timeline_grid
         grid = get_timeline_grid(guide_data={"channels": GUIDE_FIXTURE})

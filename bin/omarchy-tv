@@ -138,6 +138,10 @@ def cmd_guide(args):
     )
     from engine.psip import collect_guide_events
     action = getattr(args, "action", None)
+    if action == "shows":
+        from engine.shows import load_shows
+        print(json.dumps({"shows": load_shows()}))
+        return
     if action == "slots":
         rows = listed_slots(_load_history())
         if not rows:
@@ -521,6 +525,10 @@ def _grab_guide_if_due():
     """A few times a day, when Tuner 1 is not recording."""
     try:
         from engine.guide import epg_tuner_held, guide_grab_due, load_guide, refresh_guide
+        from engine.psip import clear_stale_guide_status, guide_update_running
+        clear_stale_guide_status()
+        if guide_update_running():
+            return
         guide = load_guide()
         if not guide_grab_due(time.time(), guide.get("updated_at"), epg_tuner_held()):
             return
@@ -653,14 +661,41 @@ def cmd_record(args):
             sys.exit(1)
         print("Removed from the waiting list.")
 
+    elif action == "all":
+        from engine.guide import load_guide
+        from engine.rules import add_rule, arm_rules
+        try:
+            rule = add_rule(
+                getattr(args, "rule_id", "") or "",
+                getattr(args, "title", "") or "",
+                getattr(args, "channel", "") or "",
+                args.target or "",
+                [w for w in (getattr(args, "when", "") or "").split(",") if w],
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
+        print(f"Recording every {rule['title']} on {rule['channel'] or rule['tune_name']}.")
+        # Queue what is already listed. The timer starts each one.
+        for item in arm_rules(load_guide().get("channels") or {}):
+            print(f"Queued {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
+
+    elif action == "unall":
+        from engine.rules import remove_rule
+        if not args.target or not remove_rule(args.target):
+            print("That show is not set to record.")
+            sys.exit(1)
+        print("Stopped recording that show.")
+
     elif action == "due":
         from engine.dvr import DvrManager
+        from engine.guide import load_guide
+        from engine.rules import arm_rules, note_recorded
         from engine.schedule import drop_item, due_items, item_window, pick_due
         for session in DvrManager.sweep_active():
             print(f"Stopped {session.station} ({session.channel_number}).")
-        from engine.guide import arm_weekly_slots
-        for item in arm_weekly_slots():
-            print(f"Queued {item.get('title')} for this week.")
+        for item in arm_rules(load_guide().get("channels") or {}):
+            print(f"Queued {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
         ready = due_items()
         busy = bool(DvrManager.load_active_sessions())
         chosen = pick_due(ready, busy)
@@ -684,6 +719,7 @@ def cmd_record(args):
                 print(f"Waiting. {chosen.get('title') or 'That show'} did not start: {exc}")
             else:
                 drop_item(str(chosen.get("id") or ""))
+                note_recorded(str(chosen.get("rule_id") or ""), chosen.get("synopsis"))
                 print(f"Recording {chosen.get('title')} ({remaining // 60}m).")
         _grab_guide_if_due()
 
@@ -730,7 +766,7 @@ def main():
 
     # guide / epg
     p_guide = subparsers.add_parser("guide", aliases=["epg"], help="Show electronic program guide schedules")
-    p_guide.add_argument("action", nargs="?", choices=["refresh", "search", "slots", "forget", "slot"], help="Refresh, search, or edit the repeated-show list")
+    p_guide.add_argument("action", nargs="?", choices=["refresh", "search", "shows", "slots", "forget", "slot"], help="Refresh, search, list shows (JSON), or edit the repeated-show list")
     p_guide.add_argument("query", nargs="*", help="Search words, or a slot command")
     p_guide.add_argument("--title", default="", help="Show title")
     p_guide.add_argument("--clock", default="", help="Start clock, e.g. 8:15 PM")
@@ -803,7 +839,7 @@ def main():
 
     # record / dvr
     p_rec = subparsers.add_parser("record", aliases=["dvr", "rec"], help="DVR recording control")
-    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due"], default="list", help="Record action")
+    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "all", "unall"], default="list", help="Record action. all/unall: record every airing of a show")
     p_rec.add_argument("target", nargs="?", help="Channel to record or file to delete")
     p_rec.add_argument("duration", nargs="?", help="Optional duration limit (e.g. 30m, 1h, 300s)")
     p_rec.add_argument("--title", default="", help="Program name for the file and the list")
@@ -812,6 +848,9 @@ def main():
     p_rec.add_argument("--end-clock", dest="end_clock", default="", help="End clock label")
     p_rec.add_argument("--display-name", dest="display_name", default="", help="Station line")
     p_rec.add_argument("--extra", default="", help="Extra time after the show, e.g. 30m")
+    p_rec.add_argument("--channel", default="", help="Channel number, for record all")
+    p_rec.add_argument("--id", dest="rule_id", default="", help="Show id from guide shows, for record all")
+    p_rec.add_argument("--when", default="", help="Times of day for record all: prime,late,overnight,day")
     p_rec.set_defaults(func=cmd_record)
 
     args = parser.parse_args()

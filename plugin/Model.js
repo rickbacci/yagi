@@ -108,6 +108,24 @@ function airingCoversNow(prog, nowUnix) {
   return now >= start && now < start + dur
 }
 
+// 0..1 through the show, or -1 without a broadcast start time. nowMin only
+// makes a binding re-run on the flyout clock.
+function airingProgress(prog, nowMin) {
+  var start = programUnix(prog)
+  var dur = Number(prog && prog.duration_sec) || 0
+  if (start <= 0 || dur <= 0) return -1
+  var f = (Date.now() / 1000 - start) / dur
+  return Math.max(0, Math.min(1, f))
+}
+
+function channelSubLine(stationName, next) {
+  var name = String(stationName || "")
+  if (!next || !next.title) return name
+  var when = String(next.start || next.start_time || "")
+  var tail = "Next " + (when ? when + " " : "") + next.title
+  return name ? name + " · " + tail : tail
+}
+
 function currentProgram(item, nowMin) {
   var now = (nowMin === undefined || nowMin === null || nowMin < 0) ? minutesNow() : nowMin
   return coveringProgram(programsFor(item), formatSlot(now))
@@ -221,7 +239,7 @@ function searchGuide(guideData, query, nowMin) {
       var prog = programs[i]
       var title = String((prog && prog.title) || "")
       var folded = title.toLowerCase()
-      var ok = !!title
+      var ok = !!title && !isFillerTitle(title)
       var w
       for (w = 0; w < words.length; w++) {
         if (folded.indexOf(words[w]) === -1) ok = false
@@ -262,12 +280,54 @@ function searchGuide(guideData, query, nowMin) {
     }
   }
   hits.sort(function(a, b) {
-    var ta = parseMinutes(a.start)
-    var tb = parseMinutes(b.start)
-    if (ta !== tb) return ta - tb
+    var ua = programUnix(a)
+    var ub = programUnix(b)
+    if (ua && ub && ua !== ub) return ua - ub
+    if (!ua || !ub) {
+      var ta = parseMinutes(a.start)
+      var tb = parseMinutes(b.start)
+      if (ta !== tb) return ta - tb
+    }
     return (parseFloat(a.channel_number) || 999) - (parseFloat(b.channel_number) || 999)
   })
   return hits
+}
+
+// Same cut as engine/shows.py bucket_for.
+function bucketNow() {
+  var h = new Date().getHours()
+  if (h >= 20 && h < 23) return "prime"
+  if (h >= 23 || h < 2) return "late"
+  if (h >= 2 && h < 6) return "overnight"
+  return "day"
+}
+
+// Shows with a pattern first, then one-offs. Each keeps its start-time order.
+function filterShows(shows, bucket) {
+  var regular = []
+  var once = []
+  for (var i = 0; i < (shows || []).length; i++) {
+    var s = shows[i]
+    if (!s || (s.buckets || []).indexOf(bucket) === -1) continue
+    if (s.pattern) regular.push(s)
+    else once.push(s)
+  }
+  return regular.concat(once)
+}
+
+function showSubLine(show) {
+  if (!show) return ""
+  var parts = [show.channel || ""]
+  parts.push(show.label || show.when || "")
+  var n = show.next
+  if (n) parts.push((n.on_now ? "on now" : "next " + (n.day || "") + " " + (n.clock || "")).trim())
+  return parts.filter(function(p) { return p }).join(" · ")
+}
+
+var FILLER_TITLES = ["paid programming", "paid program", "programa pagado", "to be announced"]
+
+function isFillerTitle(title) {
+  return FILLER_TITLES.indexOf(String(title || "").trim().toLowerCase()) !== -1
 }
 
 function programUnix(prog) {

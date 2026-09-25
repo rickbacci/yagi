@@ -77,6 +77,7 @@ def add_later(
     extra_end_sec: int = 0,
     slot_id: str = "",
     path: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     tune = (tune_name or "").strip()
     name = (title or "").strip() or "Scheduled"
@@ -103,6 +104,7 @@ def add_later(
         "slot_id": str(slot_id or ""),
         "status": "waiting",
     }
+    item.update(extra or {})
     with state_lock(path or SCHEDULE_PATH):
         items = [row for row in load_schedule(path) if row.get("id") != item["id"]]
         items.append(item)
