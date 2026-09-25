@@ -355,7 +355,7 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertIn("--demuxer-lavf-format=mpegts", cmd)
         joined = " ".join(str(a) for a in cmd)
         self.assertIn("--demuxer-lavf-analyzeduration=2", cmd)
-        self.assertNotIn("demuxer-lavf-probesize", joined)
+        self.assertTrue(any(str(a).startswith("--demuxer-lavf-probesize=") for a in cmd))
         self.assertNotIn("scan_all_pmts=1", joined)
         mock_follow.assert_called_with(0)
         self.assertIn("--cache-pause=no", cmd)

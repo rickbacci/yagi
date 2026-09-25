@@ -6,7 +6,7 @@ Pause dump stops an hour of air ahead of the playhead. `l` jumps to that end. Pi
 
 Do not match the timeshift path in process args; that kills the PiP.
 
-Bars stay up until the first frame. A channel click keeps the window and blacks the picture until the new frame. mpv reopens the tuner and locks again for every station. j and k change channel. Left and right skip.
+Bars stay up until the first frame. A channel click keeps the window and blacks the picture until the new frame. mpv reopens the tuner and locks again for every station. j and k change channel. Left and right skip. Picture probe = ~6 s of the station's rate (5 MB was 30 s on a subchannel).
 
 Guide is broadcast EIT only, every 3h on a free tuner; it yields to live at once. Listings reach ~5h. Network names are a hand-typed Cleveland map, not broadcast. Rescan rewrites the lineup; each Guide read fixes PIDs from the PMT. All = not hidden.
 

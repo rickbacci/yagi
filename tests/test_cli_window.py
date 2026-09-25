@@ -179,7 +179,9 @@ class TestCliWindow(unittest.TestCase):
         res = self._run("play", "Quest")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn(["script-message", "tv-blank"], self.mpv_cmds)
-        self.assertIn(["loadfile", "fd://0", "replace"], self.mpv_cmds)
+        load = next(cmd for cmd in self.mpv_cmds if cmd and cmd[0] == "loadfile")
+        self.assertEqual(load[:3], ["loadfile", "fd://0", "replace"])
+        self.assertIn("demuxer-lavf-probesize=", load[4])
 
 
 if __name__ == "__main__":

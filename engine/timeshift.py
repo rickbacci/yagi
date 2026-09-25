@@ -45,8 +45,12 @@ MIN_PLAYABLE_BYTES = 256 * 1024
 # ATSC lock plus PAT/PMT can exceed a few seconds. Do not kill a dump that is
 # still writing just because this floor is not hit yet.
 DUMP_WAIT_SECS = 20
-REOPEN_WATCH_SEC = 6.0
 DUMP_GROWING_BYTES = 32 * 1024
+# lavf reads this much before the first frame. A subchannel runs near 140 KB/s,
+# so the 5 MB default is half a minute of air. Under ~4 s of air it misses streams.
+PROBE_AIR_SEC = 6.0
+PROBE_MIN_BYTES = 750_000
+PROBE_MAX_BYTES = 5_000_000
 
 
 TS_PACKET = 188
@@ -73,6 +77,14 @@ def is_timeshift_path(file_path: Optional[str]) -> bool:
 
 
 class Timeshift:
+    # Bytes/sec of the station the last wait saw arrive. 0 when too quick to tell.
+    _open_bps = 0.0
+
+    @classmethod
+    def _note_open_rate(cls, t0: float, s0: int, size: int) -> None:
+        elapsed = time.time() - t0
+        cls._open_bps = (size - s0) / elapsed if elapsed >= 0.3 and size > s0 else 0.0
+
     @classmethod
     def acquire_tune_lock(cls) -> bool:
         """Marks an in-flight retune so sync/Cmd+W cannot wipe the new dump.
@@ -177,6 +189,20 @@ class Timeshift:
         if size <= mark + back:
             return mark
         return align_ts(size - back)
+
+    @classmethod
+    def picture_probe_bytes(cls) -> int:
+        """About six seconds of this station. A whole-tower dump keeps the default."""
+        state = cls.load_state()
+        if state.get("full_mux"):
+            return PROBE_MAX_BYTES
+        try:
+            bps = float(state.get("open_bps") or 0)
+        except (TypeError, ValueError):
+            bps = 0.0
+        if bps <= 0:
+            return PROBE_MAX_BYTES
+        return int(min(PROBE_MAX_BYTES, max(PROBE_MIN_BYTES, bps * PROBE_AIR_SEC)))
 
     @classmethod
     def write_rate(cls) -> float:
@@ -1073,44 +1099,28 @@ class Timeshift:
 
     @classmethod
     def _mark_after_reopen(cls, pid: int, size_before: int) -> Optional[int]:
-        """The new stream can shrink the file a few seconds after the command.
+        """The new stream shrinks the file once the tuner locks, 3 to 12 s after the command.
 
-        Keep following that shrink. A mark taken before it never grows back.
+        Every shrink is a new start. A mark taken before it never grows back.
         """
-        low = size_before
-        watch_until = time.time() + REOPEN_WATCH_SEC
-        while time.time() < watch_until:
-            if not cls._pid_alive(pid):
-                return None
-            size = cls.dump_bytes()
-            if size + TS_PACKET < size_before:
-                low = size
-                break
-            time.sleep(0.05)
-        if not cls._wait_grew(pid, TIMESHIFT_FILE, low):
-            size = cls.dump_bytes()
-            if size + TS_PACKET >= low:
-                return None
-            low = size
-            if not cls._wait_grew(pid, TIMESHIFT_FILE, low):
-                return None
-        return align_ts(low)
-
-    @classmethod
-    def _wait_grew(cls, pid: int, dest: str, mark: int) -> bool:
-        need = align_ts(mark) + MIN_PLAYABLE_BYTES
+        low = prev = size_before
+        t0, s0 = 0.0, 0
         deadline = time.time() + DUMP_WAIT_SECS
         while time.time() < deadline:
             if not cls._pid_alive(pid):
-                return False
-            try:
-                size = os.path.getsize(dest) if os.path.isfile(dest) else 0
-            except OSError:
-                size = 0
-            if size >= need:
-                return True
+                return None
+            size = cls.dump_bytes()
+            if size + TS_PACKET < prev:
+                low = size
+                t0, s0 = time.time(), size
+            elif size > low and not t0:
+                t0, s0 = time.time(), size
+            prev = size
+            if size >= align_ts(low) + MIN_PLAYABLE_BYTES:
+                cls._note_open_rate(t0, s0, size)
+                return align_ts(low)
             time.sleep(0.05)
-        return False
+        return None
 
     @classmethod
     def _retune_running_dump(cls, name: str) -> bool:
@@ -1137,6 +1147,7 @@ class Timeshift:
             return False
         # This mpv closes the stream and locks again. The file usually shrinks.
         # The mark has to be that new start, not the size from before the close.
+        cls._open_bps = 0.0
         mark = cls._mark_after_reopen(pid, size_before)
         if mark is None:
             return False
@@ -1144,6 +1155,7 @@ class Timeshift:
             channel=name,
             tune_name=name,
             running=True,
+            open_bps=cls._open_bps,
             play_from=mark,
             view="live",
             paused=False,
@@ -1205,6 +1217,8 @@ class Timeshift:
         deadline = time.time() + DUMP_WAIT_SECS
         last_size = 0
         next_note = 0.0
+        t0, s0 = 0.0, 0
+        cls._open_bps = 0.0
         while time.time() < deadline:
             if isinstance(proc.poll(), int):
                 return False
@@ -1218,7 +1232,11 @@ class Timeshift:
                 size = os.path.getsize(dest) if os.path.isfile(dest) else 0
             except OSError:
                 size = 0
+            # The first bytes are the lock. The rate counts from there.
+            if size > 0 and not t0:
+                t0, s0 = time.time(), size
             if size >= MIN_PLAYABLE_BYTES:
+                cls._note_open_rate(t0, s0, size)
                 chmod_private_file(dest)
                 if log_path:
                     chmod_private_file(log_path)
@@ -1323,6 +1341,7 @@ class Timeshift:
             "playhead_t": 0,
             "play_from": 0,
             "full_mux": cls._conf_needs_full_mux(name),
+            "open_bps": cls._open_bps,
             "started_at": time.time(),
             "updated_at": time.time(),
         }

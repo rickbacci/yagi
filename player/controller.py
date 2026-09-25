@@ -738,6 +738,7 @@ class MpvController:
                 "--cache=no",
                 "--demuxer-readahead-secs=3",
                 "--demuxer-max-bytes=4194304",
+                f"--demuxer-lavf-probesize={Timeshift.picture_probe_bytes()}",
                 "--ytdl=no",
             ])
         else:
@@ -895,12 +896,12 @@ class MpvController:
     def _load_dump(self, url: str) -> None:
         """Open the dump. A full-mux file still has every station, so name the program."""
         state = Timeshift.load_state()
+        opts = [f"demuxer-lavf-probesize={Timeshift.picture_probe_bytes()}"]
         if state.get("full_mux"):
             sid = Timeshift.service_id(str(state.get("tune_name") or state.get("channel") or ""))
             if sid > 0:
-                self.send_command(["loadfile", url, "replace", "-1", f"program={sid}"])
-                return
-        self.send_command(["loadfile", url, "replace"])
+                opts.append(f"program={sid}")
+        self.send_command(["loadfile", url, "replace", "-1", ",".join(opts)])
 
     def _select_dump_program(self) -> None:
         state = Timeshift.load_state()

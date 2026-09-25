@@ -817,9 +817,8 @@ class TestTimeshift(unittest.TestCase):
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
                  patch.object(Timeshift, "_pid_alive", return_value=True), \
                  patch.object(Timeshift, "_conf_needs_full_mux", return_value=False), \
-                 patch.object(Timeshift, "_wait_grew", return_value=True), \
+                 patch.object(Timeshift, "_mark_after_reopen", return_value=256 * 1024), \
                  patch.object(Timeshift, "_dump_command", return_value={"error": "success"}) as mock_ipc, \
-                 patch("engine.timeshift.REOPEN_WATCH_SEC", 0), \
                  patch("subprocess.Popen") as mock_popen:
                 Timeshift._write_state({
                     "running": True,
@@ -849,9 +848,8 @@ class TestTimeshift(unittest.TestCase):
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
                  patch.object(Timeshift, "_pid_alive", return_value=True), \
                  patch.object(Timeshift, "_conf_needs_full_mux", return_value=False), \
-                 patch.object(Timeshift, "_wait_grew", return_value=True), \
+                 patch.object(Timeshift, "_mark_after_reopen", return_value=256 * 1024), \
                  patch.object(Timeshift, "_dump_command", return_value={"error": "success"}) as mock_ipc, \
-                 patch("engine.timeshift.REOPEN_WATCH_SEC", 0), \
                  patch("subprocess.Popen") as mock_popen:
                 Timeshift._write_state({
                     "running": True,
@@ -870,13 +868,42 @@ class TestTimeshift(unittest.TestCase):
                 self.assertEqual(data.get("switching_from") or "", "")
 
     def test_reopen_mark_follows_the_shrunk_file(self):
-        sizes = iter([5_000_000, 188])
+        grown = 188 + 256 * 1024
+        sizes = iter([5_000_000, 188, 50_000, grown])
         with patch.object(Timeshift, "_pid_alive", return_value=True), \
              patch.object(Timeshift, "dump_bytes", side_effect=lambda: next(sizes)), \
-             patch.object(Timeshift, "_wait_grew", return_value=True) as grew:
+             patch("engine.timeshift.time.sleep"):
             mark = Timeshift._mark_after_reopen(1, 5_000_000)
         self.assertEqual(mark, align_ts(188))
-        self.assertEqual(grew.call_args.args[2], 188)
+
+    def test_reopen_waits_out_a_slow_lock(self):
+        clock = iter(float(t) for t in range(100))
+        sizes = iter([5_000_000] * 12 + [0, 256 * 1024])
+        with patch.object(Timeshift, "_pid_alive", return_value=True), \
+             patch.object(Timeshift, "dump_bytes", side_effect=lambda: next(sizes)), \
+             patch("engine.timeshift.time.time", side_effect=lambda: next(clock)), \
+             patch("engine.timeshift.time.sleep"):
+            mark = Timeshift._mark_after_reopen(1, 5_000_000)
+        self.assertEqual(mark, 0)
+
+    def test_probe_is_six_seconds_of_the_station(self):
+        cases = [
+            ({"open_bps": 140_000}, 840_000),
+            ({"open_bps": 50_000}, 750_000),
+            ({"open_bps": 2_400_000}, 5_000_000),
+            ({"open_bps": 0}, 5_000_000),
+            ({"open_bps": 140_000, "full_mux": True}, 5_000_000),
+        ]
+        for state, want in cases:
+            with patch.object(Timeshift, "load_state", return_value=state):
+                self.assertEqual(Timeshift.picture_probe_bytes(), want, state)
+
+    def test_open_rate_counts_from_the_first_bytes(self):
+        with patch("engine.timeshift.time.time", return_value=12.0):
+            Timeshift._note_open_rate(10.0, 100_000, 380_000)
+            self.assertEqual(Timeshift._open_bps, 140_000)
+            Timeshift._note_open_rate(11.9, 0, 380_000)
+            self.assertEqual(Timeshift._open_bps, 0.0)
 
     def test_filtered_dump_will_not_retune_onto_a_zero_pid(self):
         with patch.object(Timeshift, "load_state", return_value={

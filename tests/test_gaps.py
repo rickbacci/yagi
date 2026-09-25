@@ -373,10 +373,11 @@ class TestMoreBranches(unittest.TestCase):
                 })
                 self.assertTrue(Timeshift.hold_dump_if_full())
             kill.assert_called()
-            with patch.object(Timeshift, "_pid_alive", return_value=False):
-                self.assertFalse(Timeshift._wait_grew(9, live, 0))
-            with patch.object(Timeshift, "_pid_alive", return_value=True):
-                self.assertTrue(Timeshift._wait_grew(9, live, 0))
+            with patch("engine.timeshift.TIMESHIFT_FILE", live):
+                with patch.object(Timeshift, "_pid_alive", return_value=False):
+                    self.assertIsNone(Timeshift._mark_after_reopen(9, 0))
+                with patch.object(Timeshift, "_pid_alive", return_value=True):
+                    self.assertEqual(Timeshift._mark_after_reopen(9, 0), 0)
 
     def test_channels_file_slots_and_dead_session(self):
         from engine.guide import _read_channels_file, _slot_names
