@@ -75,6 +75,7 @@ class TestShowRows(unittest.TestCase):
         self.assertEqual(late["pattern"], "Marathon")
         overnight = [r for r in rows if r["bucket"] == "overnight"][0]
         self.assertEqual(overnight["when"], "2 AM–5 AM")
+        self.assertEqual(len({r["id"] for r in rows}), 1)
 
     def test_filler_and_hidden_are_left_out(self):
         airings = [

@@ -176,10 +176,8 @@ BarWidget {
       if (!show.tune_name) return
       ruleProc.command = [
         root.binPath, "record", "all", show.tune_name,
-        "--id", show.id,
         "--title", show.title || "",
-        "--channel", show.channel || "",
-        "--when", (show.buckets || []).join(",")
+        "--channel", show.channel || ""
       ]
     }
     ruleProc.running = true
@@ -2071,7 +2069,7 @@ BarWidget {
                   anchors.right: parent.right
                   anchors.verticalCenter: parent.verticalCenter
                   text: showRow.ruled ? "Recording all" : "Record all"
-                  tooltipText: showRow.ruled ? "Stop recording this show" : "Record every airing on this channel at this time"
+                  tooltipText: showRow.ruled ? "Stop recording this show" : "Record every new airing on " + (showRow.modelData.channel || "this channel") + ", any time of day"
                   selected: showRow.ruled
                   enabled: showRow.ruled || !!showRow.modelData.tune_name
                   fontSize: Style.font.caption

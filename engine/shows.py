@@ -19,6 +19,11 @@ DEFAULT_AIRING_SEC = 30 * 60
 BUCKETS = ("prime", "late", "overnight", "day")
 
 
+def show_id(key: str, channel: str) -> str:
+    """One id per show and channel, so every time-of-day row shares one Record all."""
+    return hashlib.sha1(f"{key}|{channel}".encode("utf-8")).hexdigest()[:12]
+
+
 def bucket_for(dt: datetime) -> str:
     """Prime 8-11 PM, Late 11 PM-2 AM, Overnight 2-6 AM, Day the rest."""
     h = dt.hour
@@ -172,9 +177,8 @@ def build_shows(
                 }
                 break
 
-        ident = f"{key}|{channel}|{bucket}"
         shows.append({
-            "id": hashlib.sha1(ident.encode("utf-8")).hexdigest()[:12],
+            "id": show_id(key, channel),
             "title": titles[key],
             "channel": channel,
             "tune_name": tunes.get(channel, ""),

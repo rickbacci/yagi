@@ -666,11 +666,9 @@ def cmd_record(args):
         from engine.rules import add_rule, arm_rules
         try:
             rule = add_rule(
-                getattr(args, "rule_id", "") or "",
                 getattr(args, "title", "") or "",
                 getattr(args, "channel", "") or "",
                 args.target or "",
-                [w for w in (getattr(args, "when", "") or "").split(",") if w],
             )
         except ValueError as exc:
             print(f"Error: {exc}")
@@ -849,8 +847,6 @@ def main():
     p_rec.add_argument("--display-name", dest="display_name", default="", help="Station line")
     p_rec.add_argument("--extra", default="", help="Extra time after the show, e.g. 30m")
     p_rec.add_argument("--channel", default="", help="Channel number, for record all")
-    p_rec.add_argument("--id", dest="rule_id", default="", help="Show id from guide shows, for record all")
-    p_rec.add_argument("--when", default="", help="Times of day for record all: prime,late,overnight,day")
     p_rec.set_defaults(func=cmd_record)
 
     args = parser.parse_args()

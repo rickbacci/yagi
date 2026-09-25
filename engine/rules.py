@@ -1,15 +1,14 @@
-"""Record all: a show on one channel, at one time of day. Each minute its listings join the queue."""
+"""Record all: a show on one channel, any time of day. Each minute its listings join the queue."""
 
 import json
 import os
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from engine.guide import _fold_title, is_filler_title
 from engine.paths import CONFIG_DIR, chmod_private_file, ensure_private_dir, state_lock
-from engine.psip import EASTERN, GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
-from engine.shows import BUCKETS, bucket_for
+from engine.psip import GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
+from engine.shows import show_id
 
 RULES_PATH = os.path.join(CONFIG_DIR, "record_rules.json")
 # Listings reach about five hours ahead. Anything they show inside this is queued.
@@ -25,7 +24,37 @@ def load_rules(path: Optional[str] = None) -> List[Dict[str, Any]]:
     except (OSError, ValueError):
         return []
     rules = data.get("rules") if isinstance(data, dict) else data
-    return [r for r in (rules or []) if isinstance(r, dict) and r.get("id")]
+    return _current([r for r in (rules or []) if isinstance(r, dict) and r.get("id")])
+
+
+def _current(rules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Older rules held one time of day and an id per time. One show and channel is one rule."""
+    out: List[Dict[str, Any]] = []
+    by_id: Dict[str, Dict[str, Any]] = {}
+    for rule in rules:
+        rule = dict(rule)
+        rule.pop("buckets", None)
+        if rule.get("key"):
+            rule["id"] = show_id(str(rule["key"]), str(rule.get("channel") or ""))
+        old = by_id.get(rule["id"])
+        if old is None:
+            by_id[rule["id"]] = rule
+            out.append(rule)
+            continue
+        for field in ("handled", "seen"):
+            old[field] = list(dict.fromkeys(list(old.get(field) or []) + list(rule.get(field) or [])))
+    return out
+
+
+def _stale(path: str) -> bool:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    raw = data.get("rules") if isinstance(data, dict) else data
+    raw = [r for r in (raw or []) if isinstance(r, dict) and r.get("id")]
+    return raw != load_rules(path)
 
 
 def save_rules(rules: List[Dict[str, Any]], path: Optional[str] = None) -> None:
@@ -39,25 +68,22 @@ def save_rules(rules: List[Dict[str, Any]], path: Optional[str] = None) -> None:
 
 
 def add_rule(
-    rule_id: str,
     title: str,
     channel: str,
     tune_name: str,
-    buckets: List[str],
     path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    ident = (rule_id or "").strip()
     name = (title or "").strip()
-    if not ident or not name or not (tune_name or "").strip():
-        raise ValueError("A show, a station, and an id are required.")
-    kept = [b for b in BUCKETS if b in set(buckets or [])] or list(BUCKETS)
+    if not name or not (tune_name or "").strip():
+        raise ValueError("A show and a station are required.")
+    key = _fold_title(name)
+    ident = show_id(key, str(channel or ""))
     rule = {
         "id": ident,
         "title": name,
-        "key": _fold_title(name),
+        "key": key,
         "channel": str(channel or ""),
         "tune_name": tune_name.strip(),
-        "buckets": kept,
         "handled": [],
         "seen": [],
         "created": int(time.time()),
@@ -129,7 +155,7 @@ def arm_rules(
     added: List[Dict[str, Any]] = []
     with state_lock(target):
         rules = load_rules(target)
-        changed = False
+        changed = _stale(target)
         for rule in rules:
             row = (guide_channels or {}).get(str(rule.get("channel") or ""))
             if not isinstance(row, dict):
@@ -152,8 +178,6 @@ def arm_rules(
                 start = _unix(prog)
                 dur = max(60, int(prog.get("duration_sec") or 0) or 1800)
                 if start + dur <= stamp or start > stamp + ARM_HORIZON_SEC:
-                    continue
-                if bucket_for(datetime.fromtimestamp(start, EASTERN)) not in (rule.get("buckets") or BUCKETS):
                     continue
                 ident = f"{rule['tune_name']}-{int(prog['gps_start'])}"
                 if ident in handled:
