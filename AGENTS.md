@@ -13,10 +13,11 @@ Plugin `richardb.omarchy-tv`, `bar-widget`, QML `plugin/BarWidget.qml`. Hyprland
 3. ATSC keeps `+28615` Hz.
 4. Never take a tuner that is live, recording, or scanning (`engine/pool.py`). Free the frontend before a dump. Scan dwell ≥ 1.2 s.
 5. State JSON: `.tmp`, then `os.replace`.
-6. Library `$XDG_VIDEOS_DIR/TV`. PiP is never `dvb://`. Close TV wipes the pause dump. Long-lived children start via `own_scope`.
+6. Library `$XDG_VIDEOS_DIR/TV`. Close TV wipes the pause dump. Long-lived children start via `own_scope`.
 
 ## For now
 - Live prefers tuner 0, work tuner 1. A channel change keeps its tuner.
+- PiP plays the pause dump, not `dvb://`, so pause can seek.
 - QML uses `Color.*` / `Style.*` / `root.bar.*`; the HUD reads the theme's `colors.toml`.
 - Window `omarchy-tv`: float, pin, 16:9, bottom-right, `monitor/3`. Super+F unpins, then fullscreen.
 
