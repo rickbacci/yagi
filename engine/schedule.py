@@ -149,6 +149,19 @@ def due_items(now: Optional[float] = None, path: Optional[str] = None) -> List[D
     return ready
 
 
+def next_window(now: Optional[float] = None, path: Optional[str] = None) -> Optional[int]:
+    """When the soonest waiting row may start, or None with nothing waiting."""
+    stamp = time.time() if now is None else float(now)
+    opens = []
+    for row in load_schedule(path):
+        if str(row.get("status") or "waiting") == "missed" or int(row.get("start_unix") or 0) <= 0:
+            continue
+        arm, end = item_window(row)
+        if end > stamp:
+            opens.append(arm)
+    return min(opens) if opens else None
+
+
 def pick_due(ready: List[Dict[str, Any]], tuner_busy: bool) -> Optional[Dict[str, Any]]:
     """Tuner 1 records one show. The rest stay listed."""
     if tuner_busy or not ready:

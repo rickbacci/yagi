@@ -27,6 +27,7 @@ from engine.paths import (
     ensure_private_dir,
     TUNER1_LOCK_KEY,
     get_runtime_socket,
+    own_scope,
     state_lock,
     touch_private_file,
 )
@@ -339,6 +340,7 @@ class DvrManager:
                     sessions.append(session)
                 else:
                     changed = True
+                    cls._close_dead(session)
                     # Clean up orphaned socket
                     if os.path.exists(session.socket_path):
                         try:
@@ -352,6 +354,22 @@ class DvrManager:
             cls.save_active_sessions(sessions, target_path)
 
         return sessions
+
+    @staticmethod
+    def _close_dead(session: DvrSession) -> None:
+        """A recorder that exited on its own. Its file is finished or failed, not still recording."""
+        if not session.file_path or not os.path.exists(session.file_path):
+            return
+        side = read_sidecar(session.file_path)
+        if str(side.get("status") or "") != "recording":
+            return
+        playable = session.get_file_size() >= MIN_PLAYABLE_BYTES
+        patch_sidecar(
+            session.file_path,
+            status="complete" if playable else "failed",
+            end=int(os.path.getmtime(session.file_path)),
+            stopped_reason="exited",
+        )
 
     @classmethod
     def save_active_sessions(cls, sessions: List[DvrSession], active_path: Optional[str] = None) -> None:
@@ -641,7 +659,7 @@ class DvrManager:
         cmd.append(f"dvb://{tune_name}")
 
         proc = subprocess.Popen(
-            cmd,
+            own_scope(cmd),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,

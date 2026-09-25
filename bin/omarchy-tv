@@ -530,8 +530,9 @@ def _grab_guide_if_due():
         clear_stale_guide_status()
         if guide_update_running():
             return
+        from engine.schedule import next_window
         guide = load_guide()
-        if not guide_grab_due(time.time(), guide.get("updated_at"), epg_tuner_held()):
+        if not guide_grab_due(time.time(), guide.get("updated_at"), epg_tuner_held(), next_record_at=next_window()):
             return
         from engine.psip import collect_guide_events
         result = refresh_guide(grabber=collect_guide_events)
@@ -700,8 +701,9 @@ def cmd_record(args):
         for session in DvrManager.sweep_active():
             print(f"Stopped {session.station} ({session.channel_number}).")
         if waiting_splits(RECORDINGS_DIR):
+            from engine.paths import own_scope
             subprocess.Popen(
-                [sys.executable, os.path.abspath(__file__), "record", "split"],
+                own_scope([sys.executable, os.path.abspath(__file__), "record", "split"]),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )

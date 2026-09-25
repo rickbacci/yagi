@@ -7,9 +7,10 @@ import contextlib
 import fcntl
 import hashlib
 import os
+import shutil
 import threading
 import time
-from typing import Iterator, Optional
+from typing import Iterator, List, Optional
 
 DIR_PRIVATE = 0o700
 FILE_PRIVATE = 0o600
@@ -66,6 +67,18 @@ def touch_private_file(path: str) -> None:
     except OSError:
         return
     chmod_private_file(path)
+
+
+def own_scope(cmd: List[str]) -> List[str]:
+    """Run cmd in its own systemd user scope, same pid.
+
+    The record timer is a oneshot service. When it exits, systemd kills every
+    process it started, recorders included, whatever their session.
+    """
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or ""
+    if not shutil.which("systemd-run") or not os.path.exists(os.path.join(runtime, "systemd", "private")):
+        return list(cmd)
+    return ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--"] + list(cmd)
 
 
 def get_runtime_socket(name: str) -> str:

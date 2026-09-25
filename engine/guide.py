@@ -424,6 +424,8 @@ _HISTORY_RAW_SEC = 28 * 24 * 3600
 _HISTORY_USUAL_SEC = 120 * 24 * 3600
 # Most stations send about five hours ahead. Three hours leaves no gap.
 GUIDE_GRAB_GAP_SEC = 3 * 3600
+# Sixteen towers at about half a minute each, with room to spare.
+GUIDE_GRAB_RUN_SEC = 10 * 60
 
 
 def _fold_title(title: str) -> str:
@@ -690,9 +692,12 @@ def guide_grab_due(
     updated_at: Any,
     tuner_busy: bool,
     gap: int = GUIDE_GRAB_GAP_SEC,
+    next_record_at: Optional[float] = None,
 ) -> bool:
-    """Every few hours, and only when Tuner 1 is free."""
+    """Every few hours, only when Tuner 1 is free, and not when a recording would have to wait."""
     if tuner_busy:
+        return False
+    if next_record_at is not None and float(next_record_at) - float(now) < GUIDE_GRAB_RUN_SEC:
         return False
     try:
         updated = float(updated_at or 0)
