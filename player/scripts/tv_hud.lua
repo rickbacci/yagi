@@ -54,6 +54,63 @@ if not xdg_cache or xdg_cache == "" then
     xdg_cache = (os.getenv("HOME") or "") .. "/.cache"
 end
 local TIMESHIFT_DIR = xdg_cache .. "/omarchy/tv/timeshift"
+local xdg_state = os.getenv("XDG_STATE_HOME")
+if not xdg_state or xdg_state == "" then
+    xdg_state = (os.getenv("HOME") or "") .. "/.local/state"
+end
+local THEME_COLORS_PATH = xdg_state .. "/omarchy/current/theme/colors.toml"
+
+-- ASS colors are &HBBGGRR&. This is the look with no Omarchy theme found.
+local THEME_DEFAULT = {
+    bg = "&H12141C&", fg = "&Hcdd6f4&", title = "&HFFFFFF&", dim = "&Hc8d0e0&",
+    accent = "&H89b4fa&", urgent = "&H3333F0&", warn = "&H30C0F0&", live = "&H7dcea0&", track = "&H2a2e3a&",
+}
+local theme = {}
+for k, v in pairs(THEME_DEFAULT) do theme[k] = v end
+local theme_stamp = nil
+
+local function ass_color(hex)
+    local r, g, b = tostring(hex or ""):match("^#(%x%x)(%x%x)(%x%x)$")
+    if not r then return nil end
+    return ("&H" .. b .. g .. r .. "&"):upper()
+end
+
+-- Same keys and fallbacks the shell reads, so the HUD matches the bar.
+local function load_theme()
+    local info = utils.file_info(THEME_COLORS_PATH)
+    local stamp = info and tostring(info.mtime) or "none"
+    if stamp == theme_stamp then return end
+    theme_stamp = stamp
+    local vals = {}
+    local f = io.open(THEME_COLORS_PATH, "r")
+    if f then
+        for line in f:lines() do
+            local k, v = line:match("^%s*([%w_%-]+)%s*=%s*[\"']?(#%x%x%x%x%x%x)")
+            if k then vals[k] = v end
+        end
+        f:close()
+    end
+    local function pick(name, ...)
+        for _, key in ipairs({...}) do
+            local c = ass_color(vals[key])
+            if c then
+                theme[name] = c
+                return
+            end
+        end
+        theme[name] = THEME_DEFAULT[name]
+    end
+    pick("bg", "background", "color0")
+    pick("fg", "foreground", "color7")
+    pick("title", "bright_foreground", "light_foreground", "foreground", "color15")
+    pick("dim", "dark_foreground", "muted", "color8")
+    pick("accent", "accent", "color4")
+    pick("urgent", "red", "color1")
+    pick("warn", "yellow", "color3")
+    pick("live", "green", "color2")
+    pick("track", "lighter_background", "selection", "color8")
+end
+load_theme()
 
 local cached_channels = {}
 local cached_guide = {}
@@ -748,20 +805,6 @@ local function sync_player_state()
     end
 end
 
-local function get_network_color(net)
-    if not net then return "&HFA89B4&" end -- Sapphire
-    local n = string.upper(net)
-    if n == "NBC" then return "&HA1E3A6&"       -- Mint
-    elseif n == "ABC" then return "&HAFE2F9&"   -- Warm Gold
-    elseif n == "FOX" then return "&HFA89B4&"   -- Sapphire
-    elseif n == "CBS" then return "&HF7A6CB&"   -- Mauve
-    elseif n == "PBS" then return "&HD5E294&"   -- Teal
-    elseif n == "CW" then return "&HA1E3A6&"    -- Green
-    elseif n == "UNIVISION" then return "&HA88BF3&" -- Coral
-    end
-    return "&HFA89B4&"
-end
-
 local blanking = false
 local blank_saw_load = false
 local blank_at = 0
@@ -777,7 +820,8 @@ local function render_hud()
     local ch_num = ch.channel_number or "OTA"
     local net = ch.network or "TV"
     local display_title = ch.display_name or ch.name or "Live Broadcast"
-    local net_col = get_network_color(net)
+    load_theme()
+    local net_col = theme.accent
 
     local block = program_on_now(prog)
     local prog_title = (block and block.title) or "Live broadcast"
@@ -846,25 +890,25 @@ local function render_hud()
     if blanking then
         ass = ass .. box(0, 0, 1280, 720, "&H000000&", "00")
     end
-    ass = ass .. box(0, 0, 1280, 96, "&H12141C&", "18")
+    ass = ass .. box(0, 0, 1280, 96, theme.bg, "18")
     ass = ass .. box(0, 0, 8, 96, net_col, "00")
     ass = ass .. string.format(
         "{\\an7\\pos(28,22)\\bord0\\shad0\\fnSans-Serif\\b1\\fs34\\1c%s}%s\n",
         net_col, clip(ch_num, 8)
     )
     ass = ass .. string.format(
-        "{\\an7\\pos(28,58)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16\\1c&Hcdd6f4&}%s\n",
-        clip(net, 12)
+        "{\\an7\\pos(28,58)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16\\1c%s}%s\n",
+        theme.dim, clip(net, 12)
     )
     ass = ass .. string.format(
-        "{\\an7\\pos(148,20)\\bord0\\shad0\\fnSans-Serif\\b1\\fs28\\1c&HFFFFFF&}%s\n",
-        clip(display_title, 42)
+        "{\\an7\\pos(148,20)\\bord0\\shad0\\fnSans-Serif\\b1\\fs28\\1c%s}%s\n",
+        theme.title, clip(display_title, 42)
     )
     ass = ass .. string.format(
-        "{\\an7\\pos(148,58)\\bord0\\shad0\\fnSans-Serif\\fs20\\1c&Hc8d0e0&}%s\n",
-        show_line
+        "{\\an7\\pos(148,58)\\bord0\\shad0\\fnSans-Serif\\fs20\\1c%s}%s\n",
+        theme.fg, show_line
     )
-    local status_col = (status == "LIVE") and "&H7dcea0&" or "&H89b4fa&"
+    local status_col = (status == "LIVE") and theme.live or theme.accent
     ass = ass .. string.format(
         "{\\an9\\pos(1252,28)\\bord0\\shad0\\fnSans-Serif\\b1\\fs18\\1c%s}%s\n",
         status_col, ass_escape(status)
@@ -884,8 +928,8 @@ local function render_hud()
             rec_label = "REC " .. tostring(r0.channel_number or r0.station or "")
         end
         ass = ass .. string.format(
-            "{\\an9\\pos(1252,%d)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16\\1c&H6a6af0&}%s\n",
-            side_y, clip(rec_label, 16)
+            "{\\an9\\pos(1252,%d)\\bord0\\shad0\\fnSans-Serif\\b1\\fs16\\1c%s}%s\n",
+            side_y, theme.urgent, clip(rec_label, 16)
         )
     end
     if paused or delayed then
@@ -900,14 +944,14 @@ local function render_hud()
             frac = LIVE_SLACK / math.max(LIVE_SLACK, delay)
         end
         local fill = math.floor(1280 * math.max(0, math.min(1, frac)))
-        ass = ass .. box(0, 92, 1280, 4, "&H2a2e3a&", "00")
+        ass = ass .. box(0, 92, 1280, 4, theme.track, "00")
         if fill > 0 then
-            ass = ass .. box(0, 92, fill, 4, "&H5858F8&", "00")
+            ass = ass .. box(0, 92, fill, 4, theme.accent, "00")
         end
     end
 
     local vol = math.floor(mp.get_property_number("volume", 100) or 100)
-    local vol_label = is_muted and "{\\1c&H3333F0&\\b1}Muted{\\1c&Hcdd6f4&\\b0}" or ("Vol " .. tostring(vol))
+    local vol_label = is_muted and ("{\\1c" .. theme.urgent .. "\\b1}Muted{\\1c" .. theme.fg .. "\\b0}") or ("Vol " .. tostring(vol))
     local action = paused and "Space Play" or "Space Pause"
     local record = is_recording and "r Stop recording" or "r Record"
     local hints
@@ -918,10 +962,10 @@ local function render_hud()
     else
         hints = string.format("j k Channel    %s    %s    m Mute    %s", action, record, vol_label)
     end
-    ass = ass .. box(0, 676, 1280, 44, "&H12141C&", "18")
+    ass = ass .. box(0, 676, 1280, 44, theme.bg, "18")
     ass = ass .. string.format(
-        "{\\an5\\pos(640,698)\\bord0\\shad0\\fnSans-Serif\\fs18\\1c&Hcdd6f4&}%s\n",
-        hints
+        "{\\an5\\pos(640,698)\\bord0\\shad0\\fnSans-Serif\\fs18\\1c%s}%s\n",
+        theme.fg, hints
     )
 
     overlay.data = ass
@@ -1280,8 +1324,8 @@ local bad_streak = 0
 local last_poll = 0
 
 local function signal_color(db)
-    if db and db < 18 then return "&H3333F0&" end
-    return "&H30C0F0&"
+    if db and db < 18 then return theme.urgent end
+    return theme.warn
 end
 
 local function clear_signal()
@@ -1319,7 +1363,7 @@ local function note_reading(db)
             signal_state = state
             if state == "lost" then
                 signal_label = "No signal"
-                signal_bgr = "&H3333F0&"
+                signal_bgr = theme.urgent
             else
                 signal_label = "Weak signal"
                 signal_bgr = signal_color(db)

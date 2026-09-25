@@ -83,7 +83,43 @@ if not skip_ads() or virt_pos ~= 1620 then fail("second break") end
 """
 
 
+def _theme_source() -> str:
+    with open(LUA, encoding="utf-8") as f:
+        src = f.read()
+    end = src.index("\nload_theme()\n") + len("\nload_theme()\n")
+    return src[src.index("-- ASS colors are &HBBGGRR&"):end]
+
+
+THEME_HARNESS = r"""
+local THEME_COLORS_PATH = "%s"
+local STAMP = 1
+utils = { file_info = function(p) return { mtime = STAMP } end }
+
+%s
+
+local function fail(msg) io.stderr:write(msg .. "\n") os.exit(1) end
+if theme.accent ~= "&H418AD2&" then fail("accent " .. tostring(theme.accent)) end
+if theme.bg ~= "&H0D121C&" then fail("bg " .. tostring(theme.bg)) end
+if theme.urgent ~= "&H4F5AD6&" then fail("red " .. tostring(theme.urgent)) end
+if theme.warn ~= "&H30C0F0&" then fail("a missing key keeps the default: " .. tostring(theme.warn)) end
+"""
+
+
 class TestHudRate(unittest.TestCase):
+    def test_hud_reads_the_omarchy_theme(self):
+        lua = shutil.which("lua") or shutil.which("luajit")
+        if not lua:
+            self.skipTest("no lua")
+        with tempfile.TemporaryDirectory() as d:
+            colors = os.path.join(d, "colors.toml")
+            with open(colors, "w", encoding="utf-8") as f:
+                f.write('mode = "dark"\naccent = "#d28a41"\nbackground = "#1c120d"\nred = "#d65a4f"\n')
+            script = os.path.join(d, "t.lua")
+            with open(script, "w", encoding="utf-8") as f:
+                f.write(THEME_HARNESS % (colors, _theme_source()))
+            res = subprocess.run([lua, script], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+
     def test_skip_ads_once(self):
         lua = shutil.which("lua") or shutil.which("luajit")
         if not lua:

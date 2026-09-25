@@ -23,6 +23,7 @@ local hud_visible = false
 local blanking = false
 local signal_label = ""
 local signal_bgr = ""
+local theme = { urgent = "&H3333F0&", warn = "&H30C0F0&" }
 local update_badge
 local function picture_ready() return true end
 local function is_library_playback() return false end
