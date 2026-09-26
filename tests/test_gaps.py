@@ -229,6 +229,16 @@ class TestTimeshiftStop(unittest.TestCase):
                  patch.object(Timeshift, "_kill_pid") as kill:
                 Timeshift._reap_orphan_dumps(keep_pid=12)
             kill.assert_not_called()
+            listing = (
+                "40 python3 /r/engine/tower_dump.py 0 551028615 /c/omarchy/tv/timeshift/live.ts /s /l\n"
+                "41 mpv --script-opts=tv_hud-timeshift-file=/c/omarchy/tv/timeshift/live.ts fd://0\n"
+                "42 mpv --stream-dump=/c/omarchy/tv/timeshift/live.ts dvb://FOX\n"
+                "43 bash -c pgrep -af tower_dump.py; tail /c/omarchy/tv/timeshift/dump.log --stream-dump=\n"
+            )
+            with patch("engine.timeshift.subprocess.check_output", return_value=listing), \
+                 patch.object(Timeshift, "_kill_pid") as kill:
+                Timeshift._reap_orphan_dumps()
+            self.assertEqual([c.args[0] for c in kill.call_args_list], [40, 42])
             with patch("engine.timeshift.subprocess.check_output", side_effect=OSError):
                 Timeshift._reap_orphan_dumps()
 
@@ -375,9 +385,9 @@ class TestMoreBranches(unittest.TestCase):
             kill.assert_called()
             with patch("engine.timeshift.TIMESHIFT_FILE", live):
                 with patch.object(Timeshift, "_pid_alive", return_value=False):
-                    self.assertIsNone(Timeshift._mark_after_reopen(9, 0))
+                    self.assertFalse(Timeshift._wait_playable(9, 0))
                 with patch.object(Timeshift, "_pid_alive", return_value=True):
-                    self.assertEqual(Timeshift._mark_after_reopen(9, 0), 0)
+                    self.assertTrue(Timeshift._wait_playable(9, 0))
 
     def test_channels_file_slots_and_dead_session(self):
         from engine.guide import _read_channels_file, _slot_names

@@ -33,11 +33,13 @@ from engine.paths import (
     TUNE_STATUS_PATH,
     chmod_private_file,
     ensure_private_dir,
+    own_scope,
     state_lock,
     touch_private_file,
 )
 
 FOLLOW_TS_PY = os.path.join(os.path.dirname(os.path.realpath(__file__)), "follow_ts.py")
+TOWER_DUMP_PY = os.path.join(os.path.dirname(os.path.realpath(__file__)), "tower_dump.py")
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 # Same floor as library dumps: PAT/PMT-only is not a picture.
@@ -673,20 +675,29 @@ class Timeshift:
 
     @classmethod
     def _reap_orphan_dumps(cls, keep_pid: int = 0) -> None:
-        """Kills leftover stream-dump mpv that state no longer tracks (stacked surf)."""
+        """Kills leftover live dumps that state no longer tracks (stacked surf).
+
+        Only the dump's own marks. The window's args name the timeshift file too.
+        """
         try:
             out = subprocess.check_output(
-                ["pgrep", "-a", "mpv"],
+                ["pgrep", "-af", "tower_dump.py|--stream-dump="],
                 stderr=subprocess.DEVNULL,
                 text=True,
             )
         except Exception:
             return
         for line in out.splitlines():
-            if "--stream-dump=" not in line or "omarchy/tv/timeshift/" not in line:
+            parts = line.split()
+            if len(parts) < 3 or "omarchy/tv/timeshift/" not in line:
+                continue
+            program, args = os.path.basename(parts[1]), parts[2:]
+            ours = program.startswith("python") and args[0].endswith("tower_dump.py")
+            old = program == "mpv" and any(a.startswith("--stream-dump=") for a in args)
+            if not ours and not old:
                 continue
             try:
-                pid = int(line.split(None, 1)[0])
+                pid = int(parts[0])
             except ValueError:
                 continue
             if pid <= 1 or pid == keep_pid:
@@ -1070,24 +1081,17 @@ class Timeshift:
         return None
 
     @classmethod
-    def _mark_after_reopen(cls, pid: int, size_before: int) -> Optional[int]:
-        """The new stream shrinks the file once the tuner locks, 3 to 12 s after the command.
-
-        Every shrink is a new start. A mark taken before it never grows back.
-        """
-        low = prev = size_before
+    def _wait_playable(cls, pid: int, mark: int) -> bool:
+        """The new tower has a picture's worth of bytes past its start."""
+        need = align_ts(mark) + MIN_PLAYABLE_BYTES
         deadline = time.time() + DUMP_WAIT_SECS
         while time.time() < deadline:
             if not cls._pid_alive(pid):
-                return None
-            size = cls.dump_bytes()
-            if size + TS_PACKET < prev:
-                low = size
-            prev = size
-            if size >= align_ts(low) + MIN_PLAYABLE_BYTES:
-                return align_ts(low)
+                return False
+            if cls.dump_bytes() >= need:
+                return True
             time.sleep(0.05)
-        return None
+        return False
 
     @classmethod
     def switch_program(cls, tune_name: str) -> bool:
@@ -1112,9 +1116,10 @@ class Timeshift:
 
     @classmethod
     def _retune_running_dump(cls, name: str) -> bool:
-        """Point the live dump at another tower without a new mpv.
+        """Point the live dump at another tower. The tuner stays open and locks again.
 
-        Setting dvbin-prog closes the stream, and this mpv locks again.
+        The dump truncates live.ts and replies once locked, with where the
+        new tower starts.
         """
         state = cls.load_state()
         pid = int(state.get("pid") or 0)
@@ -1127,21 +1132,24 @@ class Timeshift:
         # A filtered dump has no video PID for a 0:0 row. That one still restarts.
         if cls._conf_needs_full_mux(name) and not state.get("full_mux"):
             return False
-        size_before = cls.dump_bytes()
+        freq = cls._conf_freq(name)
+        if freq <= 0:
+            return False
         cls.patch_state(channel=name, tune_name=name)
-        reply = cls._dump_command(["set_property", "dvbin-prog", name])
+        reply = cls._dump_command(["tune", freq], timeout=DUMP_WAIT_SECS)
         if not reply or reply.get("error") != "success":
             return False
-        # This mpv closes the stream and locks again. The file usually shrinks.
-        # The mark has to be that new start, not the size from before the close.
-        mark = cls._mark_after_reopen(pid, size_before)
-        if mark is None:
+        try:
+            mark = align_ts(int((reply.get("data") or {}).get("mark") or 0))
+        except (TypeError, ValueError):
+            return False
+        if not cls._wait_playable(pid, mark):
             return False
         cls.patch_state(
             channel=name,
             tune_name=name,
             running=True,
-            freq=cls._conf_freq(name),
+            freq=freq,
             service_id=cls.service_id(name),
             play_from=mark,
             view="live",
@@ -1161,6 +1169,11 @@ class Timeshift:
         sock: str,
         log_name: str = "dump.log",
     ) -> Optional[subprocess.Popen]:
+        # The whole tower. A zap to its other stations is a track change,
+        # and a 0:0 or copied video id still has a picture.
+        freq = cls._conf_freq(name)
+        if freq <= 0:
+            return None
         cls.ensure_dir()
         if os.path.exists(sock):
             try:
@@ -1170,22 +1183,7 @@ class Timeshift:
         touch_private_file(dest)
         log_path = os.path.join(TIMESHIFT_DIR, log_name)
         touch_private_file(log_path)
-        cmd = [
-            "mpv",
-            f"--stream-dump={dest}",
-            "--vo=null",
-            "--ao=null",
-            "--cache=yes",
-            f"--input-ipc-server={sock}",
-            f"--dvbin-card={adapter_id}",
-            f"--dvbin-file={MPV_CHANNELS_CONF}",
-            "--idle=no",
-            f"--log-file={os.path.join(TIMESHIFT_DIR, log_name)}",
-            # The whole tower. A zap to its other stations is a track change,
-            # and a 0:0 or copied video id still has a picture.
-            "--dvbin-full-transponder=yes",
-            f"dvb://{name}",
-        ]
+        cmd = own_scope([sys.executable, TOWER_DUMP_PY, str(adapter_id), str(freq), dest, sock, log_path])
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,

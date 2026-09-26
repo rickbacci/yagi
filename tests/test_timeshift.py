@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import signal
 import socket
 import stat
@@ -12,7 +13,7 @@ import time
 import unittest
 from unittest.mock import patch, MagicMock
 
-from engine.timeshift import ATSC_BPS, LIVE_SLACK, SEEK_STEP, Timeshift, align_ts, is_timeshift_path
+from engine.timeshift import ATSC_BPS, LIVE_SLACK, SEEK_STEP, TOWER_DUMP_PY, Timeshift, align_ts, is_timeshift_path
 
 
 class TestTimeshift(unittest.TestCase):
@@ -399,23 +400,30 @@ class TestTimeshift(unittest.TestCase):
                     f.write(b"x" * (256 * 1024))
                 return proc
 
+            conf_dir = tempfile.mkdtemp()
+            conf = os.path.join(conf_dir, "channels.conf")
+            with open(conf, "w", encoding="utf-8") as f:
+                f.write("FOX:183028615:8VSB:49:52:3\n")
+            self.addCleanup(shutil.rmtree, conf_dir, True)
             with patch("engine.timeshift.TIMESHIFT_DIR", tmp_dir), \
                  patch("engine.timeshift.TIMESHIFT_FILE", live), \
                  patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
-                 patch("engine.timeshift.MPV_CHANNELS_CONF", os.path.join(tmp_dir, "channels.conf")), \
+                 patch("engine.timeshift.MPV_CHANNELS_CONF", conf), \
                  patch.object(Timeshift, "_wait_frontend_free"), \
                  patch("subprocess.Popen", side_effect=fake_popen) as mock_popen:
                 path = Timeshift.start_dump("FOX")
                 self.assertEqual(path, live)
                 cmd = mock_popen.call_args[0][0]
-                self.assertIn("--stream-dump=" + live, cmd)
-                self.assertTrue(any(str(a).startswith("--log-file=") for a in cmd))
-                self.assertIn("dvb://FOX", cmd)
-                self.assertIn("--dvbin-full-transponder=yes", cmd)
-                self.assertIn("--dvbin-card=0", cmd)
-                self.assertIn("--vo=null", cmd)
+                self.assertEqual(
+                    cmd[-6:],
+                    [TOWER_DUMP_PY, "0", "183028615", live, sock, os.path.join(tmp_dir, "dump.log")],
+                )
+                self.assertNotIn("mpv", cmd)
                 data = Timeshift.load_state()
+            self.assertEqual(data["freq"], 183028615)
+            self.assertEqual(data["service_id"], 3)
+            self.assertTrue(data["full_mux"])
             self.assertTrue(data["running"])
             self.assertEqual(data["tune_name"], "FOX")
             self.assertEqual(data["pid"], 4242)
@@ -605,6 +613,7 @@ class TestTimeshift(unittest.TestCase):
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
                  patch("engine.timeshift.FOLLOW_SOCKET_PATH", follow_sock), \
                  patch("engine.timeshift.MPV_CHANNELS_CONF", os.path.join(tmp_dir, "channels.conf")), \
+                 patch.object(Timeshift, "_conf_freq", return_value=183028615), \
                  patch.object(Timeshift, "_wait_frontend_free"), \
                  patch.object(Timeshift, "send_follow_reopen", return_value=True), \
                  patch.object(Timeshift, "wipe") as mock_wipe, \
@@ -782,6 +791,7 @@ class TestTimeshift(unittest.TestCase):
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
                  patch("engine.timeshift.FOLLOW_SOCKET_PATH", follow_sock), \
                  patch("engine.timeshift.MPV_CHANNELS_CONF", os.path.join(tmp_dir, "channels.conf")), \
+                 patch.object(Timeshift, "_conf_freq", return_value=183028615), \
                  patch.object(Timeshift, "_wait_frontend_free"), \
                  patch.object(Timeshift, "stop_dump"), \
                  patch("subprocess.Popen", side_effect=fake_popen) as mock_popen:
@@ -795,8 +805,7 @@ class TestTimeshift(unittest.TestCase):
                 path = Timeshift.retune_keep_window("FOX")
                 self.assertEqual(path, live)
                 cmd = mock_popen.call_args[0][0]
-                self.assertIn("--dvbin-card=0", cmd)
-                self.assertNotIn("--dvbin-card=1", cmd)
+                self.assertEqual(cmd[cmd.index(TOWER_DUMP_PY) + 1], "0")
                 data = Timeshift.load_state()
             self.assertEqual(data["adapter_id"], 0)
             self.assertEqual(data["pid"], 8888)
@@ -817,8 +826,10 @@ class TestTimeshift(unittest.TestCase):
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
                  patch.object(Timeshift, "_pid_alive", return_value=True), \
                  patch.object(Timeshift, "_conf_needs_full_mux", return_value=False), \
-                 patch.object(Timeshift, "_mark_after_reopen", return_value=256 * 1024), \
-                 patch.object(Timeshift, "_dump_command", return_value={"error": "success"}) as mock_ipc, \
+                 patch.object(Timeshift, "_conf_freq", return_value=479028615), \
+                 patch.object(Timeshift, "service_id", return_value=3), \
+                 patch.object(Timeshift, "_wait_playable", return_value=True), \
+                 patch.object(Timeshift, "_dump_command", return_value={"error": "success", "data": {"mark": 0}}) as mock_ipc, \
                  patch("subprocess.Popen") as mock_popen:
                 Timeshift._write_state({
                     "running": True,
@@ -830,10 +841,22 @@ class TestTimeshift(unittest.TestCase):
                 path = Timeshift.retune_keep_window("WEWS")
                 self.assertEqual(path, live)
                 mock_popen.assert_not_called()
-                mock_ipc.assert_called_once_with(["set_property", "dvbin-prog", "WEWS"])
+                self.assertEqual(mock_ipc.call_count, 1)
+                self.assertEqual(mock_ipc.call_args.args[0], ["tune", 479028615])
                 data = Timeshift.load_state()
                 self.assertEqual(data["tune_name"], "WEWS")
-                self.assertGreater(data["play_from"], 0)
+                self.assertEqual(data["play_from"], 0)
+                self.assertEqual(data["freq"], 479028615)
+                self.assertEqual(data["service_id"], 3)
+
+    def test_retune_without_lock_falls_back(self):
+        with patch.object(Timeshift, "load_state", return_value={"pid": 5, "tune_name": "FOX"}), \
+             patch.object(Timeshift, "_pid_alive", return_value=True), \
+             patch.object(Timeshift, "_conf_needs_full_mux", return_value=False), \
+             patch.object(Timeshift, "_conf_freq", return_value=479028615), \
+             patch.object(Timeshift, "patch_state"), \
+             patch.object(Timeshift, "_dump_command", return_value={"error": "no lock"}):
+            self.assertFalse(Timeshift._retune_running_dump("WEWS"))
 
     def test_noted_channel_still_retunes_the_running_dump(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -848,8 +871,9 @@ class TestTimeshift(unittest.TestCase):
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
                  patch.object(Timeshift, "_pid_alive", return_value=True), \
                  patch.object(Timeshift, "_conf_needs_full_mux", return_value=False), \
-                 patch.object(Timeshift, "_mark_after_reopen", return_value=256 * 1024), \
-                 patch.object(Timeshift, "_dump_command", return_value={"error": "success"}) as mock_ipc, \
+                 patch.object(Timeshift, "_conf_freq", return_value=479028615), \
+                 patch.object(Timeshift, "_wait_playable", return_value=True), \
+                 patch.object(Timeshift, "_dump_command", return_value={"error": "success", "data": {"mark": 0}}) as mock_ipc, \
                  patch("subprocess.Popen") as mock_popen:
                 Timeshift._write_state({
                     "running": True,
@@ -862,29 +886,19 @@ class TestTimeshift(unittest.TestCase):
                 path = Timeshift.retune_keep_window("WEWS")
                 self.assertEqual(path, live)
                 mock_popen.assert_not_called()
-                mock_ipc.assert_called_once_with(["set_property", "dvbin-prog", "WEWS"])
+                self.assertEqual(mock_ipc.call_args.args[0], ["tune", 479028615])
                 data = Timeshift.load_state()
                 self.assertEqual(data["tune_name"], "WEWS")
                 self.assertEqual(data.get("switching_from") or "", "")
 
-    def test_reopen_mark_follows_the_shrunk_file(self):
-        grown = 188 + 256 * 1024
-        sizes = iter([5_000_000, 188, 50_000, grown])
+    def test_new_tower_is_playable_once_it_has_grown_from_the_mark(self):
+        sizes = iter([0, 100_000, 256 * 1024])
         with patch.object(Timeshift, "_pid_alive", return_value=True), \
              patch.object(Timeshift, "dump_bytes", side_effect=lambda: next(sizes)), \
              patch("engine.timeshift.time.sleep"):
-            mark = Timeshift._mark_after_reopen(1, 5_000_000)
-        self.assertEqual(mark, align_ts(188))
-
-    def test_reopen_waits_out_a_slow_lock(self):
-        clock = iter(float(t) for t in range(100))
-        sizes = iter([5_000_000] * 12 + [0, 256 * 1024])
-        with patch.object(Timeshift, "_pid_alive", return_value=True), \
-             patch.object(Timeshift, "dump_bytes", side_effect=lambda: next(sizes)), \
-             patch("engine.timeshift.time.time", side_effect=lambda: next(clock)), \
-             patch("engine.timeshift.time.sleep"):
-            mark = Timeshift._mark_after_reopen(1, 5_000_000)
-        self.assertEqual(mark, 0)
+            self.assertTrue(Timeshift._wait_playable(1, 0))
+        with patch.object(Timeshift, "_pid_alive", return_value=False):
+            self.assertFalse(Timeshift._wait_playable(1, 0))
 
     def test_same_tower_zap_switches_program_without_retune(self):
         conf = {"STORY": (551028615, 4), "TOONS": (551028615, 5), "WKYC-HD": (503028615, 1)}
@@ -942,7 +956,7 @@ class TestTimeshift(unittest.TestCase):
                  patch("engine.timeshift.TIMESHIFT_FILE", live), \
                  patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
-                 patch("engine.timeshift.MPV_CHANNELS_CONF", os.path.join(tmp_dir, "channels.conf")), \
+                 patch.object(Timeshift, "_conf_freq", return_value=183028615), \
                  patch.object(Timeshift, "_pid_alive", return_value=True), \
                  patch.object(Timeshift, "_dump_command") as mock_ipc, \
                  patch.object(Timeshift, "_wait_frontend_free"), \
@@ -957,11 +971,8 @@ class TestTimeshift(unittest.TestCase):
                 path = Timeshift.retune_keep_window("FOX")
                 self.assertEqual(path, live)
                 mock_ipc.assert_not_called()
-                mpv_calls = [
-                    c for c in mock_popen.call_args_list
-                    if c.args and c.args[0] and c.args[0][0] == "mpv"
-                ]
-                self.assertEqual(len(mpv_calls), 1)
+                dumps = [c for c in mock_popen.call_args_list if c.args and TOWER_DUMP_PY in c.args[0]]
+                self.assertEqual(len(dumps), 1)
 
     def test_zero_pid_dump_does_not_lock_twice(self):
         with tempfile.TemporaryDirectory() as tmp_dir, tempfile.TemporaryDirectory() as conf_dir:
@@ -1000,12 +1011,9 @@ class TestTimeshift(unittest.TestCase):
                  patch("subprocess.Popen", side_effect=fake_popen) as mock_popen:
                 path = Timeshift.start_dump("WEWSHD")
                 self.assertEqual(path, live)
-                mpv_calls = [
-                    c for c in mock_popen.call_args_list
-                    if c.args and c.args[0] and c.args[0][0] == "mpv"
-                ]
-                self.assertEqual(len(mpv_calls), 1)
-                self.assertIn("--dvbin-full-transponder=yes", mpv_calls[0].args[0])
+                dumps = [c for c in mock_popen.call_args_list if c.args and TOWER_DUMP_PY in c.args[0]]
+                self.assertEqual(len(dumps), 1)
+                self.assertIn("479028615", dumps[0].args[0])
                 mock_learn.assert_called_once_with(live, 479028615)
 
     def test_retire_dump_file_unlinks_off_the_zap(self):
