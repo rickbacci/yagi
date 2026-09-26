@@ -5,7 +5,7 @@
 
 OTA ATSC 1.0 for Omarchy: bar plugin, pinned PiP, dual-tuner record. Not MythTV, not Kaffeine.
 
-Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts; the record timer reads it on a free tuner every few hours. Search looks at titles and descriptions. Record into `~/Videos/TV` on whichever tuner is free, one show or every airing (Record all); back-to-back episodes split into one file each and ad breaks are skipped on playback. Pause-live is the live dump, read once through a fifo. Skip seeks inside the same window. Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
+Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts; the record timer reads it on a free tuner every few hours. Search looks at titles and descriptions. Record into `~/Videos/TV` on whichever tuner is free, one show or every airing (Record all); back-to-back episodes split into one file each and ad breaks are skipped on playback. Pause-live is the live dump, the whole tower, read once through a fifo. Skip seeks inside the same window. A channel on the same tower comes up in about a second; another tower takes about 3 s of tuner lock first. Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
 
 Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `omarchy-tv`.
 
@@ -41,7 +41,7 @@ Omarchy (Hyprland + Quickshell). Unprivileged `$USER`. No `sudo` for the app. Tu
 sudo pacman -S --needed mpv v4l-utils psmisc procps-ng python
 ```
 
-`dvbv5-scan` and `dvb-fe-tool` come from `v4l-utils`. `fuser` is `psmisc`. `pgrep` is `procps-ng`. `femon` is optional troubleshooting, not a runtime dependency.
+`dvbv5-scan` and `dvb-fe-tool` come from `v4l-utils`. `fuser` is `psmisc`. `pgrep` is `procps-ng`. The live dump is plain Python on the DVB device files; mpv plays, and records. `femon` is optional troubleshooting, not a runtime dependency.
 
 ```bash
 getfacl /dev/dvb/adapter0/frontend0   # expect user:<you>:rw-
@@ -118,7 +118,7 @@ omarchy-tv pref filter favorites|all|hidden | pref library-max auto|50|100|250|o
 omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
 ```
 
-`pause` is throwaway `live.ts`. The writer stops when that file is an hour of air ahead of the playhead. `record` is a keepable file. `live` seeks the dump write head, or retunes after a recording. Channel change is the only `loadfile`, in the same window.
+`pause` is throwaway `live.ts`, the whole tower (about 8.7 GB an hour while the TV is open). The writer stops when that file is an hour of air ahead of the playhead. `record` is a keepable file. `live` seeks the dump write head, or retunes after a recording. A channel on the same tower switches tracks in the same picture; another tower retunes the open tuner and reloads the same window.
 
 ## Panel keys
 
@@ -137,7 +137,7 @@ omarchy-tv hidden list | hidden hide 19.1 | hidden show 19.1
 | ← / → | Skip 10s (inside the last 10s, → is live) | Skip; ad breaks jump once (not in games), ← goes back into one |
 | ↑ / ↓ | Skip 1 minute | same |
 | PgUp / PgDn | ignored | End of the next ad break / start of the last one |
-| j / k | Channel down / up | ignored |
+| j / k | Channel down / up (same tower: the old picture holds about a second) | ignored |
 | l | Live write head (same window) | Return to live (new dump) |
 | r | Record this station | ignored |
 | y | Save the paused stretch to Recordings | ignored |
