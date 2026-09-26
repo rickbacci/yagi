@@ -332,6 +332,7 @@ class TestDvrEngine(unittest.TestCase):
             self.assertIn("--dvbin-card=1", rec_cmd)
             self.assertNotIn("--dvbin-card=0", rec_cmd)
             self.assertNotIn("--dvbin-full-transponder=yes", rec_cmd)
+            self.assertIn("--load-scripts=no", rec_cmd)
             side = read_sidecar(session.file_path)
             self.assertEqual(side["title"], "Monday Night Football Kickoff")
             self.assertEqual(side["channel"], "8.1")

@@ -662,11 +662,13 @@ class DvrManager:
         }
 
         # 5. Build MPV Dumper Command. A copied video id dumps the whole tower.
+        # No scripts: the system mpris plugin would list the recorder as a player in the bar.
         cmd = [
             "mpv",
             f"--stream-dump={file_path}",
             "--vo=null",
             "--ao=null",
+            "--load-scripts=no",
             "--cache=yes",
             f"--input-ipc-server={socket_path}",
             f"--dvbin-card={adapter_id}",
