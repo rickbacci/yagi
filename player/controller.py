@@ -740,6 +740,9 @@ class MpvController:
                 "--cache=no",
                 "--demuxer-readahead-secs=3",
                 "--demuxer-max-bytes=4194304",
+                # Under a second of the whole tower. Every station's tracks are in it;
+                # the 5 MB default only waits longer for the same picture.
+                "--demuxer-lavf-probesize=2000000",
                 "--ytdl=no",
             ])
         else:
