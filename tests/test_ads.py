@@ -69,6 +69,57 @@ class TestComskipSanity(unittest.TestCase):
             self.assertEqual(ads.find_ads("game.ts", {}), ([[900.0, 1050.0], [7000.0, 7150.0]], "comskip"))
 
 
+class TestComskipSeesTheProgram(unittest.TestCase):
+    def test_comskip_reads_a_copy_with_a_program_table_beside_the_recording(self):
+        from unittest import mock
+
+        from engine import ads
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "show.ts")
+            with open(path, "wb") as f:
+                f.write(b"\x47" * 188 * 100)
+            os.makedirs(os.path.join(d, ".comskip-left-by-a-crash"))
+            calls = []
+
+            def run(cmd, **_kw):
+                calls.append(cmd)
+                if "ffmpeg" in cmd:
+                    open(cmd[-1], "wb").close()
+                else:
+                    source = cmd[-1]
+                    out = next(a.split("=", 1)[1] for a in cmd if a.startswith("--output="))
+                    with open(os.path.join(out, os.path.splitext(os.path.basename(source))[0] + ".edl"), "w") as f:
+                        f.write("100.5\t130.0\t0\n")
+                return subprocess.CompletedProcess(cmd, 0)
+
+            free = mock.Mock(free=100 * 1024 ** 3)
+            with mock.patch.object(ads.subprocess, "run", side_effect=run), \
+                    mock.patch.object(ads.shutil, "disk_usage", return_value=free):
+                self.assertEqual(ads.comskip_ads("/usr/bin/comskip", path, {"service_id": 3}), [[100.5, 130.0]])
+            remux, comskip = calls
+            self.assertIn("-c", remux)
+            self.assertEqual(remux[remux.index("-i") + 1], path)
+            self.assertEqual(os.path.dirname(os.path.dirname(comskip[-1])), d)
+            self.assertNotEqual(comskip[-1], path)
+            self.assertEqual(os.listdir(d), ["show.ts"])
+
+    def test_no_room_for_the_copy_reads_the_recording_itself(self):
+        from unittest import mock
+
+        from engine import ads
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "show.ts")
+            with open(path, "wb") as f:
+                f.write(b"\x47" * 188)
+            with mock.patch.object(ads.shutil, "disk_usage", return_value=mock.Mock(free=1024)), \
+                    mock.patch.object(ads.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+                self.assertEqual(ads.comskip_ads("/usr/bin/comskip", path), [])
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_args[0][0][-1], path)
+
+
 class TestFinish(unittest.TestCase):
     def test_a_finished_recording_is_marked_once(self):
         from unittest import mock

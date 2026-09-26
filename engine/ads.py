@@ -124,16 +124,41 @@ def parse_edl(text: str) -> List[List[float]]:
     return out
 
 
-def comskip_ads(exe: str, path: str) -> List[List[float]]:
-    with tempfile.TemporaryDirectory(prefix="omarchy-tv-comskip-") as out:
+def _with_program_table(path: str, side: Dict[str, Any], folder: str) -> Optional[str]:
+    """A copy with a PMT, or None. mpv's one-station dump has none, and Comskip then decodes one frame."""
+    from engine.dvr import KEEP_FREE_GIB
+
+    try:
+        if shutil.disk_usage(folder).free - os.path.getsize(path) < KEEP_FREE_GIB * 1024 ** 3:
+            return None
+    except OSError:
+        return None
+    dest = os.path.join(folder, "source.ts")
+    res = subprocess.run(
+        ["nice", "-n", "19", "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", path,
+         *_maps(side), "-c", "copy", "-f", "mpegts", dest],
+        capture_output=True, timeout=DETECT_TIMEOUT_SEC,
+    )
+    return dest if res.returncode == 0 and os.path.isfile(dest) else None
+
+
+def comskip_ads(exe: str, path: str, side: Optional[Dict[str, Any]] = None) -> List[List[float]]:
+    # The copy sits beside the recording, not in /tmp, which is RAM here. Only one
+    # finisher runs at a time, so any copy already there was left by a killed one.
+    folder = os.path.dirname(os.path.abspath(path))
+    for entry in os.scandir(folder):
+        if entry.name.startswith(".comskip-") and entry.is_dir(follow_symlinks=False):
+            shutil.rmtree(entry.path, ignore_errors=True)
+    with tempfile.TemporaryDirectory(prefix=".comskip-", dir=folder) as out:
+        source = _with_program_table(path, side or {}, out) or path
         ini = os.path.join(out, "comskip.ini")
         with open(ini, "w", encoding="utf-8") as f:
             f.write("output_edl=1\noutput_txt=0\noutput_default=0\nverbose=0\n")
         subprocess.run(
-            ["nice", "-n", "19", exe, f"--ini={ini}", f"--output={out}", "--quiet", path],
+            ["nice", "-n", "19", exe, f"--ini={ini}", f"--output={out}", "--quiet", source],
             capture_output=True, timeout=DETECT_TIMEOUT_SEC,
         )
-        edl = os.path.join(out, os.path.splitext(os.path.basename(path))[0] + ".edl")
+        edl = os.path.join(out, os.path.splitext(os.path.basename(source))[0] + ".edl")
         try:
             with open(edl, encoding="utf-8") as f:
                 return parse_edl(f.read())
@@ -162,9 +187,11 @@ def find_ads(path: str, side: Dict[str, Any]) -> Tuple[List[List[float]], str]:
     exe = comskip_path()
     if exe:
         # A game's halftime reads as one long break. Drop that one, keep the rest.
-        breaks = [span for span in comskip_ads(exe, path) if span[1] - span[0] <= MAX_BREAK_SEC]
+        breaks = [span for span in comskip_ads(exe, path, side) if span[1] - span[0] <= MAX_BREAK_SEC]
         if breaks and believable(breaks, media_seconds(path)):
             return breaks, "comskip"
+        why = "found no breaks" if not breaks else "marked most of it"
+        print(f"Comskip {why} in {os.path.basename(path)}; using ffmpeg.", flush=True)
     return ffmpeg_ads(path, side), "ffmpeg"
 
 

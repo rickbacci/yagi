@@ -751,7 +751,7 @@ def cmd_record(args):
             from engine.paths import own_scope
             subprocess.Popen(
                 own_scope([sys.executable, os.path.abspath(__file__), "record", "finish"]),
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
                 start_new_session=True,
             )
         from engine import pool
