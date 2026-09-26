@@ -3,7 +3,7 @@ ATSC A/65 PSIP from a full MPEG-TS dump.
 
 TVCT (0xC8) maps source_id to virtual channel. EIT (0xCB) is the schedule.
 ETT (0xCC) is the longer description, when the station sends one.
-Times are GPS seconds, shown in America/New_York. Tuner 1 dumps unique
+Times are GPS seconds, shown in this machine's zone. Tuner 1 dumps unique
 frequencies; a recording holds that tuner.
 """
 
@@ -16,10 +16,9 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
-from zoneinfo import ZoneInfo
 
 from engine.atsc_huffman import decode_description, decode_title
-from engine.guide import epg_tuner_held
+from engine.guide import LOCAL_TZ, epg_tuner_held
 from engine.paths import (
     CHANNELS_JSON_PATH,
     GUIDE_STATUS_PATH,
@@ -36,7 +35,6 @@ TABLE_EIT = 0xCB
 TABLE_ETT = 0xCC
 GPS_UNIX_OFFSET = 315964800
 GPS_LEAP_SECONDS = 18
-EASTERN = ZoneInfo("America/New_York")
 EPG_ADAPTER = WORK_ADAPTER
 EPG_DWELL_SECS = 8.0
 
@@ -107,7 +105,7 @@ def mpeg_crc32(data: bytes) -> int:
 
 def gps_to_datetime(gps_seconds: int) -> datetime:
     unix = int(gps_seconds) + GPS_UNIX_OFFSET - GPS_LEAP_SECONDS
-    return datetime.fromtimestamp(unix, tz=timezone.utc).astimezone(EASTERN)
+    return datetime.fromtimestamp(unix, tz=timezone.utc).astimezone(LOCAL_TZ)
 
 
 def format_clock(dt: datetime) -> str:

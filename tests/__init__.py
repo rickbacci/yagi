@@ -9,9 +9,14 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 
 if "engine.paths" in sys.modules:
     raise RuntimeError("engine.paths was imported before the test sandbox")
+
+# Listings in the tests are Eastern. The app itself uses the machine's zone.
+os.environ["TZ"] = "America/New_York"
+time.tzset()
 
 # /tmp is RAM on some machines. TMPDIR still wins.
 _parent = os.environ.get("TMPDIR") or os.path.join(

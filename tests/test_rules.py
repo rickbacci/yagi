@@ -6,19 +6,19 @@ import tempfile
 import unittest
 from datetime import datetime
 
-from engine.psip import EASTERN, GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
+from engine.psip import LOCAL_TZ, GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
 from engine.rules import add_rule, arm_rules, load_rules, note_recorded, remove_rule
 from engine.schedule import load_schedule, remove_later
 from engine.shows import show_id
 
 
 def _gps(y, m, d, hh, mm=0):
-    unix = int(datetime(y, m, d, hh, mm, tzinfo=EASTERN).timestamp())
+    unix = int(datetime(y, m, d, hh, mm, tzinfo=LOCAL_TZ).timestamp())
     return unix - GPS_UNIX_OFFSET + GPS_LEAP_SECONDS
 
 
 def _now(y, m, d, hh, mm=0):
-    return datetime(y, m, d, hh, mm, tzinfo=EASTERN).timestamp()
+    return datetime(y, m, d, hh, mm, tzinfo=LOCAL_TZ).timestamp()
 
 
 def _prog(title, gps, synopsis="", dur=1800):

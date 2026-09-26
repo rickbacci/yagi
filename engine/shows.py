@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 from statistics import median
 from typing import Any, Dict, Iterable, List, Optional, Set
 
-from engine.guide import _fold_title, is_filler_title
-from engine.psip import EASTERN, format_clock
+from engine.guide import LOCAL_TZ, _fold_title, is_filler_title
+from engine.psip import format_clock
 
 # A TV night runs 6 AM to 6 AM. A 1 AM airing belongs to the evening before.
 NIGHT_START_HOUR = 6
@@ -47,7 +47,7 @@ def _short_clock(dt: datetime) -> str:
 
 
 def _clock_from_minutes(minutes: float) -> datetime:
-    base = datetime(2000, 1, 1, tzinfo=EASTERN)
+    base = datetime(2000, 1, 1, tzinfo=LOCAL_TZ)
     return base + timedelta(minutes=int(round(minutes)) % (24 * 60))
 
 
@@ -116,7 +116,7 @@ def build_shows(
         start = int(item.get("start") or 0)
         if not title or not channel or start <= 0:
             continue
-        dt = datetime.fromtimestamp(start, EASTERN)
+        dt = datetime.fromtimestamp(start, LOCAL_TZ)
         observed_nights.add(night_of(dt))
         key = _fold_title(title)
         if is_filler_title(title) or channel in hidden_set or (key, channel, start) in seen:

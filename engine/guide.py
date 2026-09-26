@@ -9,7 +9,7 @@ import json
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, tzinfo
 from typing import Dict, Any, Optional, List, Callable, Tuple
 from zoneinfo import ZoneInfo
 
@@ -22,7 +22,25 @@ from engine.paths import (
     state_lock,
 )
 
-_EASTERN = ZoneInfo("America/New_York")
+
+def local_zone() -> tzinfo:
+    """This machine's zone with its DST rules. A fixed offset is wrong for next week's listings."""
+    key = os.environ.get("TZ", "").lstrip(":")
+    if not key:
+        try:
+            link = os.readlink("/etc/localtime")
+        except OSError:
+            link = ""
+        key = link.split("zoneinfo/", 1)[1] if "zoneinfo/" in link else ""
+    if key:
+        try:
+            return ZoneInfo(key)
+        except (KeyError, ValueError, OSError):
+            pass
+    return datetime.now().astimezone().tzinfo
+
+
+LOCAL_TZ = local_zone()
 
 
 EVENING_SLOTS = [
@@ -591,7 +609,7 @@ def remember_guide_history(
         kept_usual.append(slot)
     history["usual"] = kept_usual
     for item in fresh:
-        when = datetime.fromtimestamp(item["start"], tz=_EASTERN)
+        when = datetime.fromtimestamp(item["start"], tz=LOCAL_TZ)
         iso = when.isocalendar()
         week = f"{iso.year}-W{iso.week:02d}"
         folded = _fold_title(item["title"])
@@ -854,7 +872,7 @@ def arm_weekly_slots(
     from engine.schedule import add_later, load_schedule
 
     stamp = time.time() if now is None else float(now)
-    local = datetime.fromtimestamp(stamp, tz=_EASTERN)
+    local = datetime.fromtimestamp(stamp, tz=LOCAL_TZ)
     history = _load_history(history_path or GUIDE_HISTORY_PATH)
     queued = load_schedule(schedule_path)
     added = []

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from engine.psip import (
-    EASTERN,
+    LOCAL_TZ,
     GPS_LEAP_SECONDS,
     GPS_UNIX_OFFSET,
     collect_guide_events,
@@ -33,9 +33,27 @@ def tearDownModule():
 
 
 def gps_for_eastern(year, month, day, hour, minute):
-    dt = datetime(year, month, day, hour, minute, tzinfo=EASTERN)
+    dt = datetime(year, month, day, hour, minute, tzinfo=LOCAL_TZ)
     unix = dt.astimezone(timezone.utc).timestamp()
     return int(unix - GPS_UNIX_OFFSET + GPS_LEAP_SECONDS)
+
+
+class TestLocalZone(unittest.TestCase):
+    def test_listings_follow_the_machine_zone_with_its_dst_rules(self):
+        from engine.guide import local_zone
+
+        with patch.dict(os.environ, {"TZ": "America/Los_Angeles"}):
+            zone = local_zone()
+        summer = datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc).astimezone(zone)
+        winter = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc).astimezone(zone)
+        self.assertEqual(summer.hour, 5)
+        self.assertEqual(winter.hour, 4)
+
+    def test_a_bad_zone_name_still_gives_a_zone(self):
+        from engine.guide import local_zone
+
+        with patch.dict(os.environ, {"TZ": "Not/AZone"}):
+            self.assertIsNotNone(local_zone())
 
 
 class TestPsip(unittest.TestCase):
@@ -52,7 +70,7 @@ class TestPsip(unittest.TestCase):
     def test_gps_to_eastern_label(self):
         gps = gps_for_eastern(2026, 9, 21, 19, 0)
         dt = gps_to_datetime(gps)
-        self.assertEqual(dt.tzinfo, EASTERN)
+        self.assertEqual(dt.tzinfo, LOCAL_TZ)
         self.assertEqual(format_clock(dt), "7:00 PM")
 
     def test_parse_tvct_and_eit_from_fixture_ts(self):

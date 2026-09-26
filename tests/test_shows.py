@@ -3,12 +3,12 @@
 import unittest
 from datetime import datetime
 
-from engine.psip import EASTERN
+from engine.psip import LOCAL_TZ
 from engine.shows import build_shows, bucket_for, night_of
 
 
 def _at(y, m, d, hh, mm=0):
-    return int(datetime(y, m, d, hh, mm, tzinfo=EASTERN).timestamp())
+    return int(datetime(y, m, d, hh, mm, tzinfo=LOCAL_TZ).timestamp())
 
 
 def _air(channel, title, start, dur=1800):
@@ -25,11 +25,11 @@ MON, TUE, WED, THU, FRI, SAT, SUN = 21, 22, 23, 24, 25, 26, 27
 
 class TestShowRows(unittest.TestCase):
     def test_night_runs_six_to_six_and_buckets(self):
-        self.assertEqual(night_of(datetime(2026, 9, 22, 1, 0, tzinfo=EASTERN)).day, MON)
-        self.assertEqual(bucket_for(datetime(2026, 9, 21, 21, 0, tzinfo=EASTERN)), "prime")
-        self.assertEqual(bucket_for(datetime(2026, 9, 21, 23, 30, tzinfo=EASTERN)), "late")
-        self.assertEqual(bucket_for(datetime(2026, 9, 22, 3, 0, tzinfo=EASTERN)), "overnight")
-        self.assertEqual(bucket_for(datetime(2026, 9, 22, 14, 0, tzinfo=EASTERN)), "day")
+        self.assertEqual(night_of(datetime(2026, 9, 22, 1, 0, tzinfo=LOCAL_TZ)).day, MON)
+        self.assertEqual(bucket_for(datetime(2026, 9, 21, 21, 0, tzinfo=LOCAL_TZ)), "prime")
+        self.assertEqual(bucket_for(datetime(2026, 9, 21, 23, 30, tzinfo=LOCAL_TZ)), "late")
+        self.assertEqual(bucket_for(datetime(2026, 9, 22, 3, 0, tzinfo=LOCAL_TZ)), "overnight")
+        self.assertEqual(bucket_for(datetime(2026, 9, 22, 14, 0, tzinfo=LOCAL_TZ)), "day")
 
     def test_nightly_and_weeknights(self):
         airings = []
