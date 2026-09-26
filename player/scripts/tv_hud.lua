@@ -1125,24 +1125,24 @@ local function at_file_end()
     return virt_pos >= (dur - 1.0)
 end
 
+-- MPEG-TS ignores relative time seeks. mpv's start=#N is chapter N, not byte N;
+-- a percent start on a TS file is a byte seek at that share of its size.
+local function byte_start(bytes, size)
+    if size <= 188 then return "0%" end
+    bytes = math.max(0, math.min(bytes, size - 188))
+    return string.format("%.6f%%", 100 * bytes / size)
+end
+
 apply_virt_seek = function()
     local path = mp.get_property("path") or ""
     if path == "" then return end
-    local size = file_bytes()
-    local bytes = math.floor(virt_pos * library_rate())
-    if size > 188 then
-        bytes = math.max(0, math.min(bytes, size - 188))
-    else
-        bytes = math.max(0, bytes)
-    end
     seek_reload = true
     saved_virt = virt_pos
-    -- MPEG-TS ignores relative time seeks. start=# is a byte offset.
     mp.command_native({
         name = "loadfile",
         url = path,
         flags = "replace",
-        options = { start = "#" .. tostring(bytes) }
+        options = { start = byte_start(math.floor(virt_pos * library_rate()), file_bytes()) }
     })
 end
 

@@ -141,6 +141,60 @@ if theme.warn ~= "&H30C0F0&" then fail("a missing key keeps the default: " .. to
 """
 
 
+def _byte_start_source() -> str:
+    with open(LUA, encoding="utf-8") as f:
+        src = f.read()
+    return src[src.index("local function byte_start"):src.index("apply_virt_seek = function")]
+
+
+@unittest.skipUnless(shutil.which("mpv") and shutil.which("ffmpeg") and shutil.which("lua"), "no mpv, ffmpeg, or lua")
+class TestByteSeekInMpv(unittest.TestCase):
+    def test_the_seek_option_lands_on_that_byte(self):
+        import json
+        import socket
+        import time
+
+        with tempfile.TemporaryDirectory(dir=os.environ.get("XDG_RUNTIME_DIR")) as d:
+            path = os.path.join(d, "show.ts")
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-f", "lavfi", "-i",
+                 "testsrc=s=160x120:r=30:d=60", "-c:v", "mpeg2video", "-b:v", "800k", "-minrate", "800k",
+                 "-maxrate", "800k", "-bufsize", "400k", "-muxrate", "1000k", "-output_ts_offset", "29000",
+                 "-f", "mpegts", path],
+                check=True, capture_output=True, timeout=120,
+            )
+            size = os.path.getsize(path)
+            script = os.path.join(d, "t.lua")
+            with open(script, "w", encoding="utf-8") as f:
+                f.write(_byte_start_source() + f"\nio.write(byte_start({size * 40 // 60}, {size}))\n")
+            start = subprocess.run(["lua", script], capture_output=True, text=True, check=True).stdout
+            self.assertNotIn("#", start)
+            sock = os.path.join(d, "m.sock")
+            proc = subprocess.Popen(
+                ["mpv", "--no-config", "--vo=null", "--ao=null", "--pause", f"--start={start}",
+                 f"--input-ipc-server={sock}", path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            try:
+                pos = None
+                for _ in range(100):
+                    time.sleep(0.1)
+                    try:
+                        with socket.socket(socket.AF_UNIX) as s:
+                            s.connect(sock)
+                            s.sendall(b'{"command":["get_property","time-pos"]}\n')
+                            pos = json.loads(s.recv(4096).split(b"\n")[0]).get("data")
+                    except (OSError, ValueError):
+                        continue
+                    if pos:
+                        break
+            finally:
+                proc.kill()
+                proc.wait()
+        self.assertIsNotNone(pos)
+        self.assertAlmostEqual(pos, 40, delta=3)
+
+
 class TestHudRate(unittest.TestCase):
     def test_hud_reads_the_omarchy_theme(self):
         lua = shutil.which("lua") or shutil.which("luajit")
