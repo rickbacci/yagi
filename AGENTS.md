@@ -5,7 +5,7 @@ Plugin `richardb.omarchy-tv`, `bar-widget`, QML `plugin/BarWidget.qml`. Hyprland
 **Must** breaks hardware, security, or data. **For now** is a choice: change it with a reason, said first. Richard's "idea" = For now; "rule" = Must.
 
 ## Commands
-`python3 -m unittest discover tests` before commit. `bin/omarchy-tv status`. After QML: `omarchy restart shell`.
+`python3 -m unittest` (repo root) before commit. `bin/omarchy-tv status`. After QML: `omarchy restart shell`.
 
 ## Must
 1. `$USER` only. No `sudo` / `pkexec`.

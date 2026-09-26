@@ -171,6 +171,7 @@ class TestPathAndIndexHelpers(unittest.TestCase):
 
 class TestMpvPlayerController(unittest.TestCase):
     def setUp(self):
+        Timeshift.ensure_dir()
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.state_path = os.path.join(self.tmp_dir.name, "player_state.json")
         self._state_patcher = patch("player.controller.PLAYER_STATE_PATH", self.state_path)
@@ -620,6 +621,7 @@ class TestMpvPlayerController(unittest.TestCase):
 
 class TestMpvIpcChannelSurf(unittest.TestCase):
     def setUp(self):
+        Timeshift.ensure_dir()
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.state_path = os.path.join(self.tmp_dir.name, "player_state.json")
         self._state_patcher = patch("player.controller.PLAYER_STATE_PATH", self.state_path)

@@ -10,7 +10,7 @@ Bars stay up until the first frame. Live dump is always the whole tower. Same-to
 
 Guide is broadcast EIT only, every 3h on a free tuner; it yields to live at once. Listings reach ~5h. Network names are a hand-typed Cleveland map, not broadcast. Rescan rewrites the lineup; each Guide read fixes PIDs from the PMT. All = not hidden.
 
-Tests: `TMPDIR=/home/richardb/.cache/omarchy/tv-test-tmp`, `XDG_RUNTIME_DIR` set. Never `/tmp`.
+Tests: `python3 -m unittest` from the root; `tests/__init__.py` sandboxes XDG. Never `/tmp`.
 
 Richard: ADD. Dry sarcasm, short. One task in the first sentence. Park the rest on the todo list. Before any install, say what, from where, and how trusted.
 

@@ -143,12 +143,17 @@ class TestChannelHelpers(unittest.TestCase):
 
         with patch.object(MpvController, "is_running", return_value=False), \
              patch("player.controller._stated_player_pid", return_value=0), \
-             patch("player.controller.subprocess.check_output", return_value="4321 mpv --wayland-app-id=omarchy-tv\n99 other\n"), \
+             patch("player.controller.subprocess.check_output", return_value=(
+                 "4321 mpv --input-ipc-server=/no/such/sock --wayland-app-id=omarchy-tv\n"
+                 "4322 mpv --input-ipc-server=/real/omarchy-tv-mpv.sock --wayland-app-id=omarchy-tv\n"
+                 "99 other\n"
+             )), \
              patch("player.controller.os.kill", side_effect=kill), \
              patch("player.controller.Timeshift.load_state", return_value={"pid": 7, "follow_pid": 8}), \
              patch("player.controller.os.path.exists", return_value=False):
             MpvController(socket_path="/no/such/sock")._reap_stale_window()
         self.assertIn((4321, signal.SIGTERM), killed)
+        self.assertNotIn(4322, [pid for pid, _sig in killed])
         self.assertNotIn(7, [pid for pid, _sig in killed])
         self.assertNotIn(8, [pid for pid, _sig in killed])
 
@@ -234,8 +239,10 @@ class TestTimeshiftStop(unittest.TestCase):
                 "41 mpv --script-opts=tv_hud-timeshift-file=/c/omarchy/tv/timeshift/live.ts fd://0\n"
                 "42 mpv --stream-dump=/c/omarchy/tv/timeshift/live.ts dvb://FOX\n"
                 "43 bash -c pgrep -af tower_dump.py; tail /c/omarchy/tv/timeshift/dump.log --stream-dump=\n"
+                "44 python3 /r/engine/tower_dump.py 0 551028615 /other/omarchy/tv/timeshift/live.ts /s /l\n"
             )
             with patch("engine.timeshift.subprocess.check_output", return_value=listing), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", "/c/omarchy/tv/timeshift"), \
                  patch.object(Timeshift, "_kill_pid") as kill:
                 Timeshift._reap_orphan_dumps()
             self.assertEqual([c.args[0] for c in kill.call_args_list], [40, 42])

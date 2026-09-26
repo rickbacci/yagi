@@ -677,8 +677,10 @@ class Timeshift:
     def _reap_orphan_dumps(cls, keep_pid: int = 0) -> None:
         """Kills leftover live dumps that state no longer tracks (stacked surf).
 
-        Only the dump's own marks. The window's args name the timeshift file too.
+        Only the dump's own marks, writing into this TIMESHIFT_DIR. The window's
+        args name the timeshift file too.
         """
+        mine = os.path.join(TIMESHIFT_DIR, "")
         try:
             out = subprocess.check_output(
                 ["pgrep", "-af", "tower_dump.py|--stream-dump="],
@@ -689,7 +691,7 @@ class Timeshift:
             return
         for line in out.splitlines():
             parts = line.split()
-            if len(parts) < 3 or "omarchy/tv/timeshift/" not in line:
+            if len(parts) < 3 or mine not in line:
                 continue
             program, args = os.path.basename(parts[1]), parts[2:]
             ours = program.startswith("python") and args[0].endswith("tower_dump.py")

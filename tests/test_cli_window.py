@@ -65,14 +65,14 @@ class _LineServer:
 class TestCliWindow(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        # Socket paths have a 108-byte limit. The sandbox runtime dir is short.
+        self.run_tmp = tempfile.TemporaryDirectory(dir=os.environ["XDG_RUNTIME_DIR"])
         root = self.tmp.name
         config = os.path.join(root, "config", "omarchy", "tv")
         cache = os.path.join(root, "cache")
-        runtime = os.path.join(root, "runtime")
+        runtime = self.run_tmp.name
         os.makedirs(config, mode=0o700)
         os.makedirs(os.path.join(cache, "omarchy", "tv", "timeshift"), mode=0o700)
-        os.makedirs(runtime, mode=0o700)
-        os.chmod(runtime, 0o700)
         self.dump = os.path.join(cache, "omarchy", "tv", "timeshift", "live.ts")
         with open(self.dump, "wb") as handle:
             handle.write(b"\x47" + b"\x00" * 187)
@@ -100,6 +100,7 @@ class TestCliWindow(unittest.TestCase):
         self.follow.stop()
         self.mpv.stop()
         self.tmp.cleanup()
+        self.run_tmp.cleanup()
 
     def _write_state(self, **extra):
         state = {

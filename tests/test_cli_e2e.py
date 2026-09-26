@@ -90,17 +90,20 @@ class TestCliE2E(unittest.TestCase):
 
     def test_cli_channels_with_data(self):
         """omarchy-tv channels must format channel list when channels.json exists."""
-        tv_dir = os.path.expanduser("~/.config/omarchy/tv")
-        # In this test we check that if channels.json is present, it prints the channels
+        tv_dir = os.path.join(self.sandbox_config, "omarchy", "tv")
+        os.makedirs(tv_dir, exist_ok=True)
+        with open(os.path.join(tv_dir, "channels.json"), "w", encoding="utf-8") as f:
+            json.dump({"channels": [{"channel_number": "8.1", "display_name": "FOX 8", "frequency": 551028615}]}, f)
         res = subprocess.run(
             [sys.executable, CLI_BIN, "channels"],
             capture_output=True,
-            text=True
+            text=True,
+            env=self.env
         )
         self.assertEqual(res.returncode, 0)
         self.assertFalse("Traceback" in res.stderr)
-        if os.path.exists(os.path.join(tv_dir, "channels.json")):
-            self.assertIn("Channels", res.stdout)
+        self.assertIn("Channels (1 total)", res.stdout)
+        self.assertIn("FOX 8", res.stdout)
 
     def test_cli_favorite_toggle_and_list(self):
         """omarchy-tv favorite toggle and list must manage favorites in sandbox."""

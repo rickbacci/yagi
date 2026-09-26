@@ -312,13 +312,18 @@ class TestDvrEngine(unittest.TestCase):
             channels_file = os.path.join(tmp_dir, "channels.json")
             with open(channels_file, "w") as f:
                 json.dump([{"channel_number": "8.1", "station": "FOX", "name": "WJW-HD", "tune_name": "8.1"}], f)
+            mpv_conf = os.path.join(tmp_dir, "channels.conf")
+            with open(mpv_conf, "w") as f:
+                f.write("8.1:551028615:8VSB:49:52:3\n")
 
-            with patch.object(DvrManager, "wait_until_growing", return_value=True):
+            with patch.object(DvrManager, "wait_until_growing", return_value=True), \
+                    patch("engine.timeshift.MPV_CHANNELS_CONF", mpv_conf):
                 session = DvrManager.start_recording(
                     channel_query="8.1",
                     duration=300,
                     recordings_dir=tmp_dir,
                     channels_file=channels_file,
+                    mpv_channels_file=mpv_conf,
                     active_path=active_file,
                     program_title="Monday Night Football Kickoff",
                 )

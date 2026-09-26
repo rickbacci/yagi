@@ -628,13 +628,14 @@ class MpvController:
         return self.launch_file(real_path)
 
     def _reap_stale_window(self) -> None:
-        """Kills a leftover PiP that is not answering our IPC socket."""
+        """Kills a leftover PiP on our IPC socket that is not answering it."""
         if self.is_running():
             return
         pids = set()
         stated = _stated_player_pid()
         if stated > 0:
             pids.add(stated)
+        ours = f"--input-ipc-server={self.socket_path}"
         try:
             out = subprocess.check_output(
                 ["pgrep", "-a", "mpv"],
@@ -642,7 +643,8 @@ class MpvController:
                 text=True,
             )
             for line in out.splitlines():
-                if "--wayland-app-id=omarchy-tv" not in line:
+                args = line.split()
+                if "--wayland-app-id=omarchy-tv" not in args or ours not in args:
                     continue
                 try:
                     pids.add(int(line.split(None, 1)[0]))

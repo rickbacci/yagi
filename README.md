@@ -157,4 +157,4 @@ omarchy-shell shell broadcast richardb.omarchy-tv play "8.1 FOX"
 # also: stop next prev live guide scan reloadChannels open close show hide
 ```
 
-Tests: `TMPDIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/tv-test-tmp" python3 -m unittest discover tests`
+Tests: `python3 -m unittest` from the repo root. They run in scratch XDG dirs and never touch your library, config, or a running TV.
