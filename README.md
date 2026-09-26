@@ -58,7 +58,10 @@ omarchy plugin add https://example.com/omarchy-tv.git
 omarchy plugin enable richardb.omarchy-tv
 omarchy bar put richardb.omarchy-tv --section right
 omarchy restart shell
+~/.config/omarchy/plugins/richardb.omarchy-tv/bin/omarchy-tv install
 ```
+
+`install` starts the record timer, which schedules recordings and refreshes the Guide. It runs a copy of the plugin's last commit and picks up each `omarchy plugin update` on its next tick. `omarchy-tv status` shows whether it is on. Before `omarchy plugin remove`, run `omarchy-tv uninstall`; recordings and settings stay.
 
 Local development (this tree as the plugin dir):
 

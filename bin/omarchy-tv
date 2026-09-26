@@ -28,6 +28,29 @@ def cmd_status(args):
     for t in tuners:
         status = "BUSY" if t.is_busy else "FREE"
         print(f"  [{t.adapter_id}] {t.name} ({status}) - Systems: {t.delivery_systems}")
+    from engine.release import TIMER, current_sha
+    try:
+        on = subprocess.run(["systemctl", "--user", "is-active", "--quiet", TIMER]).returncode == 0
+    except OSError:
+        on = False
+    sha = current_sha()
+    print(f"Record timer: on, runs {sha}" if on and sha else "Record timer: off. Run `omarchy-tv install` to record.")
+
+
+def cmd_install(args):
+    from engine.release import install
+    try:
+        sha = install(PROJECT_ROOT)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"Install failed: {exc}")
+        sys.exit(1)
+    print(f"Record timer on. It runs {sha} and picks up each plugin update on its next tick.")
+
+
+def cmd_uninstall(args):
+    from engine.release import uninstall
+    uninstall()
+    print("Record timer off and its copies removed. Recordings and settings stay.")
 
 
 def _print_signal(adapter_id: int) -> None:
@@ -735,6 +758,14 @@ def cmd_record(args):
         print("Stopped recording that show.")
 
     elif action == "due":
+        from engine.release import refresh
+        try:
+            moved = refresh()
+        except Exception as exc:
+            moved = None
+            print(f"Record timer kept its copy. {exc}")
+        if moved:
+            print(f"Record timer now runs {moved}.")
         from engine.dvr import DvrManager
         from engine.guide import load_guide
         from engine.rules import arm_rules, note_recorded
@@ -821,6 +852,9 @@ def main():
     # status
     p_status = subparsers.add_parser("status", help="Show tuner and playback status")
     p_status.set_defaults(func=cmd_status)
+
+    subparsers.add_parser("install", help="Start the record timer (after plugin add)").set_defaults(func=cmd_install)
+    subparsers.add_parser("uninstall", help="Stop the record timer (before plugin remove)").set_defaults(func=cmd_uninstall)
 
     p_signal = subparsers.add_parser("signal", help="Show SNR and strength for the picture tuner")
     p_signal.add_argument("action", nargs="?", choices=["watch"], help="Print a new reading each second")

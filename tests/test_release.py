@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 
-from engine.release import KEEP_NEWEST, KEEP_SECS, current_sha, publish
+from engine.release import KEEP_NEWEST, KEEP_SECS, TIMER, UNITS, current_sha, install, publish, refresh, uninstall
 
 GIT_ENV = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
@@ -74,6 +74,33 @@ class TestRelease(unittest.TestCase):
         self.assertIn(last, left)
         self.assertIn(shas[-1], left)
         self.assertEqual(len(left), KEEP_NEWEST)
+
+    def test_a_plugin_update_reaches_the_timer_on_its_next_tick(self):
+        self.assertIsNone(refresh(self.root))
+        self._commit("one")
+        publish(self.repo, self.root)
+        self.assertIsNone(refresh(self.root))
+        self._commit("two")
+        moved = refresh(self.root)
+        self.assertEqual(moved, current_sha(self.root))
+        self.assertEqual(self._current(), "two")
+
+    def test_install_starts_the_timer_and_uninstall_leaves_nothing(self):
+        os.makedirs(os.path.join(self.repo, "systemd", "user"))
+        for name in UNITS:
+            with open(os.path.join(self.repo, "systemd", "user", name), "w", encoding="utf-8") as f:
+                f.write(name)
+        self._commit("one")
+        units = os.path.join(self.tmp.name, "units")
+        calls = []
+        sha = install(self.repo, self.root, units=units, run=lambda cmd, check: calls.append(cmd))
+        self.assertEqual(current_sha(self.root), sha)
+        self.assertEqual(sorted(os.listdir(units)), sorted(UNITS))
+        self.assertIn(["systemctl", "--user", "enable", "--now", TIMER], calls)
+        uninstall(self.root, units=units, run=lambda cmd, check: calls.append(cmd))
+        self.assertEqual(os.listdir(units), [])
+        self.assertFalse(os.path.exists(self.root))
+        self.assertIn(["systemctl", "--user", "disable", "--now", TIMER], calls)
 
 
 if __name__ == "__main__":

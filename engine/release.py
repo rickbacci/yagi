@@ -3,6 +3,9 @@
 Each commit unpacks to ~/.local/share/omarchy-tv/releases/<sha>, and current
 points at it. An edit saved halfway in the repo never reaches a recording.
 Standard library only: the git hooks run this without the app's environment.
+
+`omarchy plugin update` is a git pull, and a pull runs no hooks, so each timer
+tick also republishes when the source repo's HEAD has moved.
 """
 
 import io
@@ -18,6 +21,8 @@ DEFAULT_ROOT = os.path.expanduser("~/.local/share/omarchy-tv")
 # A record finish or Guide update can still be running from an older copy.
 KEEP_NEWEST = 3
 KEEP_SECS = 24 * 3600
+TIMER = "omarchy-tv-record.timer"
+UNITS = ("omarchy-tv-record.service", TIMER)
 
 
 def _git(repo: str, *args: str) -> bytes:
@@ -66,7 +71,63 @@ def publish(repo: str, root: str = DEFAULT_ROOT, now: Optional[float] = None) ->
     os.replace(link, os.path.join(root, "current"))
     os.utime(dest)
     _prune(releases, {sha, previous}, time.time() if now is None else now)
+    source = os.path.join(root, f".source.tmp.{os.getpid()}")
+    with open(source, "w", encoding="utf-8") as f:
+        f.write(os.path.realpath(repo))
+    os.replace(source, os.path.join(root, "source"))
     return sha
+
+
+def source_repo(root: str = DEFAULT_ROOT) -> str:
+    try:
+        with open(os.path.join(root, "source"), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def refresh(root: str = DEFAULT_ROOT) -> Optional[str]:
+    """Publish the source repo's HEAD if it moved. Returns the new sha, or None."""
+    repo = source_repo(root)
+    if not repo:
+        return None
+    try:
+        head = _git(repo, "rev-parse", "--short=12", "HEAD").decode().strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    if head == current_sha(root):
+        return None
+    return publish(repo, root)
+
+
+def unit_dir() -> str:
+    config = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(config, "systemd", "user")
+
+
+def install(repo: str, root: str = DEFAULT_ROOT, units: Optional[str] = None, run=subprocess.run) -> str:
+    """Publish HEAD and start the record timer. Returns the sha it runs."""
+    sha = publish(repo, root)
+    units = units or unit_dir()
+    os.makedirs(units, exist_ok=True)
+    for name in UNITS:
+        shutil.copyfile(os.path.join(repo, "systemd", "user", name), os.path.join(units, name))
+    run(["systemctl", "--user", "daemon-reload"], check=True)
+    run(["systemctl", "--user", "enable", "--now", TIMER], check=True)
+    return sha
+
+
+def uninstall(root: str = DEFAULT_ROOT, units: Optional[str] = None, run=subprocess.run) -> None:
+    """Stop the timer and remove its copies. Recordings and settings stay."""
+    run(["systemctl", "--user", "disable", "--now", TIMER], check=False)
+    units = units or unit_dir()
+    for name in UNITS:
+        try:
+            os.remove(os.path.join(units, name))
+        except OSError:
+            pass
+    run(["systemctl", "--user", "daemon-reload"], check=False)
+    shutil.rmtree(root, ignore_errors=True)
 
 
 def main() -> int:
