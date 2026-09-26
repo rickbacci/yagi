@@ -511,6 +511,27 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertFalse(data["running"])
         self.assertEqual(data.get("channel") or "", "")
 
+    def test_reconcile_keeps_the_pause_while_a_slow_window_lives(self):
+        window = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(10)", "--wayland-app-id=omarchy-tv"]
+        )
+        try:
+            update_player_state(True, channel="WKYC-HD", pid=window.pid)
+            with patch.object(self.controller, "send_command", return_value=None), \
+                    patch("engine.timeshift.Timeshift.wipe") as mock_ts:
+                self.assertTrue(self.controller.reconcile())
+            mock_ts.assert_not_called()
+        finally:
+            window.kill()
+            window.wait()
+
+    def test_reconcile_wipes_when_the_stated_pid_is_another_program(self):
+        update_player_state(True, channel="WKYC-HD", pid=os.getpid())
+        with patch.object(self.controller, "send_command", return_value=None), \
+                patch("engine.timeshift.Timeshift.wipe") as mock_ts:
+            self.assertFalse(self.controller.reconcile())
+        mock_ts.assert_called_once()
+
     def test_reconcile_skips_wipe_while_retune_lock_held(self):
         update_player_state(True, channel="WKYC-HD", pid=1)
         Timeshift.acquire_tune_lock()

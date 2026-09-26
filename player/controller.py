@@ -223,6 +223,18 @@ def _stated_player_pid_dead(state_path: Optional[str] = None) -> bool:
         return False
 
 
+def _is_tv_window(pid: int) -> bool:
+    """A living omarchy-tv mpv. A reused pid is some other program."""
+    if pid <= 1:
+        return False
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as f:
+            args = f.read().split(b"\0")
+    except OSError:
+        return False
+    return b"--wayland-app-id=omarchy-tv" in args
+
+
 def _clear_player_state_if_running(state_path: Optional[str] = None) -> None:
     """Clears stale now-playing state when the MPV socket is gone."""
     target_path = state_path or PLAYER_STATE_PATH
@@ -412,11 +424,17 @@ class MpvController:
         return False
 
     def reconcile(self) -> bool:
-        """Clears now-playing when the TV window was closed outside the plugin."""
+        """Clears now-playing when the TV window was closed outside the plugin.
+
+        A window that is alive but slow to answer IPC keeps its pause.
+        """
         if Timeshift.tune_lock_held():
             return True
+        window = _stated_player_pid()
         if self.is_running():
             Timeshift.hold_dump_if_full()
+            return True
+        if _is_tv_window(window):
             return True
         Timeshift.wipe()
         update_player_state(False)
