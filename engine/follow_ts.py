@@ -12,6 +12,9 @@ delayed skip never moves the picture. PACE <bytes/sec> reads the buffer at
 SEEK lands on the next video keyframe at or after the byte, then keeps
 writing the same fifo. The window stays open. A cursor file beside the
 control socket is the byte the behind number subtracts from the file end.
+
+The follower quits once its socket or fifo is unlinked or replaced: Close TV
+unlinks both, and a newer follower binds its own. No pid file has to find it.
 """
 
 from __future__ import annotations
@@ -151,18 +154,36 @@ class TsFollower:
         self._pos_note_t = 0.0
         self._pos_path = cursor_path(sock_path)
         self._break = False
+        self._sock_ino = 0
+        self._fifo_ino = 0
 
     def _open_dest(self) -> None:
+        """Wait for a reader. A blocking open would outlive an unlinked fifo."""
         if not self.dest_fifo:
             return
         while self._running:
             try:
-                self._out_fd = os.open(self.dest_fifo, os.O_WRONLY)
-                return
-            except FileNotFoundError:
-                time.sleep(0.05)
+                fd = os.open(self.dest_fifo, os.O_WRONLY | os.O_NONBLOCK)
             except OSError:
                 time.sleep(0.05)
+                continue
+            os.set_blocking(fd, True)
+            self._fifo_ino = os.fstat(fd).st_ino
+            self._out_fd = fd
+            return
+
+    def _superseded(self) -> bool:
+        for path, ino in ((self.sock_path, self._sock_ino), (self.dest_fifo, self._fifo_ino)):
+            if not ino:
+                continue
+            try:
+                if os.stat(path).st_ino != ino:
+                    return True
+            except FileNotFoundError:
+                return True
+            except OSError:
+                pass
+        return False
 
     def _open_file(self) -> None:
         while self._running:
@@ -189,6 +210,7 @@ class TsFollower:
         srv.listen(4)
         srv.settimeout(0.2)
         self._srv = srv
+        self._sock_ino = os.stat(self.sock_path).st_ino
 
     def _reopen_from_start(self) -> None:
         """Drop the current inode and wait for PATH to exist again (channel change)."""
@@ -340,6 +362,9 @@ class TsFollower:
 
     def _ctl_loop(self) -> None:
         while self._running and self._srv is not None:
+            if self._superseded():
+                self._running = False
+                break
             try:
                 conn, _ = self._srv.accept()
             except socket.timeout:
@@ -447,11 +472,11 @@ class TsFollower:
                     self._srv.close()
                 except OSError:
                     pass
-            if os.path.exists(self.sock_path):
-                try:
+            try:
+                if self._sock_ino and os.stat(self.sock_path).st_ino == self._sock_ino:
                     os.unlink(self.sock_path)
-                except OSError:
-                    pass
+            except OSError:
+                pass
 
 
 def main(argv: Optional[List[str]] = None) -> int:

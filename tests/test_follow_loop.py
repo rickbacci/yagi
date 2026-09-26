@@ -80,6 +80,42 @@ class TestFollowLoop(unittest.TestCase):
                 os.close(nudge)
                 thread.join(timeout=2)
 
+    def _start(self, tmp):
+        live = os.path.join(tmp, "live.ts")
+        sock = os.path.join(tmp, "follow.sock")
+        fifo = os.path.join(tmp, "follow.fifo")
+        with open(live, "wb") as handle:
+            handle.write(PACKET * 8)
+        os.mkfifo(fifo, 0o600)
+        follower = TsFollower(live, 0, sock, fifo)
+        thread = threading.Thread(target=follower.run, daemon=True)
+        thread.start()
+        deadline = time.time() + 2
+        while time.time() < deadline and not os.path.exists(sock):
+            time.sleep(0.02)
+        return follower, thread, sock, fifo
+
+    def test_close_tv_ends_a_follower_that_never_got_a_reader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            follower, thread, sock, fifo = self._start(tmp)
+            os.unlink(fifo)
+            os.unlink(sock)
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def test_a_replaced_follower_quits_and_leaves_the_new_socket(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            follower, thread, sock, fifo = self._start(tmp)
+            os.unlink(sock)
+            newer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            newer.bind(sock)
+            try:
+                thread.join(timeout=2)
+                self.assertFalse(thread.is_alive())
+                self.assertTrue(os.path.exists(sock))
+            finally:
+                newer.close()
+
     def _cmd(self, sock, line):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(1)
