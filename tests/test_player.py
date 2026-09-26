@@ -1063,10 +1063,13 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn('cli_async({"live"})', eof)
         self.assertNotIn('cli_async({"seek"', eof)
         self.assertNotIn("loadfile", eof)
-        self.assertNotIn("drop-buffers", src)
+        self.assertEqual(src.count("drop-buffers"), 1)
+        program = src[src.index("local function select_program"):src.index("local program_pending")]
+        self.assertIn('if changed and settle then mp.command("drop-buffers") end', program)
         skip = src[src.index("local function seek_rel"):]
         skip = skip[skip.index("if is_timeshift_playback() then"):skip.index('cli_async({"seek", tostring(signed)})')]
         self.assertNotIn("loadfile", skip)
+        self.assertNotIn("drop-buffers", skip)
         self.assertNotIn("http://", skip)
         self.assertNotIn("send_follow_seek", src)
         self.assertNotIn("timeshift_skip", src)

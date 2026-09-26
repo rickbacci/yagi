@@ -423,7 +423,10 @@ local function wanted_program()
 end
 
 -- True once this station's picture track is chosen, or there is nothing to choose.
-local function select_program()
+-- Stations on one tower keep their own clocks, up to ~25 s apart. A switch while
+-- playing keeps the old clock and holds the new picture that long, so settle
+-- drops the buffers and playback restarts on the new station's clock.
+local function select_program(settle)
     local sid = wanted_program()
     if not sid or sid <= 0 then return true end
     local vid, aid
@@ -433,8 +436,16 @@ local function select_program()
             if t.type == "audio" and not aid then aid = t.id end
         end
     end
-    if vid and mp.get_property_number("vid", -1) ~= vid then mp.set_property_number("vid", vid) end
-    if aid and mp.get_property_number("aid", -1) ~= aid then mp.set_property_number("aid", aid) end
+    local changed = false
+    if vid and mp.get_property_number("vid", -1) ~= vid then
+        mp.set_property_number("vid", vid)
+        changed = true
+    end
+    if aid and mp.get_property_number("aid", -1) ~= aid then
+        mp.set_property_number("aid", aid)
+        changed = true
+    end
+    if changed and settle then mp.command("drop-buffers") end
     return vid ~= nil
 end
 local program_pending = false
@@ -1304,8 +1315,13 @@ end)
 -- old picture holds until the new one's first keyframe.
 mp.register_script_message("tv-program", function()
     reload_data()
-    program_pending = not select_program()
+    program_pending = not select_program(true)
     show_hud()
+end)
+-- Before decoders start, so a new file begins on this station's clock.
+mp.add_hook("on_preloaded", 50, function()
+    reload_data()
+    program_pending = not select_program(false)
 end)
 mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)
 mp.add_forced_key_binding("l", "tv_return_live", function()
@@ -1341,10 +1357,10 @@ mp.register_event("file-loaded", function()
     end
     if blanking then
         blank_saw_load = true
-        pcall(function() mp.set_property("vid", "auto") end)
+        if not wanted_program() then
+            pcall(function() mp.set_property("vid", "auto") end)
+        end
     end
-    reload_data()
-    program_pending = not select_program()
     show_hud()
     sync_player_state()
     end)
@@ -1394,7 +1410,7 @@ mp.add_periodic_timer(0.4, function()
         return
     end
     if program_pending then
-        program_pending = not select_program()
+        program_pending = not select_program(true)
     end
     if is_timeshift_playback() then
         reload_data()

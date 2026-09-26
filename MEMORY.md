@@ -6,7 +6,7 @@ Pause dump stops an hour of air ahead of the playhead. `l` jumps to that end. Pi
 
 Do not match the timeshift path in process args; that kills the PiP.
 
-Bars stay up until the first frame. Live dump is always the whole tower. Same-tower zap = HUD picks tracks by program-id (`tv-program`), no retune; mpv 0.41 has no `program` property. Other tower: dvbin-prog, lock again, black until the frame. j and k change channel. Left and right skip.
+Bars stay up until the first frame. Live dump is always the whole tower. Same-tower zap = HUD picks tracks by program-id (`tv-program`), then drop-buffers (station clocks differ ~25 s), no retune; new files pick in `on_preloaded`. mpv 0.41 has no `program` property. Other tower: dvbin-prog, lock again, black until the frame. j and k change channel. Left and right skip.
 
 Guide is broadcast EIT only, every 3h on a free tuner; it yields to live at once. Listings reach ~5h. Network names are a hand-typed Cleveland map, not broadcast. Rescan rewrites the lineup; each Guide read fixes PIDs from the PMT. All = not hidden.
 
