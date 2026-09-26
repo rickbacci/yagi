@@ -3,4 +3,5 @@ Description=Start and stop Omarchy TV recordings
 
 [Service]
 Type=oneshot
-ExecStart=/home/richardb/Projects/personal/omarchy-tv/bin/omarchy-tv record due
+# The last commit, published by githooks/post-commit. Never the working tree.
+ExecStart=%h/.local/share/omarchy-tv/current/bin/omarchy-tv record due
