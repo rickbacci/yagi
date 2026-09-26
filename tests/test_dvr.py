@@ -350,7 +350,8 @@ class TestDvrEngine(unittest.TestCase):
                 )
 
             # Stopping the recording
-            with patch.object(DvrSession, "stop", return_value=True) as mock_stop:
+            with patch.object(DvrSession, "stop", return_value=True) as mock_stop, \
+                    patch.object(DvrManager, "refresh_library_index"):
                 stopped = DvrManager.stop_recording("8.1", active_path=active_file)
                 self.assertEqual(len(stopped), 1)
                 self.assertEqual(stopped[0].channel_number, "8.1")

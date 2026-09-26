@@ -434,7 +434,13 @@ class TestMoreBranches(unittest.TestCase):
         held.is_active.return_value = True
         self.assertTrue(epg_tuner_held([held]))
         self.assertFalse(epg_tuner_held([]))
-        self.assertEqual(DvrManager.enforce_library_budget(prefs={"library_max_gb": "off"}), [])
+        with tempfile.TemporaryDirectory() as lib:
+            self.assertEqual(DvrManager.enforce_library_budget(
+                recordings_dir=lib,
+                prefs={"library_max_gb": "off"},
+                active_path=os.path.join(lib, "active.json"),
+                rules_path=os.path.join(lib, "rules.json"),
+            ), [])
         with tempfile.TemporaryDirectory() as tmp:
             live = os.path.join(tmp, "live.ts")
             sock = os.path.join(tmp, "f.sock")
