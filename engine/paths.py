@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import os
 import shutil
+import subprocess
 import threading
 import time
 from typing import Iterator, List, Optional
@@ -69,16 +70,52 @@ def touch_private_file(path: str) -> None:
     chmod_private_file(path)
 
 
-def own_scope(cmd: List[str]) -> List[str]:
+LIVE_SLICE = "omarchy-tv-live.slice"
+REC_SLICE = "omarchy-tv-rec.slice"
+DUMP_UNIT = "omarchy-tv-dump.scope"
+FOLLOW_UNIT = "omarchy-tv-follow.scope"
+
+
+def systemd_user() -> bool:
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or ""
+    return bool(shutil.which("systemd-run")) and os.path.exists(os.path.join(runtime, "systemd", "private"))
+
+
+def own_scope(cmd: List[str], unit: str = "", slice_name: str = "") -> List[str]:
     """Run cmd in its own systemd user scope, same pid.
 
     The record timer is a oneshot service. When it exits, systemd kills every
-    process it started, recorders included, whatever their session.
+    process it started, recorders included, whatever their session. A named
+    unit exists once: stop it first, and nothing can stack a second copy.
     """
-    runtime = os.environ.get("XDG_RUNTIME_DIR") or ""
-    if not shutil.which("systemd-run") or not os.path.exists(os.path.join(runtime, "systemd", "private")):
+    if not systemd_user():
         return list(cmd)
-    return ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--"] + list(cmd)
+    args = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "-p", "TimeoutStopSec=2"]
+    if unit:
+        args.append(f"--unit={unit}")
+    if slice_name:
+        args.append(f"--slice={slice_name}")
+    return args + ["--"] + list(cmd)
+
+
+def stop_unit(unit: str) -> bool:
+    """Stop a scope or slice and wait until everything in it is gone. False without systemd."""
+    if not systemd_user():
+        return False
+    try:
+        subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return True
+
+
+def in_unit(unit: str) -> bool:
+    """True when this process runs inside unit. Stopping it would stop us too."""
+    try:
+        with open("/proc/self/cgroup", encoding="utf-8") as f:
+            return f"/{unit}" in f.read()
+    except OSError:
+        return False
 
 
 def get_runtime_socket(name: str) -> str:

@@ -13,7 +13,7 @@ from unittest import mock
 
 from engine.dvr import DvrManager, read_sidecar, write_sidecar
 from engine.guide import GUIDE_GRAB_GAP_SEC, guide_grab_due, run_guide_update
-from engine.paths import own_scope, state_lock
+from engine.paths import DUMP_UNIT, LIVE_SLICE, REC_SLICE, in_unit, own_scope, state_lock, stop_unit
 from engine.schedule import next_window, save_schedule
 
 CLI_BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "omarchy-tv")
@@ -42,6 +42,27 @@ class TestOwnScope(unittest.TestCase):
         with tempfile.TemporaryDirectory() as run:
             with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": run}):
                 self.assertEqual(own_scope(["mpv"]), ["mpv"])
+                self.assertFalse(stop_unit(DUMP_UNIT))
+
+    def test_a_named_unit_in_a_slice_stops_within_two_seconds(self):
+        with mock.patch("engine.paths.systemd_user", return_value=True):
+            cmd = own_scope(["python3", "tower_dump.py"], unit=DUMP_UNIT, slice_name=LIVE_SLICE)
+        self.assertIn(f"--unit={DUMP_UNIT}", cmd)
+        self.assertIn(f"--slice={LIVE_SLICE}", cmd)
+        self.assertEqual(cmd[cmd.index("-p") + 1], "TimeoutStopSec=2")
+        self.assertEqual(cmd[cmd.index("--") + 1:], ["python3", "tower_dump.py"])
+
+    def test_stop_unit_waits_on_systemctl(self):
+        with mock.patch("engine.paths.systemd_user", return_value=True), \
+                mock.patch("engine.paths.subprocess.run") as run:
+            self.assertTrue(stop_unit(LIVE_SLICE))
+        self.assertEqual(run.call_args[0][0], ["systemctl", "--user", "stop", LIVE_SLICE])
+
+    def test_in_unit_reads_this_process_cgroup(self):
+        group = f"0::/user.slice/omarchy-tv.slice/{LIVE_SLICE}/run-1.scope\n"
+        with mock.patch("builtins.open", mock.mock_open(read_data=group)):
+            self.assertTrue(in_unit(LIVE_SLICE))
+            self.assertFalse(in_unit(REC_SLICE))
 
     def test_the_process_leaves_the_callers_cgroup(self):
         cmd = own_scope(["sleep", "2"])

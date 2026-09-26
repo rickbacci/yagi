@@ -24,8 +24,12 @@ from engine.paths import (
     UI_PREFS_PATH,
     FOLLOW_FIFO_PATH,
     FOLLOW_SOCKET_PATH,
+    LIVE_SLICE,
     TIMESHIFT_DIR,
     chmod_private_file,
+    in_unit,
+    own_scope,
+    stop_unit,
     touch_private_file,
 )
 from engine.dvr import MIN_PLAYABLE_BYTES
@@ -774,7 +778,7 @@ class MpvController:
         cmd.append("--script-opts=" + ",".join(script_opts))
         cmd.append(play_url)
         self.proc = subprocess.Popen(
-            cmd,
+            own_scope(cmd, slice_name=LIVE_SLICE),
             stdin=stdin,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -949,10 +953,13 @@ class MpvController:
             self.proc = None
 
     def stop(self) -> None:
+        """Close TV. The live slice holds the window, dump, and follower, so nothing outlives it."""
         if self.is_running():
             self.send_command(["quit"])
         self._wait_until_stopped()
         Timeshift.wipe()
+        if not in_unit(LIVE_SLICE):
+            stop_unit(LIVE_SLICE)
         update_player_state(False)
 
 

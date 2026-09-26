@@ -248,6 +248,11 @@ class TestTimeshiftStop(unittest.TestCase):
             self.assertEqual([c.args[0] for c in kill.call_args_list], [40, 42])
             with patch("engine.timeshift.subprocess.check_output", side_effect=OSError):
                 Timeshift._reap_orphan_dumps()
+            with patch("engine.timeshift.stop_unit", return_value=True) as stop, \
+                 patch("engine.timeshift.subprocess.check_output") as sweep:
+                Timeshift._reap_orphan_dumps()
+            stop.assert_called_once_with("omarchy-tv-dump.scope")
+            sweep.assert_not_called()
 
     def test_wait_frontend_free_keeps_waiting_when_fuser_fails(self):
         runs = [subprocess.TimeoutExpired("fuser", 0.4), MagicMock(returncode=1)]

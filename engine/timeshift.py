@@ -22,8 +22,11 @@ from typing import Any, Dict, Optional
 
 from engine.paths import (
     CHANNELS_JSON_PATH,
+    DUMP_UNIT,
     FOLLOW_FIFO_PATH,
     FOLLOW_SOCKET_PATH,
+    FOLLOW_UNIT,
+    LIVE_SLICE,
     MPV_CHANNELS_CONF,
     TIMESHIFT_ACTIVE_PATH,
     TIMESHIFT_DIR,
@@ -35,6 +38,7 @@ from engine.paths import (
     ensure_private_dir,
     own_scope,
     state_lock,
+    stop_unit,
     touch_private_file,
 )
 
@@ -492,6 +496,7 @@ class Timeshift:
                 deadline = time.time() + 0.3
                 while time.time() < deadline and cls._pid_alive(pid):
                     time.sleep(0.02)
+        stop_unit(DUMP_UNIT)
         if os.path.exists(sock):
             try:
                 os.unlink(sock)
@@ -544,6 +549,7 @@ class Timeshift:
                     os.kill(pid, signal.SIGKILL)
                 except OSError:
                     pass
+        stop_unit(FOLLOW_UNIT)
         if os.path.exists(sock):
             try:
                 os.unlink(sock)
@@ -602,14 +608,11 @@ class Timeshift:
         except OSError:
             pass
         proc = subprocess.Popen(
-            [
-                sys.executable,
-                FOLLOW_TS_PY,
-                TIMESHIFT_FILE,
-                str(max(0, int(start_byte))),
-                sock,
-                fifo,
-            ],
+            own_scope(
+                [sys.executable, FOLLOW_TS_PY, TIMESHIFT_FILE, str(max(0, int(start_byte))), sock, fifo],
+                unit=FOLLOW_UNIT,
+                slice_name=LIVE_SLICE,
+            ),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -677,9 +680,12 @@ class Timeshift:
     def _reap_orphan_dumps(cls, keep_pid: int = 0) -> None:
         """Kills leftover live dumps that state no longer tracks (stacked surf).
 
-        Only the dump's own marks, writing into this TIMESHIFT_DIR. The window's
-        args name the timeshift file too.
+        Under systemd every dump is the one DUMP_UNIT, so stopping it is the
+        whole sweep. Otherwise only the dump's own marks, writing into this
+        TIMESHIFT_DIR. The window's args name the timeshift file too.
         """
+        if not keep_pid and stop_unit(DUMP_UNIT):
+            return
         mine = os.path.join(TIMESHIFT_DIR, "")
         try:
             out = subprocess.check_output(
@@ -1185,7 +1191,12 @@ class Timeshift:
         touch_private_file(dest)
         log_path = os.path.join(TIMESHIFT_DIR, log_name)
         touch_private_file(log_path)
-        cmd = own_scope([sys.executable, TOWER_DUMP_PY, str(adapter_id), str(freq), dest, sock, log_path])
+        stop_unit(DUMP_UNIT)
+        cmd = own_scope(
+            [sys.executable, TOWER_DUMP_PY, str(adapter_id), str(freq), dest, sock, log_path],
+            unit=DUMP_UNIT,
+            slice_name=LIVE_SLICE,
+        )
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,

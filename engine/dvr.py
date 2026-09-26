@@ -22,6 +22,7 @@ from engine.paths import (
     RECORDINGS_DIR,
     RECORDINGS_ACTIVE_PATH,
     RECORDINGS_INDEX_PATH,
+    REC_SLICE,
     UI_PREFS_PATH,
     chmod_private_file,
     ensure_private_dir,
@@ -680,7 +681,7 @@ class DvrManager:
         cmd.append(f"dvb://{tune_name}")
 
         proc = subprocess.Popen(
-            own_scope(cmd),
+            own_scope(cmd, slice_name=REC_SLICE),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,

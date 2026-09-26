@@ -512,6 +512,16 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertFalse(data["running"])
         self.assertEqual(data.get("channel") or "", "")
 
+    def test_close_tv_stops_the_live_slice_but_never_from_inside_it(self):
+        from engine.paths import LIVE_SLICE
+
+        for inside, calls in ((False, [((LIVE_SLICE,),)]), (True, [])):
+            with patch("engine.timeshift.Timeshift.wipe"), \
+                    patch("player.controller.in_unit", return_value=inside), \
+                    patch("player.controller.stop_unit") as stop:
+                self.controller.stop()
+            self.assertEqual(stop.call_args_list, calls)
+
     def test_reconcile_keeps_the_pause_while_a_slow_window_lives(self):
         window = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(10)", "--wayland-app-id=omarchy-tv"]
