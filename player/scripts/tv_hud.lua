@@ -408,6 +408,26 @@ local function library_rate()
     return ATSC_BPS / 8
 end
 
+-- A recording starts a minute early, on the last show's credits. It opens just
+-- before the listed start; the back key still reaches the rest.
+local LEAD_IN_SEC = 10
+local function listed_offset()
+    local side = library_side()
+    if type(side) ~= "table" then return 0 end
+    local listed = tonumber(side.listed_start)
+    if not listed and type(side.episodes) == "table" then
+        for _, ep in ipairs(side.episodes) do
+            local t = type(ep) == "table" and tonumber(ep.start_unix) or nil
+            if t and (not listed or t < listed) then listed = t end
+        end
+    end
+    local start = tonumber(side.start)
+    if not listed or not start then return 0 end
+    local off = listed - start - LEAD_IN_SEC
+    if off < 5 or off > 600 then return 0 end
+    return off
+end
+
 -- A whole-tower file carries every station on it. mpv 0.41 has no program
 -- property, so this station is its own video and audio tracks by program id.
 local function wanted_program()
@@ -1349,6 +1369,11 @@ mp.register_event("file-loaded", function()
             end
         else
             reset_virt()
+            local off = listed_offset()
+            if off > 0 then
+                virt_pos = off
+                apply_virt_seek()
+            end
         end
     elseif is_timeshift_playback() then
         prev_was_file = true

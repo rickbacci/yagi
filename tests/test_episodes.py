@@ -76,6 +76,7 @@ class TestSplit(unittest.TestCase):
         self.assertEqual([s["title"] for s in sides], ["Ep A", "Ep B", "Ep C"])
         self.assertEqual([s["synopsis"] for s in sides], ["story 0", "story 1", "story 2"])
         self.assertEqual([s["byte_rate"] for s in sides], [RATE] * 3)
+        self.assertEqual([s["listed_start"] - s["start"] for s in sides], [60, 60, 60])
         spans = [(0, 2040), (1800, 3840), (3600, 5640)]
         for p, (a, b) in zip(made, spans):
             with open(p, "rb") as f:
@@ -88,6 +89,7 @@ class TestSplit(unittest.TestCase):
         side = read_sidecar(path)
         self.assertEqual(side["episodes"], [])
         self.assertEqual(side["title"], "Ep A")
+        self.assertEqual(side["listed_start"], START + 60)
         self.assertEqual(os.path.getsize(path), len(data))
 
     def test_a_crash_after_one_piece_resumes(self):

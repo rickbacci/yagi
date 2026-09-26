@@ -44,6 +44,20 @@ if not near(library_rate(), 125000) then fail("byte_rate ignored") end
 lib_side_path = nil
 SIDE = { full_mux = true, start = 1, ["end"] = 2 }
 if not near(library_rate(), ATSC_BPS / 8) then fail("full mux is not the tower rate") end
+
+-- M*A*S*H started recording 33 s before its listing: open at 23 s.
+lib_side_path = nil
+SIDE = { start = 1790378949, episodes = { { start_unix = 1790379100 }, { start_unix = 1790378982 } } }
+if listed_offset() ~= 23 then fail("episodes open at " .. listed_offset()) end
+lib_side_path = nil
+SIDE = { start = 1000, listed_start = 1060 }
+if listed_offset() ~= 50 then fail("a split episode opens at " .. listed_offset()) end
+lib_side_path = nil
+SIDE = { start = 1000, listed_start = 1012 }
+if listed_offset() ~= 0 then fail("a couple of seconds is not worth a seek") end
+lib_side_path = nil
+SIDE = { start = 1000, kept_from = "pause" }
+if listed_offset() ~= 0 then fail("a saved pause has no listing") end
 """
 
 
