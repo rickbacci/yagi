@@ -13,8 +13,9 @@ import signal
 import threading
 import subprocess
 import shutil
+import sys
 from datetime import datetime
-from typing import List, Dict, Optional, Any, Set
+from typing import List, Dict, Optional, Any, Set, Tuple
 
 from engine.paths import (
     CHANNELS_JSON_PATH,
@@ -34,7 +35,9 @@ from engine.paths import (
 from engine import pool
 from engine.tuner import TunerManager, WORK_ADAPTER
 from engine.enrichment import match_channel
-from engine.guide import current_program_title, get_channel_program, load_guide
+from engine.guide import _program_span, current_program_title, get_channel_program, load_guide, now_and_next
+
+LIVE_COPY_PY = os.path.join(os.path.dirname(os.path.realpath(__file__)), "live_copy.py")
 
 
 def format_bytes(bytes_count: int) -> str:
@@ -201,6 +204,7 @@ class DvrSession:
         file_path: str,
         socket_path: str,
         pid: int,
+        source: Optional[Dict[str, Any]] = None,
     ):
         self.session_id = session_id
         self.channel_number = channel_number
@@ -213,6 +217,12 @@ class DvrSession:
         self.file_path = file_path
         self.socket_path = socket_path
         self.pid = pid
+        # {"dump_pid", "adapter", "file"} when this copies a live tower dump instead of tuning.
+        self.source = dict(source or {})
+
+    @property
+    def copies_live(self) -> bool:
+        return bool(self.source.get("dump_pid"))
 
     def is_active(self) -> bool:
         """Check if mpv recording process is currently alive."""
@@ -304,6 +314,7 @@ class DvrSession:
             "file_size": size,
             "file_size_formatted": format_bytes(size),
             "is_active": self.is_active(),
+            "source": self.source,
         }
 
     @classmethod
@@ -320,6 +331,7 @@ class DvrSession:
             file_path=data.get("file_path", ""),
             socket_path=data.get("socket_path", ""),
             pid=int(data.get("pid", 0)),
+            source=data.get("source") if isinstance(data.get("source"), dict) else None,
         )
 
 
@@ -446,6 +458,9 @@ class DvrManager:
                 patch_sidecar(session.file_path, stopped_reason="disk")
             cls.stop_recording(session.session_id, active_path=active_path)
             stopped.append(session)
+        from engine.timeshift import Timeshift
+
+        Timeshift.release_unused_dumps(active_path)
         return stopped
 
     @classmethod
@@ -528,7 +543,17 @@ class DvrManager:
 
     @classmethod
     def start_recording(cls, channel_query: str, **kwargs: Any) -> DvrSession:
-        """Record on a free tuner, 1 first. A Guide update gives its tuner up between towers."""
+        """Record on a free tuner, 1 first. A Guide update gives its tuner up between towers.
+
+        The tower live TV already holds is copied out of its dump instead: no second tuner.
+        """
+        if kwargs.get("adapter_override") is None:
+            from engine.timeshift import Timeshift
+
+            _, _, tune_name = cls._resolve_channel(channel_query, kwargs.get("channels_file") or CHANNELS_JSON_PATH)
+            live = Timeshift.live_source(tune_name)
+            if live:
+                return cls._start_live_copy(channel_query, live, **kwargs)
         adapter = kwargs.get("adapter_override")
         if adapter is None:
             adapter = pool.pick_work(pool.claims(kwargs.get("active_path")))
@@ -543,6 +568,147 @@ class DvrManager:
             if str(exc) != key:
                 raise
             raise RuntimeError(BOTH_BUSY_MESSAGE) from None
+
+    @staticmethod
+    def _show_start(channel_number: str, now: float) -> Optional[float]:
+        """When the show on now began, if the Guide dates it."""
+        try:
+            row = get_channel_program(channel_number, guide_data=load_guide())
+        except Exception:
+            return None
+        if not isinstance(row, dict):
+            return None
+        prog, _ = now_and_next(row.get("programs"), now_unix=now)
+        span = _program_span(prog) if prog else None
+        if not span or not span[0] <= now < span[1]:
+            return None
+        return float(span[0])
+
+    @classmethod
+    def _start_live_copy(
+        cls,
+        channel_query: str,
+        live: Dict[str, Any],
+        duration: Optional[int] = None,
+        recordings_dir: Optional[str] = None,
+        channels_file: Optional[str] = None,
+        mpv_channels_file: Optional[str] = None,
+        active_path: Optional[str] = None,
+        adapter_override: Optional[int] = None,
+        program_title: Optional[str] = None,
+    ) -> DvrSession:
+        """Copy the live dump from the start of the show on, as far back as the dump reaches."""
+        from engine.timeshift import Timeshift
+
+        rec_dir = recordings_dir or RECORDINGS_DIR
+        act_path = active_path or RECORDINGS_ACTIVE_PATH
+        ensure_private_dir(rec_dir)
+        cls.enforce_library_budget(recordings_dir=rec_dir, active_path=act_path)
+        channel_number, station, tune_name = cls._resolve_channel(channel_query, channels_file or CHANNELS_JSON_PATH)
+        cls._refuse_duplicate(act_path, channel_number, station)
+        program_title = cls._title_for(channel_number, program_title)
+        now = time.time()
+        start_byte, started = Timeshift.byte_at(cls._show_start(channel_number, now), now)
+        file_path = cls._new_file(rec_dir, channel_number, station, program_title)
+        proc = subprocess.Popen(
+            own_scope([sys.executable, LIVE_COPY_PY, str(live["file"]), file_path, str(start_byte)], slice_name=REC_SLICE),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        chmod_private_file(file_path)
+        side = {
+            "title": program_title,
+            "station": station,
+            "channel": channel_number,
+            "tune_name": tune_name,
+            "service_id": int(Timeshift.service_id(tune_name) or 0),
+            "full_mux": True,
+            "start": int(started),
+            "end": None,
+            "planned_end": int(now + duration) if duration and duration > 0 else None,
+            "status": "recording",
+            "copied_from": "live",
+        }
+        if not cls.wait_until_growing(proc, file_path):
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            side["status"] = "failed"
+            write_sidecar(file_path, side)
+            raise RuntimeError("Could not copy the live picture. The partial file was kept.")
+        write_sidecar(file_path, side)
+        session = DvrSession(
+            session_id=f"dvr-{sanitize_filename(channel_number)}-{int(now)}",
+            channel_number=channel_number,
+            station=station,
+            tune_name=tune_name,
+            program_title=program_title,
+            start_time=started,
+            duration_seconds=duration,
+            adapter_id=int(live["adapter"]),
+            file_path=file_path,
+            socket_path="",
+            pid=proc.pid,
+            source={"dump_pid": int(live["pid"]), "adapter": int(live["adapter"]), "file": str(live["file"])},
+        )
+        with state_lock(act_path):
+            fresh = cls.load_active_sessions(act_path)
+            fresh.append(session)
+            cls.save_active_sessions(fresh, act_path)
+        if os.path.realpath(rec_dir) == os.path.realpath(RECORDINGS_DIR):
+            cls.refresh_library_index(recordings_dir=rec_dir)
+        return session
+
+    @staticmethod
+    def _resolve_channel(channel_query: str, channels_path: str) -> Tuple[str, str, str]:
+        """Channel number, station, and tune name for what was asked."""
+        channels: List[Dict[str, Any]] = []
+        if os.path.exists(channels_path):
+            try:
+                with open(channels_path, "r", encoding="utf-8") as f:
+                    raw = json.load(f)
+                    if isinstance(raw, dict):
+                        channels = raw.get("channels", [])
+                    elif isinstance(raw, list):
+                        channels = raw
+            except Exception:
+                pass
+        matched = match_channel(channel_query, channels) if channels else None
+        if not matched:
+            return channel_query, channel_query, channel_query
+        return (
+            matched.get("channel_number") or channel_query,
+            matched.get("station") or matched.get("name") or channel_query,
+            matched.get("tune_name") or channel_query,
+        )
+
+    @classmethod
+    def _refuse_duplicate(cls, active_path: str, channel_number: str, station: str) -> None:
+        for s in cls.load_active_sessions(active_path):
+            if s.is_active() and (s.channel_number == channel_number or s.station == station):
+                raise RuntimeError(f"Channel {station} ({channel_number}) is already being recorded (PID {s.pid})")
+
+    @staticmethod
+    def _title_for(channel_number: str, program_title: Optional[str]) -> str:
+        """The clicked title wins; else the block on now."""
+        chosen = str(program_title or "").strip()
+        if chosen:
+            return chosen
+        try:
+            return current_program_title(get_channel_program(channel_number, guide_data=load_guide()))
+        except Exception:
+            return "Live Broadcast"
+
+    @staticmethod
+    def _new_file(rec_dir: str, channel_number: str, station: str, title: str) -> str:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        name = f"{sanitize_filename(channel_number)}-{sanitize_filename(station)}_{sanitize_filename(title)}_{stamp}.ts"
+        path = os.path.join(rec_dir, name)
+        touch_private_file(path)
+        return path
 
     @classmethod
     def _wait_tuner_free(cls, adapter_id: int, timeout: Optional[float] = None) -> bool:
@@ -575,62 +741,17 @@ class DvrManager:
         ensure_private_dir(rec_dir)
         cls.enforce_library_budget(recordings_dir=rec_dir, active_path=act_path)
 
-        # 1. Match channel
-        channels: List[Dict[str, Any]] = []
-        if os.path.exists(c_path):
-            try:
-                with open(c_path, "r", encoding="utf-8") as f:
-                    raw = json.load(f)
-                    if isinstance(raw, dict):
-                        channels = raw.get("channels", [])
-                    elif isinstance(raw, list):
-                        channels = raw
-            except Exception:
-                pass
+        channel_number, station, tune_name = cls._resolve_channel(channel_query, c_path)
+        cls._refuse_duplicate(act_path, channel_number, station)
 
-        matched = match_channel(channel_query, channels) if channels else None
-        if matched:
-            channel_number = matched.get("channel_number") or channel_query
-            station = matched.get("station") or matched.get("name") or channel_query
-            tune_name = matched.get("tune_name") or channel_query
-        else:
-            channel_number = channel_query
-            station = channel_query
-            tune_name = channel_query
-
-        # Check if already recording this channel
-        current_sessions = cls.load_active_sessions(act_path)
-        for s in current_sessions:
-            if s.is_active() and (s.channel_number == channel_number or s.station == station):
-                raise RuntimeError(f"Channel {station} ({channel_number}) is already being recorded (PID {s.pid})")
-
-        # 2. The tuner start_recording picked. Live TV, a scan, or another recording may have taken it since.
+        # The tuner start_recording picked. Live TV, a scan, or another recording may have taken it since.
         adapter_id = WORK_ADAPTER if adapter_override is None else adapter_override
         if pool.claims(act_path).get(adapter_id) in ("live", "record", "scan") or not cls._wait_tuner_free(adapter_id):
             raise RuntimeError(BOTH_BUSY_MESSAGE)
 
-        # 3. Lookup Program Metadata — clicked title wins; else the block on now
-        chosen = str(program_title or "").strip()
-        if chosen:
-            program_title = chosen
-        else:
-            program_title = "Live Broadcast"
-            try:
-                guide_data = load_guide()
-                prog = get_channel_program(channel_number, guide_data=guide_data)
-                program_title = current_program_title(prog)
-            except Exception:
-                pass
-
-        # 4. Generate Target File and Socket Path
-        now = datetime.now()
-        timestamp_str = now.strftime("%Y%m%d_%H%M%S")
-        safe_station = sanitize_filename(station)
+        program_title = cls._title_for(channel_number, program_title)
+        file_path = cls._new_file(rec_dir, channel_number, station, program_title)
         safe_channel = sanitize_filename(channel_number)
-        safe_title = sanitize_filename(program_title)
-        filename = f"{safe_channel}-{safe_station}_{safe_title}_{timestamp_str}.ts"
-        file_path = os.path.join(rec_dir, filename)
-        touch_private_file(file_path)
 
         session_id = f"dvr-{safe_channel}-{int(time.time())}"
         socket_path = get_runtime_socket(f"omarchy-tv-{session_id}.sock")
@@ -733,6 +854,10 @@ class DvrManager:
         act_path = active_path or RECORDINGS_ACTIVE_PATH
         with state_lock(act_path):
             stopped = cls._stop_matching(channel_query, act_path)
+        if any(s.copies_live for s in stopped):
+            from engine.timeshift import Timeshift
+
+            Timeshift.release_unused_dumps(act_path)
         cls.refresh_library_index()
         return stopped
 

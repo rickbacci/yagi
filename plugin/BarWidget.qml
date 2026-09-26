@@ -57,8 +57,11 @@ BarWidget {
   property int recCursorIndex: 0
   // Two tuners, one pool. A Guide update gives its tuner up, so it never counts.
   readonly property bool liveOn: root.activeChannelName !== "" && root.isLiveSession
+  // A recording that copies the live dump rides live TV's tuner until it is kept.
   readonly property int tunersFree: Math.max(0, 2 - (root.liveOn ? 1 : 0)
-                                             - (root.activeRecordings ? root.activeRecordings.length : 0)
+                                             - (root.activeRecordings || []).filter(function(r) {
+                                                 return !(root.liveOn && r.source && r.source.dump_pid && !r.source.kept)
+                                               }).length
                                              - (root.isScanning ? 1 : 0))
   property string pendingWatch: ""
   property string watchAfterStop: ""

@@ -16,7 +16,7 @@ Plugin `richardb.omarchy-tv`, `bar-widget`, QML `plugin/BarWidget.qml`. Hyprland
 6. Library `$XDG_VIDEOS_DIR/TV`. Close TV wipes the pause dump. Long-lived children start via `own_scope`.
 
 ## For now
-- Live prefers tuner 0, work tuner 1. A channel change keeps its tuner.
+- Recording the live tower copies its dump, no second tuner; leaving that tower hands the dump to the recording and live takes the free tuner. Else live prefers tuner 0, work tuner 1.
 - PiP plays the pause dump, not `dvb://`, so pause can seek.
 - QML uses `Color.*` / `Style.*` / `root.bar.*`; the HUD reads the theme's `colors.toml`.
 - Window `omarchy-tv`: float, pin, 16:9, bottom-right, `monitor/3`. Super+F unpins, then fullscreen.

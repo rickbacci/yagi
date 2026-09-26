@@ -70,7 +70,8 @@ def claims(active_path: Optional[str] = None) -> Dict[int, str]:
         out[int(live.get("adapter_id") or 0)] = "live"
     for session in DvrManager.load_active_sessions(active_path):
         if session.is_active():
-            out[int(session.adapter_id)] = "record"
+            # A copy of the live dump shares live TV's tuner; that tuner stays "live".
+            out.setdefault(int(session.adapter_id), "record")
     return out
 
 

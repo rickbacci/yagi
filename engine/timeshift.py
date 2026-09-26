@@ -18,27 +18,31 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from engine.paths import (
     CHANNELS_JSON_PATH,
-    DUMP_UNIT,
     FOLLOW_FIFO_PATH,
     FOLLOW_SOCKET_PATH,
     FOLLOW_UNIT,
+    KEPT_DUMP_DIR,
     LIVE_SLICE,
     MPV_CHANNELS_CONF,
+    RECORDINGS_ACTIVE_PATH,
     TIMESHIFT_ACTIVE_PATH,
     TIMESHIFT_DIR,
     TIMESHIFT_FILE,
     TIMESHIFT_SOCKET_PATH,
     TUNE_LOCK_PATH,
     TUNE_STATUS_PATH,
+    TUNER_SLICE,
     chmod_private_file,
+    dump_unit,
     ensure_private_dir,
     own_scope,
     state_lock,
     stop_unit,
+    systemd_user,
     touch_private_file,
 )
 
@@ -252,7 +256,7 @@ class Timeshift:
         # file size alone is not "an hour ahead."
         watching_live = str(state.get("view") or "live") == "live" and not bool(state.get("paused"))
         if not reason and not watching_live and cls.dump_bytes() - cls.playhead_now() >= cls.pause_cap_bytes():
-            reason = "hour"
+            reason = "hour" if pid not in cls._copied_dumps() else ""
         if not reason:
             return False
         sock = str(state.get("socket") or TIMESHIFT_SOCKET_PATH)
@@ -469,6 +473,8 @@ class Timeshift:
     def stop_dump(cls, keep_follow: bool = False) -> None:
         state = cls.load_state()
         pid = int(state.get("pid") or 0)
+        if cls._pid_alive(pid) and pid in cls._copied_dumps():
+            return
         sock = str(state.get("socket") or TIMESHIFT_SOCKET_PATH)
         follow_pid = int(state.get("follow_pid") or 0) if keep_follow else 0
         follow_socket = str(state.get("follow_socket") or FOLLOW_SOCKET_PATH) if keep_follow else ""
@@ -496,7 +502,8 @@ class Timeshift:
                 deadline = time.time() + 0.3
                 while time.time() < deadline and cls._pid_alive(pid):
                     time.sleep(0.02)
-        stop_unit(DUMP_UNIT)
+        if state.get("adapter_id") is not None:
+            stop_unit(dump_unit(int(state["adapter_id"])))
         if os.path.exists(sock):
             try:
                 os.unlink(sock)
@@ -671,21 +678,134 @@ class Timeshift:
 
     @classmethod
     def wipe(cls) -> None:
+        """Close TV. A dump a recording copies keeps running until that recording ends."""
         cls.stop_follow()
+        state = cls.load_state()
+        pid = int(state.get("pid") or 0)
+        if cls._pid_alive(pid) and pid in cls._copied_dumps():
+            cls.patch_state(window=False, view="live", paused=False)
+            return
         cls.stop_dump()
         cls._reap_orphan_dumps()
         cls._remove_files()
 
     @classmethod
+    def _live_copies(cls, active_path: Optional[str] = None) -> List[Any]:
+        from engine.dvr import DvrManager
+
+        return [s for s in DvrManager.load_active_sessions(active_path) if s.copies_live and s.is_active()]
+
+    @classmethod
+    def _copied_dumps(cls, active_path: Optional[str] = None) -> Set[int]:
+        return {int(s.source.get("dump_pid") or 0) for s in cls._live_copies(active_path)}
+
+    @classmethod
+    def live_source(cls, tune_name: str) -> Optional[Dict[str, Any]]:
+        """The live dump, when it already holds the tower tune_name airs on. A recording copies it."""
+        state = cls.load_state()
+        pid = int(state.get("pid") or 0)
+        if not state.get("running") or state.get("dump_held") or not state.get("full_mux"):
+            return None
+        if not cls._pid_alive(pid) or cls.tune_lock_held():
+            return None
+        freq = cls._conf_freq(tune_name)
+        if freq <= 0 or freq != int(state.get("freq") or 0):
+            return None
+        return {"pid": pid, "adapter": int(state.get("adapter_id") or 0), "file": str(state.get("path") or TIMESHIFT_FILE)}
+
+    @classmethod
+    def byte_at(cls, when: Optional[float], now: float) -> Tuple[int, float]:
+        """The dump byte that aired at `when`, and when it aired. Never later than the join point."""
+        join = cls.live_join_byte()
+        size = cls.dump_bytes()
+        rate = cls.write_rate()
+        tower_t = float(cls.load_state().get("tower_t") or 0)
+        byte = join
+        if when is not None and tower_t > 0 and rate > 0:
+            byte = align_ts(max(0, min(join, int((when - tower_t) * rate))))
+        aired = now - max(0, size - byte) / rate if rate > 0 else now
+        return byte, aired
+
+    @classmethod
+    def _keep_dump_for_recordings(cls, state: Dict[str, Any]) -> None:
+        """Hand the live dump to the recordings copying it. Live TV starts another.
+
+        The dump and its readers keep their open file under the new name. Its
+        socket path goes, so nothing aimed at live TV's dump reaches this one.
+        """
+        from engine.dvr import DvrManager
+
+        pid = int(state.get("pid") or 0)
+        adapter = int(state.get("adapter_id") or 0)
+        ensure_private_dir(KEPT_DUMP_DIR)
+        kept = os.path.join(KEPT_DUMP_DIR, f"tower{adapter}.ts")
+        os.replace(TIMESHIFT_FILE, kept)
+        try:
+            os.unlink(str(state.get("socket") or TIMESHIFT_SOCKET_PATH))
+        except OSError:
+            pass
+        note = os.path.join(KEPT_DUMP_DIR, f"tower{adapter}.json")
+        with open(f"{note}.tmp", "w", encoding="utf-8") as f:
+            json.dump({"pid": pid, "adapter": adapter, "file": kept}, f)
+        os.replace(f"{note}.tmp", note)
+        with state_lock(RECORDINGS_ACTIVE_PATH):
+            sessions = DvrManager.load_active_sessions()
+            for s in sessions:
+                if int(s.source.get("dump_pid") or 0) == pid:
+                    s.source.update(file=kept, kept=True)
+            DvrManager.save_active_sessions(sessions)
+        cls.patch_state(pid=0, adapter_id=None, socket="", running=False)
+
+    @classmethod
+    def release_unused_dumps(cls, active_path: Optional[str] = None) -> None:
+        """Stop a dump no recording copies any more: a kept one, or live TV's once the TV is closed."""
+        used = cls._copied_dumps(active_path)
+        state = cls.load_state()
+        pid = int(state.get("pid") or 0)
+        if state.get("window") is False and pid and pid not in used:
+            cls.wipe()
+        if not os.path.isdir(KEPT_DUMP_DIR):
+            return
+        for name in os.listdir(KEPT_DUMP_DIR):
+            if not name.endswith(".json"):
+                continue
+            note = os.path.join(KEPT_DUMP_DIR, name)
+            try:
+                with open(note, encoding="utf-8") as f:
+                    kept = json.load(f)
+            except (OSError, ValueError):
+                kept = {}
+            kept_pid = int(kept.get("pid") or 0)
+            if cls._pid_alive(kept_pid) and kept_pid in used:
+                continue
+            if cls._pid_alive(kept_pid):
+                if not stop_unit(dump_unit(int(kept.get("adapter") or 0))):
+                    cls._kill_pid(kept_pid)
+            for path in (str(kept.get("file") or ""), note):
+                try:
+                    if path:
+                        os.remove(path)
+                except OSError:
+                    pass
+
+    @classmethod
     def _reap_orphan_dumps(cls, keep_pid: int = 0) -> None:
         """Kills leftover live dumps that state no longer tracks (stacked surf).
 
-        Under systemd every dump is the one DUMP_UNIT, so stopping it is the
-        whole sweep. Otherwise only the dump's own marks, writing into this
-        TIMESHIFT_DIR. The window's args name the timeshift file too.
+        Under systemd each tuner's dump is one unit; a tuner whose dump a
+        recording copies keeps it. Otherwise only the dump's own marks, writing
+        into this TIMESHIFT_DIR. The window's args name the timeshift file too.
         """
-        if not keep_pid and stop_unit(DUMP_UNIT):
+        copies = cls._live_copies()
+        if not keep_pid and systemd_user():
+            from engine import pool
+
+            owned = {int(s.source.get("adapter") or 0) for s in copies}
+            for adapter in pool.ADAPTERS:
+                if adapter not in owned:
+                    stop_unit(dump_unit(adapter))
             return
+        spare = {keep_pid} | {int(s.source.get("dump_pid") or 0) for s in copies}
         mine = os.path.join(TIMESHIFT_DIR, "")
         try:
             out = subprocess.check_output(
@@ -708,7 +828,7 @@ class Timeshift:
                 pid = int(parts[0])
             except ValueError:
                 continue
-            if pid <= 1 or pid == keep_pid:
+            if pid <= 1 or pid in spare:
                 continue
             cls._kill_pid(pid)
 
@@ -1158,6 +1278,7 @@ class Timeshift:
             tune_name=name,
             running=True,
             freq=freq,
+            tower_t=time.time(),
             service_id=cls.service_id(name),
             play_from=mark,
             view="live",
@@ -1191,11 +1312,11 @@ class Timeshift:
         touch_private_file(dest)
         log_path = os.path.join(TIMESHIFT_DIR, log_name)
         touch_private_file(log_path)
-        stop_unit(DUMP_UNIT)
+        stop_unit(dump_unit(adapter_id))
         cmd = own_scope(
             [sys.executable, TOWER_DUMP_PY, str(adapter_id), str(freq), dest, sock, log_path],
-            unit=DUMP_UNIT,
-            slice_name=LIVE_SLICE,
+            unit=dump_unit(adapter_id),
+            slice_name=TUNER_SLICE,
         )
         proc = subprocess.Popen(
             cmd,
@@ -1281,6 +1402,21 @@ class Timeshift:
 
         from engine import pool
 
+        state = cls.load_state()
+        live_pid = int(state.get("pid") or 0)
+        if cls._pid_alive(live_pid) and live_pid in cls._copied_dumps():
+            freq = cls._conf_freq(name)
+            if freq > 0 and freq == int(state.get("freq") or 0):
+                # A recording copies this tower. The dump stays; the picture reopens on it.
+                cls.patch_state(channel=name, tune_name=name, service_id=cls.service_id(name),
+                                window=True, view="live", paused=False, switching_from="")
+                return TIMESHIFT_FILE
+            held = pool.claims()
+            held[int(state.get("adapter_id") or 0)] = "record"
+            if adapter_id is None:
+                adapter_id = pool.pick_live(held)
+            cls._keep_dump_for_recordings(state)
+
         held = pool.claims()
         if adapter_id is None:
             adapter_id = pool.pick_live(held)
@@ -1304,6 +1440,7 @@ class Timeshift:
         # A Guide tower asked to yield lets go within a second or two.
         cls._wait_frontend_free(timeout=4.0 if held.get(adapter_id) == "guide" else 0.8, adapter_id=adapter_id)
         sock = TIMESHIFT_SOCKET_PATH
+        tower_t = time.time()
         proc = cls._capture_dump(name, adapter_id, TIMESHIFT_FILE, sock, "dump.log")
         pool.clear_yield()
         if proc is None:
@@ -1335,6 +1472,7 @@ class Timeshift:
             "freq": cls._conf_freq(name),
             "service_id": cls.service_id(name),
             "started_at": time.time(),
+            "tower_t": tower_t,
             "updated_at": time.time(),
         }
         if keep_follow and follow_pid:
@@ -1369,9 +1507,12 @@ class Timeshift:
         """Reuse the live dump on its tuner for another tower. This mpv locks again.
 
         The picture opens at play_from. Picking the same station again still
-        starts a fresh dump.
+        starts a fresh dump, unless a recording copies it: a retune would cut
+        the recording, so start_dump hands the dump to it or keeps it.
         """
         name = (tune_name or "").strip()
-        if name and cls._retune_running_dump(name):
+        pid = int(cls.load_state().get("pid") or 0)
+        copied = cls._pid_alive(pid) and pid in cls._copied_dumps()
+        if name and not copied and cls._retune_running_dump(name):
             return TIMESHIFT_FILE
         return cls.start_dump(name, keep_follow=True)

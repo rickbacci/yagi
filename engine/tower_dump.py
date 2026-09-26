@@ -242,6 +242,7 @@ class TowerDump:
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(sock_path)
         os.chmod(sock_path, 0o600)
+        mine = os.stat(sock_path).st_ino
         server.listen(4)
         next_signal = 0.0
         try:
@@ -265,8 +266,10 @@ class TowerDump:
                     self.note_signal()
         finally:
             server.close()
+            # A dump a recording kept outlives live TV's next one on this path.
             try:
-                os.unlink(sock_path)
+                if os.stat(sock_path).st_ino == mine:
+                    os.unlink(sock_path)
             except OSError:
                 pass
 

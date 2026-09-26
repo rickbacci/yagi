@@ -5,7 +5,7 @@
 
 OTA ATSC 1.0 for Omarchy: bar plugin, pinned PiP, dual-tuner record. Not MythTV, not Kaffeine.
 
-Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts; the record timer reads it on a free tuner every few hours. Search looks at titles and descriptions. Record into `~/Videos/TV` on whichever tuner is free, one show or every airing (Record all); back-to-back episodes split into one file each and ad breaks are skipped on playback. Pause-live is the live dump, the whole tower, read once through a fifo. Skip seeks inside the same window. A channel on the same tower comes up in about a second; another tower takes about 3 s of tuner lock first. Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
+Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts; the record timer reads it on a free tuner every few hours. Search looks at titles and descriptions. Record into `~/Videos/TV` on whichever tuner is free, one show or every airing (Record all). A channel on the tower you are watching is copied out of the live dump instead: no second tuner, and it starts at the top of the show when the pause reaches back that far; back-to-back episodes split into one file each and ad breaks are skipped on playback. Pause-live is the live dump, the whole tower, read once through a fifo. Skip seeks inside the same window. A channel on the same tower comes up in about a second; another tower takes about 3 s of tuner lock first. Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
 
 Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `omarchy-tv`.
 
@@ -26,7 +26,7 @@ State: `~/.config/omarchy/tv/`. Library: `~/Videos/TV`. Optional `station_map.js
 
 This is a DualHD-shaped appliance, not a generic PVR.
 
-- Two ATSC adapters, shared: live TV, recordings, scans, and Guide updates each take a free one. A one-tuner box can watch, or record, not both. Nothing takes a tuner that is live, recording, or scanning; a Guide update gives way.
+- Two ATSC adapters, shared: live TV, recordings, scans, and Guide updates each take a free one. Recording what you watch shares live TV's tuner; changing to another tower then moves live TV to the free one, or asks you to stop a recording. A one-tuner box can watch, or record, not both. Nothing takes a tuner that is live, recording, or scanning; a Guide update gives way.
 - Ad skipping uses Comskip if installed (`omarchy-pkg-aur-add comskip`), otherwise ffmpeg's black-frame and silence detection, which misses more.
 - First run: no stations until you scan, no Hidden list until you hide one, no Guide titles until `guide refresh` (what the stations send in PSIP). There is no canned Cleveland lineup in the engine.
 - Super+K is Omarchy’s keybindings overlay. It does not open this flyout. Use the antenna, or bind `omarchy-shell -q shell toggle richardb.omarchy-tv` (this box: Super+Shift+T in `~/.config/hypr/bindings.lua`).

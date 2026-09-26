@@ -791,7 +791,8 @@ def cmd_record(args):
         for chosen in ready:
             if chosen.get("id") in taken:
                 continue
-            if pool.pick_work() is None:
+            from engine.timeshift import Timeshift
+            if pool.pick_work() is None and not Timeshift.live_source(chosen.get("tune_name") or ""):
                 print(f"Waiting. {chosen.get('title') or 'That show'} stays listed. Both tuners are busy.")
                 continue
             run = chain_from(load_schedule(), chosen)

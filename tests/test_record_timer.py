@@ -13,7 +13,7 @@ from unittest import mock
 
 from engine.dvr import DvrManager, read_sidecar, write_sidecar
 from engine.guide import GUIDE_GRAB_GAP_SEC, guide_grab_due, run_guide_update
-from engine.paths import DUMP_UNIT, LIVE_SLICE, REC_SLICE, in_unit, own_scope, state_lock, stop_unit
+from engine.paths import LIVE_SLICE, REC_SLICE, TUNER_SLICE, dump_unit, in_unit, own_scope, state_lock, stop_unit
 from engine.schedule import next_window, save_schedule
 
 CLI_BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "omarchy-tv")
@@ -42,13 +42,13 @@ class TestOwnScope(unittest.TestCase):
         with tempfile.TemporaryDirectory() as run:
             with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": run}):
                 self.assertEqual(own_scope(["mpv"]), ["mpv"])
-                self.assertFalse(stop_unit(DUMP_UNIT))
+                self.assertFalse(stop_unit(dump_unit(0)))
 
     def test_a_named_unit_in_a_slice_stops_within_two_seconds(self):
         with mock.patch("engine.paths.systemd_user", return_value=True):
-            cmd = own_scope(["python3", "tower_dump.py"], unit=DUMP_UNIT, slice_name=LIVE_SLICE)
-        self.assertIn(f"--unit={DUMP_UNIT}", cmd)
-        self.assertIn(f"--slice={LIVE_SLICE}", cmd)
+            cmd = own_scope(["python3", "tower_dump.py"], unit=dump_unit(1), slice_name=TUNER_SLICE)
+        self.assertIn("--unit=omarchy-tv-dump1.scope", cmd)
+        self.assertIn(f"--slice={TUNER_SLICE}", cmd)
         self.assertEqual(cmd[cmd.index("-p") + 1], "TimeoutStopSec=2")
         self.assertEqual(cmd[cmd.index("--") + 1:], ["python3", "tower_dump.py"])
 

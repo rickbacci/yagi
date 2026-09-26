@@ -39,6 +39,8 @@ TIMESHIFT_DIR = os.path.join(_XDG_CACHE, "omarchy", "tv", "timeshift")
 TIMESHIFT_FILE = os.path.join(TIMESHIFT_DIR, "live.ts")
 TIMESHIFT_NEXT_FILE = os.path.join(TIMESHIFT_DIR, "live.next.ts")
 TIMESHIFT_ACTIVE_PATH = os.path.join(CONFIG_DIR, "timeshift_active.json")
+# A tower dump a recording kept when live TV moved on. Close TV does not wipe it.
+KEPT_DUMP_DIR = os.path.join(_XDG_CACHE, "omarchy", "tv", "kept")
 TUNE_STATUS_PATH = os.path.join(CONFIG_DIR, "tune_status.json")
 
 
@@ -72,8 +74,13 @@ def touch_private_file(path: str) -> None:
 
 LIVE_SLICE = "omarchy-tv-live.slice"
 REC_SLICE = "omarchy-tv-rec.slice"
-DUMP_UNIT = "omarchy-tv-dump.scope"
+TUNER_SLICE = "omarchy-tv-tuner.slice"
 FOLLOW_UNIT = "omarchy-tv-follow.scope"
+
+
+def dump_unit(adapter_id: int) -> str:
+    """One tower dump per tuner. A recording can keep one after live TV moves on."""
+    return f"omarchy-tv-dump{int(adapter_id)}.scope"
 
 
 def systemd_user() -> bool:
