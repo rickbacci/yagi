@@ -90,6 +90,15 @@ class TestGuideStepsAside(unittest.TestCase):
             self.assertEqual(next_window(now=4000, path=path), 8940)
             self.assertIsNone(next_window(now=20000, path=path))
 
+    def test_a_show_arms_before_the_next_tick_can_miss_its_start(self):
+        from engine.schedule import PAD_EARLY_SEC
+
+        timer = os.path.join(os.path.dirname(CLI_BIN), "..", "systemd", "user", "omarchy-tv-record.timer")
+        with open(timer, encoding="utf-8") as f:
+            unit = f.read()
+        slack = int(unit.split("AccuracySec=")[1].split("s")[0])
+        self.assertGreaterEqual(PAD_EARLY_SEC - (60 + slack), 20)
+
     def test_the_timer_starts_the_update_and_returns(self):
         cli = _load_cli()
         with mock.patch("engine.psip.clear_stale_guide_status"), \

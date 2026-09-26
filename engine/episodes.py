@@ -13,11 +13,13 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from engine.paths import chmod_private_file, state_lock
-from engine.schedule import PAD_EARLY_SEC, PAD_LATE_SEC, item_window
+from engine.schedule import PAD_LATE_SEC, item_window
 
 # Two listings this close on one channel are one run. A skipped rerun in the
 # middle does not make Tuner 1 let go; the split leaves its bytes out.
 CHAIN_GAP_SEC = 65 * 60
+# Each split episode starts this long before its listing.
+PIECE_EARLY_SEC = 60
 MAX_MARKS = 2000
 FINISH_LOCK_KEY = "recording-finish"
 TS_PACKET = 188
@@ -158,7 +160,7 @@ def plan_pieces(side: Dict[str, Any], size: int) -> List[Tuple[Dict[str, Any], i
         clean.append((t, min(b, total)))
     pieces = []
     for ep in sorted(side.get("episodes") or [], key=lambda e: int(e.get("start_unix") or 0)):
-        a = max(start, int(ep.get("start_unix") or 0) - PAD_EARLY_SEC)
+        a = max(start, int(ep.get("start_unix") or 0) - PIECE_EARLY_SEC)
         b = min(end, int(ep.get("start_unix") or 0) + int(ep.get("duration_sec") or 0) + PAD_LATE_SEC)
         if b - a < 60:
             continue

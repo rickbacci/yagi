@@ -8,8 +8,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from engine.paths import SCHEDULE_PATH, chmod_private_file, ensure_private_dir, state_lock
 from engine.psip import GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
 
-# A minute early, three minutes late. A game adds extra_end_sec on its own row.
-PAD_EARLY_SEC = 60
+# Ninety seconds early, three minutes late. A game adds extra_end_sec on its own row.
+# The timer ticks each minute, so ninety still leaves half a minute before the listing.
+PAD_EARLY_SEC = 90
 PAD_LATE_SEC = 180
 # A missed show stays listed a day so you see it, then goes.
 MISSED_SHOWN_SEC = 24 * 3600

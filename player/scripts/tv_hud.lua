@@ -408,7 +408,7 @@ local function library_rate()
     return ATSC_BPS / 8
 end
 
--- A recording starts a minute early, on the last show's credits. It opens just
+-- A recording starts early, on the last show's credits. It opens just
 -- before the listed start; the back key still reaches the rest.
 local LEAD_IN_SEC = 10
 local function listed_offset()
