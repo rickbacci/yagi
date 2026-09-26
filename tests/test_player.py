@@ -355,7 +355,7 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertIn("--demuxer-lavf-format=mpegts", cmd)
         joined = " ".join(str(a) for a in cmd)
         self.assertIn("--demuxer-lavf-analyzeduration=2", cmd)
-        self.assertTrue(any(str(a).startswith("--demuxer-lavf-probesize=") for a in cmd))
+        self.assertNotIn("demuxer-lavf-probesize", joined)
         self.assertNotIn("scan_all_pmts=1", joined)
         mock_follow.assert_called_with(0)
         self.assertIn("--cache-pause=no", cmd)
@@ -663,8 +663,25 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
     def test_get_active_channel_name_skips_mpv_events(self):
         self.assertEqual(self.controller.get_active_channel_name(), "WKYC-HD")
 
+    def test_same_tower_channel_up_only_switches_tracks(self):
+        with patch.object(self.controller, "launch_file", return_value=True) as mock_launch, \
+             patch("player.controller.Timeshift.switch_program", return_value=True), \
+             patch("player.controller.Timeshift.load_state", return_value={"view": "live", "paused": False}), \
+             patch("player.controller.Timeshift.retune_keep_window") as mock_retune, \
+             patch("player.controller.Timeshift.finish_tune"), \
+             patch("player.controller.Timeshift.begin_tune"), \
+             patch("player.controller.update_player_state"):
+            self.controller.channel_up()
+        mock_retune.assert_not_called()
+        mock_launch.assert_not_called()
+        sent = [m.get("command") for m in self.server.commands]
+        self.assertIn(["script-message", "tv-program"], sent)
+        self.assertFalse(any(c and c[0] == "loadfile" for c in sent))
+        self.assertNotIn(["script-message", "tv-blank"], sent)
+
     def test_channel_up_loadfiles_same_window(self):
         with patch.object(self.controller, "launch_file", return_value=True) as mock_launch, \
+             patch("player.controller.Timeshift.switch_program", return_value=False), \
              patch("player.controller.subprocess.Popen") as mock_popen, \
              patch("player.controller.Timeshift.retune_keep_window", return_value=self.dump_path) as mock_retune, \
              patch("player.controller.Timeshift.start_follow", return_value=4242), \
@@ -743,7 +760,7 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self.assertEqual(cmd[-1], rec)
 
     @patch("subprocess.Popen")
-    def test_launch_file_opens_sidecar_service(self, mock_popen):
+    def test_launch_file_leaves_the_program_to_the_hud(self, mock_popen):
         mock_popen.return_value = MagicMock(pid=1)
         rec = os.path.join(self.tmp_dir.name, "tower.ts")
         with open(rec, "wb") as f:
@@ -756,7 +773,7 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
              patch("player.controller.update_player_state"), \
              patch.object(self.controller, "send_command", side_effect=lambda cmd: sent.append(cmd) or {"error": "success"}):
             self.assertTrue(self.controller.launch_file(rec))
-        self.assertIn(["set_property", "program", 7], sent)
+        self.assertFalse(any(c[:2] == ["set_property", "program"] for c in sent))
 
     def test_tune_reports_failure_when_lock_is_held(self):
         with patch("player.controller.Timeshift.acquire_tune_lock", return_value=False), \

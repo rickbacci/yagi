@@ -46,12 +46,6 @@ MIN_PLAYABLE_BYTES = 256 * 1024
 # still writing just because this floor is not hit yet.
 DUMP_WAIT_SECS = 20
 DUMP_GROWING_BYTES = 32 * 1024
-# lavf reads this much before the first frame. A subchannel runs near 140 KB/s,
-# so the 5 MB default is half a minute of air. Under ~4 s of air it misses streams.
-PROBE_AIR_SEC = 6.0
-PROBE_MIN_BYTES = 750_000
-PROBE_MAX_BYTES = 5_000_000
-
 
 TS_PACKET = 188
 ATSC_BPS = 19_390_000
@@ -77,14 +71,6 @@ def is_timeshift_path(file_path: Optional[str]) -> bool:
 
 
 class Timeshift:
-    # Bytes/sec of the station the last wait saw arrive. 0 when too quick to tell.
-    _open_bps = 0.0
-
-    @classmethod
-    def _note_open_rate(cls, t0: float, s0: int, size: int) -> None:
-        elapsed = time.time() - t0
-        cls._open_bps = (size - s0) / elapsed if elapsed >= 0.3 and size > s0 else 0.0
-
     @classmethod
     def acquire_tune_lock(cls) -> bool:
         """Marks an in-flight retune so sync/Cmd+W cannot wipe the new dump.
@@ -189,20 +175,6 @@ class Timeshift:
         if size <= mark + back:
             return mark
         return align_ts(size - back)
-
-    @classmethod
-    def picture_probe_bytes(cls) -> int:
-        """About six seconds of this station. A whole-tower dump keeps the default."""
-        state = cls.load_state()
-        if state.get("full_mux"):
-            return PROBE_MAX_BYTES
-        try:
-            bps = float(state.get("open_bps") or 0)
-        except (TypeError, ValueError):
-            bps = 0.0
-        if bps <= 0:
-            return PROBE_MAX_BYTES
-        return int(min(PROBE_MAX_BYTES, max(PROBE_MIN_BYTES, bps * PROBE_AIR_SEC)))
 
     @classmethod
     def write_rate(cls) -> float:
@@ -1104,7 +1076,6 @@ class Timeshift:
         Every shrink is a new start. A mark taken before it never grows back.
         """
         low = prev = size_before
-        t0, s0 = 0.0, 0
         deadline = time.time() + DUMP_WAIT_SECS
         while time.time() < deadline:
             if not cls._pid_alive(pid):
@@ -1112,22 +1083,38 @@ class Timeshift:
             size = cls.dump_bytes()
             if size + TS_PACKET < prev:
                 low = size
-                t0, s0 = time.time(), size
-            elif size > low and not t0:
-                t0, s0 = time.time(), size
             prev = size
             if size >= align_ts(low) + MIN_PLAYABLE_BYTES:
-                cls._note_open_rate(t0, s0, size)
                 return align_ts(low)
             time.sleep(0.05)
         return None
 
     @classmethod
-    def _retune_running_dump(cls, name: str) -> bool:
-        """Point the live dump at another station without a new mpv.
+    def switch_program(cls, tune_name: str) -> bool:
+        """Another station on the tower the live dump already holds. No retune.
 
-        Setting dvbin-prog closes the stream. This mpv locks again for every
-        station, including a subchannel on the same tower.
+        The dump is the whole tower, so the picture only picks other tracks.
+        """
+        name = (tune_name or "").strip()
+        state = cls.load_state()
+        if not name or not state.get("full_mux") or state.get("dump_held"):
+            return False
+        if not cls._pid_alive(int(state.get("pid") or 0)):
+            return False
+        if name == str(state.get("tune_name") or state.get("channel") or ""):
+            return False
+        freq = cls._conf_freq(name)
+        sid = cls.service_id(name)
+        if freq <= 0 or sid <= 0 or freq != int(state.get("freq") or 0):
+            return False
+        cls.patch_state(channel=name, tune_name=name, service_id=sid, switching_from="")
+        return True
+
+    @classmethod
+    def _retune_running_dump(cls, name: str) -> bool:
+        """Point the live dump at another tower without a new mpv.
+
+        Setting dvbin-prog closes the stream, and this mpv locks again.
         """
         state = cls.load_state()
         pid = int(state.get("pid") or 0)
@@ -1147,7 +1134,6 @@ class Timeshift:
             return False
         # This mpv closes the stream and locks again. The file usually shrinks.
         # The mark has to be that new start, not the size from before the close.
-        cls._open_bps = 0.0
         mark = cls._mark_after_reopen(pid, size_before)
         if mark is None:
             return False
@@ -1155,7 +1141,8 @@ class Timeshift:
             channel=name,
             tune_name=name,
             running=True,
-            open_bps=cls._open_bps,
+            freq=cls._conf_freq(name),
+            service_id=cls.service_id(name),
             play_from=mark,
             view="live",
             paused=False,
@@ -1194,12 +1181,11 @@ class Timeshift:
             f"--dvbin-file={MPV_CHANNELS_CONF}",
             "--idle=no",
             f"--log-file={os.path.join(TIMESHIFT_DIR, log_name)}",
+            # The whole tower. A zap to its other stations is a track change,
+            # and a 0:0 or copied video id still has a picture.
+            "--dvbin-full-transponder=yes",
+            f"dvb://{name}",
         ]
-        # A 0:0 row, or a video id copied from another service, has no
-        # picture of its own. The whole tower still does.
-        if cls._conf_needs_full_mux(name):
-            cmd.append("--dvbin-full-transponder=yes")
-        cmd.append(f"dvb://{name}")
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
@@ -1217,8 +1203,6 @@ class Timeshift:
         deadline = time.time() + DUMP_WAIT_SECS
         last_size = 0
         next_note = 0.0
-        t0, s0 = 0.0, 0
-        cls._open_bps = 0.0
         while time.time() < deadline:
             if isinstance(proc.poll(), int):
                 return False
@@ -1232,11 +1216,7 @@ class Timeshift:
                 size = os.path.getsize(dest) if os.path.isfile(dest) else 0
             except OSError:
                 size = 0
-            # The first bytes are the lock. The rate counts from there.
-            if size > 0 and not t0:
-                t0, s0 = time.time(), size
             if size >= MIN_PLAYABLE_BYTES:
-                cls._note_open_rate(t0, s0, size)
                 chmod_private_file(dest)
                 if log_path:
                     chmod_private_file(log_path)
@@ -1340,8 +1320,9 @@ class Timeshift:
             "playhead_byte": 0,
             "playhead_t": 0,
             "play_from": 0,
-            "full_mux": cls._conf_needs_full_mux(name),
-            "open_bps": cls._open_bps,
+            "full_mux": True,
+            "freq": cls._conf_freq(name),
+            "service_id": cls.service_id(name),
             "started_at": time.time(),
             "updated_at": time.time(),
         }
@@ -1374,7 +1355,7 @@ class Timeshift:
 
     @classmethod
     def retune_keep_window(cls, tune_name: str) -> Optional[str]:
-        """Reuse the live dump on its tuner. This mpv locks again for every station.
+        """Reuse the live dump on its tuner for another tower. This mpv locks again.
 
         The picture opens at play_from. Picking the same station again still
         starts a fresh dump.

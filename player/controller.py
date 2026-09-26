@@ -256,19 +256,6 @@ def is_allowed_playback_path(file_path: str) -> bool:
         return False
 
 
-def _recording_service_id(file_path: str) -> int:
-    """Service to open when the library file is a whole tower."""
-    from engine.dvr import read_sidecar
-
-    side = read_sidecar(file_path)
-    if not side.get("full_mux"):
-        return 0
-    try:
-        return int(side.get("service_id") or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def is_dvb_path(path: Optional[str]) -> bool:
     return isinstance(path, str) and path.strip().lower().startswith("dvb://")
 
@@ -537,6 +524,21 @@ class MpvController:
             station = matched.get("display_name", "") if matched else ""
             Timeshift.begin_tune(target_name, station)
 
+            if keep_window and Timeshift.switch_program(target_name):
+                Timeshift.finish_tune()
+                state = Timeshift.load_state()
+                if state.get("paused") or str(state.get("view") or "live") != "live":
+                    self.transport.seek_cursor(Timeshift.live_join_byte(), paused=False)
+                self.send_command(["script-message", "tv-program"])
+                update_player_state(
+                    True,
+                    channel=target_name,
+                    station=station,
+                    pid=_stated_player_pid(),
+                    mode="live",
+                )
+                return True
+
             if keep_window:
                 self.send_command(["script-message", "tv-blank"])
                 if Timeshift.note_channel(target_name):
@@ -738,7 +740,6 @@ class MpvController:
                 "--cache=no",
                 "--demuxer-readahead-secs=3",
                 "--demuxer-max-bytes=4194304",
-                f"--demuxer-lavf-probesize={Timeshift.picture_probe_bytes()}",
                 "--ytdl=no",
             ])
         else:
@@ -768,9 +769,6 @@ class MpvController:
                 label = channel or os.path.splitext(os.path.basename(file_path))[0].replace("_", " ")
                 st = station or "Recording"
                 play_mode = mode or "recording"
-                sid = _recording_service_id(file_path)
-                if sid > 0:
-                    self.send_command(["set_property", "program", sid])
             update_player_state(
                 True,
                 channel=label,
@@ -779,7 +777,6 @@ class MpvController:
                 mode=play_mode,
             )
             if live_dump:
-                self._select_dump_program()
                 self.send_command(["set_property", "pause", False])
                 Timeshift.patch_state(
                     view="live",
@@ -894,22 +891,8 @@ class MpvController:
         return res.get("data") if res and res.get("error") == "success" else None
 
     def _load_dump(self, url: str) -> None:
-        """Open the dump. A full-mux file still has every station, so name the program."""
-        state = Timeshift.load_state()
-        opts = [f"demuxer-lavf-probesize={Timeshift.picture_probe_bytes()}"]
-        if state.get("full_mux"):
-            sid = Timeshift.service_id(str(state.get("tune_name") or state.get("channel") or ""))
-            if sid > 0:
-                opts.append(f"program={sid}")
-        self.send_command(["loadfile", url, "replace", "-1", ",".join(opts)])
-
-    def _select_dump_program(self) -> None:
-        state = Timeshift.load_state()
-        if not state.get("full_mux"):
-            return
-        sid = Timeshift.service_id(str(state.get("tune_name") or state.get("channel") or ""))
-        if sid > 0:
-            self.send_command(["set_property", "program", sid])
+        """Open the dump. The HUD picks this station's tracks once it loads."""
+        self.send_command(["loadfile", url, "replace"])
 
     def open_timeshift_dump(self, byte: int, paused: bool) -> bool:
         return self.transport.open_dump(byte, paused)

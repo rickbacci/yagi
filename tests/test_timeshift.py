@@ -886,24 +886,33 @@ class TestTimeshift(unittest.TestCase):
             mark = Timeshift._mark_after_reopen(1, 5_000_000)
         self.assertEqual(mark, 0)
 
-    def test_probe_is_six_seconds_of_the_station(self):
-        cases = [
-            ({"open_bps": 140_000}, 840_000),
-            ({"open_bps": 50_000}, 750_000),
-            ({"open_bps": 2_400_000}, 5_000_000),
-            ({"open_bps": 0}, 5_000_000),
-            ({"open_bps": 140_000, "full_mux": True}, 5_000_000),
-        ]
-        for state, want in cases:
-            with patch.object(Timeshift, "load_state", return_value=state):
-                self.assertEqual(Timeshift.picture_probe_bytes(), want, state)
+    def test_same_tower_zap_switches_program_without_retune(self):
+        conf = {"STORY": (551028615, 4), "TOONS": (551028615, 5), "WKYC-HD": (503028615, 1)}
+        state = {"pid": 5, "tune_name": "STORY", "full_mux": True, "freq": 551028615}
+        with patch.object(Timeshift, "load_state", return_value=state), \
+             patch.object(Timeshift, "_pid_alive", return_value=True), \
+             patch.object(Timeshift, "_conf_freq", side_effect=lambda n: conf[n][0]), \
+             patch.object(Timeshift, "service_id", side_effect=lambda n: conf[n][1]), \
+             patch.object(Timeshift, "patch_state") as patched, \
+             patch.object(Timeshift, "_dump_command") as ipc:
+            self.assertTrue(Timeshift.switch_program("TOONS"))
+            patched.assert_called_once_with(
+                channel="TOONS", tune_name="TOONS", service_id=5, switching_from=""
+            )
+            self.assertFalse(Timeshift.switch_program("WKYC-HD"))
+            self.assertFalse(Timeshift.switch_program("STORY"))
+        ipc.assert_not_called()
 
-    def test_open_rate_counts_from_the_first_bytes(self):
-        with patch("engine.timeshift.time.time", return_value=12.0):
-            Timeshift._note_open_rate(10.0, 100_000, 380_000)
-            self.assertEqual(Timeshift._open_bps, 140_000)
-            Timeshift._note_open_rate(11.9, 0, 380_000)
-            self.assertEqual(Timeshift._open_bps, 0.0)
+    def test_single_station_or_held_dump_does_not_switch(self):
+        for state in (
+            {"pid": 5, "tune_name": "STORY", "full_mux": False, "freq": 551028615},
+            {"pid": 5, "tune_name": "STORY", "full_mux": True, "freq": 551028615, "dump_held": "hour"},
+        ):
+            with patch.object(Timeshift, "load_state", return_value=state), \
+                 patch.object(Timeshift, "_pid_alive", return_value=True), \
+                 patch.object(Timeshift, "_conf_freq", return_value=551028615), \
+                 patch.object(Timeshift, "service_id", return_value=5):
+                self.assertFalse(Timeshift.switch_program("TOONS"), state)
 
     def test_filtered_dump_will_not_retune_onto_a_zero_pid(self):
         with patch.object(Timeshift, "load_state", return_value={

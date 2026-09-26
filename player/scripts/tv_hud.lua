@@ -408,6 +408,37 @@ local function library_rate()
     return ATSC_BPS / 8
 end
 
+-- A whole-tower file carries every station on it. mpv 0.41 has no program
+-- property, so this station is its own video and audio tracks by program id.
+local function wanted_program()
+    if is_library_playback() then
+        local side = library_side()
+        if type(side) == "table" and side.full_mux then return tonumber(side.service_id) end
+        return nil
+    end
+    if is_timeshift_playback() and cached_timeshift.full_mux then
+        return tonumber(cached_timeshift.service_id)
+    end
+    return nil
+end
+
+-- True once this station's picture track is chosen, or there is nothing to choose.
+local function select_program()
+    local sid = wanted_program()
+    if not sid or sid <= 0 then return true end
+    local vid, aid
+    for _, t in ipairs(mp.get_property_native("track-list") or {}) do
+        if t["program-id"] == sid then
+            if t.type == "video" and not vid then vid = t.id end
+            if t.type == "audio" and not aid then aid = t.id end
+        end
+    end
+    if vid and mp.get_property_number("vid", -1) ~= vid then mp.set_property_number("vid", vid) end
+    if aid and mp.get_property_number("aid", -1) ~= aid then mp.set_property_number("aid", aid) end
+    return vid ~= nil
+end
+local program_pending = false
+
 local function atsc_duration()
     local size = file_bytes()
     if size < 1024 then return 0 end
@@ -1269,6 +1300,13 @@ mp.register_script_message("tv-retuned", function()
     end)
     show_hud()
 end)
+-- A station on the tower already playing. No reopen: switch tracks, and the
+-- old picture holds until the new one's first keyframe.
+mp.register_script_message("tv-program", function()
+    reload_data()
+    program_pending = not select_program()
+    show_hud()
+end)
 mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)
 mp.add_forced_key_binding("l", "tv_return_live", function()
     cli_async({"live"})
@@ -1305,6 +1343,8 @@ mp.register_event("file-loaded", function()
         blank_saw_load = true
         pcall(function() mp.set_property("vid", "auto") end)
     end
+    reload_data()
+    program_pending = not select_program()
     show_hud()
     sync_player_state()
     end)
@@ -1352,6 +1392,9 @@ mp.add_periodic_timer(0.4, function()
     if blanking and blank_at > 0 and (mp.get_time() - blank_at) > 12 then
         uncover_picture()
         return
+    end
+    if program_pending then
+        program_pending = not select_program()
     end
     if is_timeshift_playback() then
         reload_data()
