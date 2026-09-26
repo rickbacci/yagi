@@ -301,6 +301,8 @@ local clock_shown = nil
 local clock_tick = nil
 local clock_raw = nil
 local clock_jump = nil
+local clock_jump_until = nil
+local CLOCK_JUMP_HOLD = 2.0
 
 local function tv_cli()
     local cli = mp.get_opt("cli")
@@ -563,8 +565,9 @@ local function smooth_clock(raw)
         return clock_shown
     end
     -- A skip moves the file by seconds all at once. The pause count does not.
+    -- Keyframes and the file's start can land it off the guess; then the file wins.
     if clock_jump ~= nil then
-        if math.abs(raw - clock_jump) <= 1 then
+        if math.abs(raw - clock_jump) <= 1 or now >= (clock_jump_until or 0) then
             clock_jump = nil
             clock_raw = raw
             clock_shown = raw
@@ -1245,17 +1248,11 @@ local function seek_rel(delta)
         return
     end
     if is_timeshift_playback() then
-        if signed > 0 then
-            local shown = clock_shown or 0
-            if shown <= step then
-                clock_shown = 0
-            else
-                clock_shown = shown - step
-            end
-            clock_jump = clock_shown
-            clock_raw = clock_shown
-            clock_tick = mp.get_time()
-        end
+        clock_shown = math.max(0, (clock_shown or 0) - signed)
+        clock_jump = clock_shown
+        clock_jump_until = mp.get_time() + CLOCK_JUMP_HOLD
+        clock_raw = clock_shown
+        clock_tick = mp.get_time()
         cli_async({"seek", tostring(signed)})
         show_hud()
         return

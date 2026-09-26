@@ -22,6 +22,7 @@ clock_shown = nil
 clock_tick = nil
 clock_raw = nil
 clock_jump = nil
+clock_jump_until = nil
 cached_timeshift = { paused = false }
 local now = 0
 local paused = false
@@ -69,11 +70,29 @@ eq(smooth_clock(10), 10, "skip snaps")
 
 -- A right-arrow jump holds until the file is within a second.
 clock_jump = 0
+clock_jump_until = 17
 clock_shown = 0
 now = 15
 eq(smooth_clock(8), 0, "jump holds")
 now = 16
 eq(smooth_clock(1), 1, "jump corrects")
+
+-- Right, left, left, right guessed 20 s low; the file never gets there.
+clock_jump = 30
+clock_jump_until = 22
+clock_shown = 30
+now = 20
+eq(smooth_clock(50), 30, "wrong guess holds")
+now = 22
+eq(smooth_clock(50), 50, "wrong guess lets go")
+
+-- Paused after that, the count climbs again.
+cached_timeshift.paused = true
+paused = true
+now = 23
+eq(smooth_clock(51), 51, "pause climbs after a skip")
+now = 24
+eq(smooth_clock(52), 52, "pause keeps climbing")
 """
 
 
