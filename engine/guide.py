@@ -19,6 +19,7 @@ from engine.paths import (
     GUIDE_JSON_PATH,
     chmod_private_file,
     ensure_private_dir,
+    state_lock,
 )
 
 _EASTERN = ZoneInfo("America/New_York")
@@ -946,6 +947,21 @@ def refresh_guide(
     payload = {"updated_at": read_at, "channels": merged, "source": "lineup"}
     _write_guide(payload, target)
     return {"skipped": skipped, "channels": merged}
+
+
+GUIDE_UPDATE_LOCK_KEY = "guide-update"
+
+
+def run_guide_update(grabber: Optional[Callable[[], Dict[str, List[Dict[str, Any]]]]] = None) -> str:
+    """The timer's Guide update, one at a time: done, skipped, or running."""
+    try:
+        with state_lock(GUIDE_UPDATE_LOCK_KEY, timeout=0):
+            if grabber is None:
+                from engine.psip import collect_guide_events as grabber
+            result = refresh_guide(grabber=grabber)
+    except TimeoutError:
+        return "running"
+    return "skipped" if result.get("skipped") else "done"
 
 
 def sync_guide_from_channels(channels: List[Dict[str, Any]], guide_path: Optional[str] = None) -> Dict[str, Any]:

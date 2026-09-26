@@ -1,17 +1,30 @@
 """The record timer: recorders outlive it, and a Guide update never makes a recording wait."""
 
+import importlib.machinery
+import importlib.util
 import json
 import os
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
 
 from engine.dvr import DvrManager, read_sidecar, write_sidecar
-from engine.guide import GUIDE_GRAB_GAP_SEC, guide_grab_due
-from engine.paths import own_scope
+from engine.guide import GUIDE_GRAB_GAP_SEC, guide_grab_due, run_guide_update
+from engine.paths import own_scope, state_lock
 from engine.schedule import next_window, save_schedule
+
+CLI_BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "omarchy-tv")
+
+
+def _load_cli():
+    loader = importlib.machinery.SourceFileLoader("omarchy_tv_cli", CLI_BIN)
+    spec = importlib.util.spec_from_loader("omarchy_tv_cli", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 class TestOwnScope(unittest.TestCase):
@@ -76,6 +89,45 @@ class TestGuideStepsAside(unittest.TestCase):
             ], path)
             self.assertEqual(next_window(now=4000, path=path), 8940)
             self.assertIsNone(next_window(now=20000, path=path))
+
+    def test_the_timer_starts_the_update_and_returns(self):
+        cli = _load_cli()
+        with mock.patch("engine.psip.clear_stale_guide_status"), \
+                mock.patch("engine.psip.guide_update_running", return_value=False), \
+                mock.patch("engine.guide.load_guide", return_value={"updated_at": 0}), \
+                mock.patch("engine.guide.guide_tuner_free", return_value=True), \
+                mock.patch("engine.pool.free_count", return_value=2), \
+                mock.patch("engine.guide.refresh_guide") as inline, \
+                mock.patch.object(cli.subprocess, "Popen") as spawn:
+            cli._grab_guide_if_due()
+        inline.assert_not_called()
+        argv = spawn.call_args[0][0]
+        self.assertEqual(argv[-2:], ["guide", "update"])
+        self.assertTrue(spawn.call_args[1].get("start_new_session"))
+
+    def test_a_second_update_steps_aside(self):
+        key = f"test-guide-update-{os.getpid()}"
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with state_lock(key):
+                held.set()
+                release.wait(5)
+
+        other = threading.Thread(target=hold)
+        other.start()
+        held.wait(5)
+        try:
+            with mock.patch("engine.guide.GUIDE_UPDATE_LOCK_KEY", key), \
+                    mock.patch("engine.guide.refresh_guide") as refresh:
+                self.assertEqual(run_guide_update(grabber=dict), "running")
+            refresh.assert_not_called()
+        finally:
+            release.set()
+            other.join()
+        with mock.patch("engine.guide.GUIDE_UPDATE_LOCK_KEY", key), \
+                mock.patch("engine.guide.refresh_guide", return_value={"skipped": False}):
+            self.assertEqual(run_guide_update(grabber=dict), "done")
 
 
 class TestDeadRecorder(unittest.TestCase):

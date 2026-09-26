@@ -143,6 +143,12 @@ def cmd_guide(args):
     )
     from engine.psip import collect_guide_events
     action = getattr(args, "action", None)
+    if action == "update":
+        from engine.guide import run_guide_update
+        done = run_guide_update(grabber=collect_guide_events)
+        print({"done": "Guide refreshed.", "skipped": "Guide left alone — no free tuner.",
+               "running": "Guide update already running."}[done])
+        return
     if action == "shows":
         from engine.shows import load_shows
         print(json.dumps({"shows": load_shows()}))
@@ -537,10 +543,11 @@ def parse_duration_str(d_str):
 
 
 def _grab_guide_if_due():
-    """A few times a day, when Tuner 1 is not recording."""
+    """A few times a day on a free tuner. The update takes minutes, so it runs on
+    its own and the next tick can still start or stop a recording."""
     try:
         from engine import pool
-        from engine.guide import guide_grab_due, guide_tuner_free, load_guide, refresh_guide
+        from engine.guide import guide_grab_due, guide_tuner_free, load_guide
         from engine.psip import clear_stale_guide_status, guide_update_running
         clear_stale_guide_status()
         if guide_update_running():
@@ -551,15 +558,16 @@ def _grab_guide_if_due():
         soon = next_window() if pool.free_count() < 2 else None
         if not guide_grab_due(time.time(), guide.get("updated_at"), not guide_tuner_free(), next_record_at=soon):
             return
-        from engine.psip import collect_guide_events
-        result = refresh_guide(grabber=collect_guide_events)
+        from engine.paths import own_scope
+        subprocess.Popen(
+            own_scope([sys.executable, os.path.abspath(__file__), "guide", "update"]),
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
     except Exception as exc:
         print(f"Guide left alone. {exc}")
         return
-    if result.get("skipped"):
-        print("Guide left alone — Tuner 1 is recording.")
-    else:
-        print("Guide refreshed.")
+    print("Guide update started.")
 
 
 def cmd_record(args):
@@ -833,7 +841,7 @@ def main():
 
     # guide / epg
     p_guide = subparsers.add_parser("guide", aliases=["epg"], help="Show electronic program guide schedules")
-    p_guide.add_argument("action", nargs="?", choices=["refresh", "search", "shows", "slots", "forget", "slot"], help="Refresh, search, list shows (JSON), or edit the repeated-show list")
+    p_guide.add_argument("action", nargs="?", choices=["refresh", "update", "search", "shows", "slots", "forget", "slot"], help="Refresh, update quietly (the timer), search, list shows (JSON), or edit the repeated-show list")
     p_guide.add_argument("query", nargs="*", help="Search words, or a slot command")
     p_guide.add_argument("--title", default="", help="Show title")
     p_guide.add_argument("--clock", default="", help="Start clock, e.g. 8:15 PM")
