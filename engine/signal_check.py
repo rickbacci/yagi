@@ -21,6 +21,8 @@ SYNC = 0x47
 INTERVAL_SEC = 2.0
 MAX_SECONDS = 600
 READ_CHUNK = 1 << 20
+JOB_TEXT = {"live": " with live TV on another tower", "record": " recording",
+            "scan": " scanning", "guide": " updating the Guide"}
 
 
 def count_damaged(data: bytes, carry: bytes = b"") -> Tuple[int, int, bytes]:
@@ -123,7 +125,8 @@ def _watch(adapter: int, read: Callable[[], bytes], seconds: int, say: Callable[
 
 
 def check(query: str, seconds: int = 30, say: Callable[[str], None] = print,
-          channels_path: str = CHANNELS_JSON_PATH) -> Dict[str, Any]:
+          channels_path: str = CHANNELS_JSON_PATH, adapter: Optional[int] = None) -> Dict[str, Any]:
+    """adapter: read that tuner. Live TV's tuner on this tower reads the live dump; any other must be free."""
     ch = _channel(query, channels_path)
     if not ch or not ch.get("frequency"):
         raise ValueError(f"No channel matches {query!r}. See: yagi list")
@@ -132,6 +135,8 @@ def check(query: str, seconds: int = 30, say: Callable[[str], None] = print,
     seconds = max(int(INTERVAL_SEC), min(MAX_SECONDS, int(seconds)))
 
     live = _live_source(freq)
+    if live and adapter is not None and adapter != live[0]:
+        live = None
     if live:
         adapter, path = live
         say(f"{name}: reading live TV on tuner {adapter} for {seconds} s. Ctrl+C stops.")
@@ -139,12 +144,19 @@ def check(query: str, seconds: int = 30, say: Callable[[str], None] = print,
     else:
         from engine.tuner import TunerManager
 
-        adapter = pool.pick_work(wait_for_guide=False)
+        named = adapter is not None
+        if named and not os.path.exists(f"/dev/dvb/adapter{adapter}"):
+            raise ValueError(f"There is no tuner {adapter}. See: yagi status")
+        if not named:
+            adapter = pool.pick_work(wait_for_guide=False)
         if adapter is None:
             raise RuntimeError(pool.busy_text())
         with state_lock(pool.lock_key(adapter), timeout=0.5):
-            if pool.claims().get(adapter) or not TunerManager.adapter_is_free(adapter):
-                raise RuntimeError(pool.busy_text())
+            job = pool.claims().get(adapter)
+            if job or not TunerManager.adapter_is_free(adapter):
+                if not named:
+                    raise RuntimeError(pool.busy_text())
+                raise RuntimeError(f"Tuner {adapter} is busy{JOB_TEXT.get(job, '')}.")
             conf = get_runtime_socket("yagi-signal.conf")
             with open(conf, "w", encoding="utf-8") as f:
                 f.write(f"[CHECK]\n\tDELIVERY_SYSTEM = ATSC\n\tFREQUENCY = {freq}\n\tMODULATION = VSB/8\n")

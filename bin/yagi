@@ -87,7 +87,7 @@ def cmd_signal(args):
             print("Name a channel. Example: yagi signal check 8.1")
             sys.exit(1)
         try:
-            check(query, seconds=args.seconds)
+            check(query, seconds=args.seconds, adapter=args.adapter)
         except (ValueError, RuntimeError) as exc:
             print(exc)
             sys.exit(1)
