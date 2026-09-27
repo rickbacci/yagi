@@ -4,9 +4,14 @@ Tuner 1 never stops between episodes, so none of them lose their first minute.
 The timer notes the file size each minute. The split maps air time to bytes
 from those notes and works from the last episode back, trimming the run as it
 goes, so it needs room for about one episode, not a second copy.
+
+A recording made without a listing (r, or record start) takes its episodes
+from what the Guide saw air on that channel while it ran. One episode is
+trimmed to the same span a split episode gets. Games keep every minute.
 """
 
 import os
+import re
 import subprocess
 import time
 from datetime import datetime
@@ -21,6 +26,9 @@ CHAIN_GAP_SEC = 65 * 60
 # Each split episode starts this long before its listing.
 PIECE_EARLY_SEC = 60
 MAX_MARKS = 2000
+# An airing a listing-less recording caught this much of is an episode; less is the next show's edge.
+KEEP_SHARE = 0.5
+KEEP_MIN_SEC = 15 * 60
 FINISH_LOCK_KEY = "recording-finish"
 TS_PACKET = 188
 COPY_CHUNK = 8 * 1024 * 1024
@@ -172,6 +180,51 @@ def plan_pieces(side: Dict[str, Any], size: int) -> List[Tuple[Dict[str, Any], i
     return pieces
 
 
+def is_game_title(title: str) -> bool:
+    """Same test as plugin/Model.js isGameTitle. A live game runs past its slot."""
+    t = str(title or "").lower()
+    if re.search(r"pregame|postgame|kickoff|today|tonight|countdown|review|highlights|preview", t):
+        return False
+    return bool(re.search(r"\b(football|baseball|basketball|hockey|soccer)\b|^(nfl|nba|mlb|nhl|mls|ncaa)\b", t))
+
+
+def guide_episodes(side: Dict[str, Any], airings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """What the Guide saw air on this recording's channel while it ran."""
+    channel = str(side.get("channel") or "")
+    start, end = int(side.get("start") or 0), int(side.get("end") or 0)
+    seen_keys = set()
+    out = []
+    for row in airings or []:
+        if str(row.get("channel") or "") != channel:
+            continue
+        a0, dur = int(row.get("start") or 0), int(row.get("duration_sec") or 0)
+        if a0 <= 0 or dur <= 0 or (a0, row.get("title")) in seen_keys:
+            continue
+        caught = min(end, a0 + dur) - max(start, a0)
+        if caught <= 0 or (caught < dur * KEEP_SHARE and caught < KEEP_MIN_SEC):
+            continue
+        seen_keys.add((a0, row.get("title")))
+        out.append({"title": str(row.get("title") or ""), "start_unix": a0, "duration_sec": dur,
+                    "synopsis": "", "rule_id": str(side.get("rule_id") or "")})
+    return sorted(out, key=_start)
+
+
+def _history_airings() -> List[Dict[str, Any]]:
+    from engine.guide import GUIDE_HISTORY_PATH, _load_history
+
+    return list(_load_history(GUIDE_HISTORY_PATH).get("airings") or [])
+
+
+def _trim(path: str, lo: int, hi: int) -> None:
+    """Keep bytes lo..hi of path, in place when the start stays."""
+    if lo <= 0:
+        with open(path, "r+b") as f:
+            f.truncate(min(hi, os.path.getsize(path)))
+        return
+    _copy_range(path, f"{path}.cut", lo, hi)
+    os.replace(f"{path}.cut", path)
+
+
 def episode_filename(side: Dict[str, Any], ep: Dict[str, Any]) -> str:
     from engine.dvr import sanitize_filename
 
@@ -233,6 +286,7 @@ def _episode_side(side: Dict[str, Any], ep: Dict[str, Any], source: str, lo: int
         "rule_id": ep.get("rule_id") or side.get("rule_id") or "",
         "status": "complete",
         "split_from": os.path.basename(source),
+        "cut": True,
     })
     return keep
 
@@ -247,13 +301,26 @@ def in_use(path: str) -> bool:
     return res.returncode == 0
 
 
-def split_recording(path: str) -> List[str]:
-    """Cut a finished run into episode files. Safe to run again after a crash."""
+def _uncut(side: Dict[str, Any]) -> bool:
+    """A finished recording nothing has split, trimmed, or marked for ads yet."""
+    if str(side.get("status") or "") != "complete":
+        return False
+    return len(side.get("episodes") or []) >= 2 or ("ads" not in side and not side.get("cut"))
+
+
+def split_recording(path: str, airings: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """Cut a finished recording into episode files, or trim its one episode. Safe to run again after a crash."""
     from engine.dvr import patch_sidecar, read_sidecar, sidecar_path, write_sidecar
 
     side = read_sidecar(path)
-    if str(side.get("status") or "") != "complete" or len(side.get("episodes") or []) < 2:
+    if not _uncut(side):
         return []
+    if not side.get("episodes"):
+        found = guide_episodes(side, _history_airings() if airings is None else airings)
+        if not found:
+            patch_sidecar(path, cut=True)
+            return []
+        side = patch_sidecar(path, episodes=found)
     size = os.path.getsize(path)
     if "split_size" not in side:
         side = patch_sidecar(path, split_size=size)
@@ -263,7 +330,13 @@ def split_recording(path: str) -> List[str]:
         only = pieces[0][0] if pieces else None
         named = {"title": only["title"], "synopsis": only.get("synopsis", ""), "rule_id": only.get("rule_id") or side.get("rule_id") or "",
                  "listed_start": int(only.get("start_unix") or 0) or None} if only else {}
-        patch_sidecar(path, episodes=[], **named)
+        if only and not is_game_title(only["title"]):
+            lo, hi = pieces[0][1], pieces[0][2]
+            if lo > 0 or hi < size:
+                _trim(path, lo, hi)
+                a, b = only["span"][:2]
+                named.update(start=int(a), end=int(b), byte_rate=round((hi - lo) / (b - a), 1) if b > a else None, marks=[])
+        patch_sidecar(path, episodes=[], cut=True, **named)
         return [path]
     made: List[str] = []
     for i in range(len(pieces) - 1, -1, -1):
@@ -310,19 +383,21 @@ def waiting_splits(recordings_dir: str) -> List[str]:
     for entry in entries:
         if not entry.name.endswith(".ts") or not entry.is_file(follow_symlinks=False):
             continue
-        side = read_sidecar(entry.path)
-        if str(side.get("status") or "") == "complete" and len(side.get("episodes") or []) >= 2:
+        if _uncut(read_sidecar(entry.path)):
             out.append(entry.path)
     return sorted(out)
 
 
 def split_waiting(recordings_dir: str) -> List[str]:
-    """Split every finished run nobody has open."""
+    """Split or trim every finished recording nobody has open."""
     made: List[str] = []
+    airings: Optional[List[Dict[str, Any]]] = None
     for path in waiting_splits(recordings_dir):
         if in_use(path):
             continue
-        made.extend(split_recording(path))
+        if airings is None:
+            airings = _history_airings()
+        made.extend(split_recording(path, airings))
     return made
 
 

@@ -92,6 +92,56 @@ class TestSplit(unittest.TestCase):
         self.assertEqual(side["listed_start"], START + 60)
         self.assertEqual(os.path.getsize(path), len(data))
 
+    def test_one_episode_is_trimmed_to_a_minute_before_and_three_after(self):
+        path, data = self._run(60 + 1800 + 600, titles=("Ep A",))
+        self.assertEqual(split_recording(path, airings=[]), [path])
+        side = read_sidecar(path)
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), data[:(60 + 1800 + PAD_LATE_SEC) * RATE])
+        self.assertEqual((side["start"], side["end"], side["cut"]), (START, START + 60 + 1800 + PAD_LATE_SEC, True))
+        self.assertEqual(split_recording(path, airings=[]), [])
+
+    def _manual(self, seconds, title="Live Broadcast"):
+        packets = seconds * RATE // 188
+        data = b"".join(bytes([i % 251]) * 188 for i in range(packets))
+        path = os.path.join(self.dir, "65.3-TOONS_x_20260926_200000.ts")
+        with open(path, "wb") as f:
+            f.write(data)
+        write_sidecar(path, {
+            "title": title, "station": "TOONS", "channel": "65.3", "tune_name": "TOONS",
+            "start": START, "end": START + seconds, "status": "complete",
+            "marks": [[START + m * 60, m * 60 * RATE] for m in range(1, seconds // 60)],
+        })
+        return path, data
+
+    def _airing(self, offset, title, seconds=1800, channel="65.3"):
+        return {"channel": channel, "title": title, "start": START + offset, "duration_sec": seconds}
+
+    def test_a_recording_without_a_listing_splits_by_what_aired(self):
+        path, _ = self._manual(3600 + 120)
+        airings = [self._airing(0, "Bugs"), self._airing(1800, "Daffy"), self._airing(0, "Other", channel="5.1")]
+        made = split_recording(path, airings=airings)
+        self.assertEqual([read_sidecar(p)["title"] for p in made], ["Bugs", "Daffy"])
+
+    def test_a_few_minutes_of_the_next_show_are_trimmed_off(self):
+        path, data = self._manual(1800 + 300)
+        made = split_recording(path, airings=[self._airing(0, "Bugs"), self._airing(1800, "Daffy")])
+        self.assertEqual(made, [path])
+        self.assertEqual(read_sidecar(path)["title"], "Bugs")
+        self.assertEqual(os.path.getsize(path), (1800 + PAD_LATE_SEC) * RATE)
+
+    def test_a_game_keeps_every_minute(self):
+        path, data = self._manual(1800 + 900, title="NFL Football")
+        split_recording(path, airings=[self._airing(0, "NFL Football")])
+        self.assertEqual(os.path.getsize(path), len(data))
+        self.assertTrue(read_sidecar(path)["cut"])
+
+    def test_a_finished_recording_is_left_alone(self):
+        path, data = self._manual(1800 + 900)
+        write_sidecar(path, dict(read_sidecar(path), ads=[]))
+        self.assertEqual(split_recording(path, airings=[self._airing(0, "Bugs")]), [])
+        self.assertEqual(os.path.getsize(path), len(data))
+
     def test_a_crash_after_one_piece_resumes(self):
         path, data = self._run(60 + 5400 + PAD_LATE_SEC)
         side = read_sidecar(path)
