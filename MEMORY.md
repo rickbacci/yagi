@@ -14,7 +14,7 @@ Guide is broadcast EIT only, every 3h on a free tuner; it yields to live at once
 
 Tests: `python3 -m unittest` from the root; `tests/__init__.py` sandboxes XDG. Never `/tmp`.
 
-Richard: ADD. Dry sarcasm, short. One task in the first sentence. Park the rest on the todo list. Before any install, say what, from where, and how trusted.
+Richard: ADD. Dry sarcasm, short. One task first. Every reply ends with the open list: numbered, letters for choices. Before any install, say what, from where, and how trusted.
 
 Super+W quits. The HUD starts detached `sync --reap`; it deletes `live.ts` once the window and tune lock are gone.
 

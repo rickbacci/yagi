@@ -24,7 +24,7 @@ State: `~/.config/yagi/`. Library: `~/Videos/TV`. Optional `station_map.json` (c
 
 ## Honesty
 
-This is a DualHD-shaped appliance, not a generic PVR.
+Built and tested on one Hauppauge WinTV-dualHD. See Tuners below.
 
 - Two ATSC adapters, shared: live TV, recordings, scans, and Guide updates each take a free one. Recording what you watch shares live TV's tuner; changing to another tower then moves live TV to the free one, or asks you to stop a recording. A one-tuner box can watch, or record, not both. Nothing takes a tuner that is live, recording, or scanning; a Guide update gives way.
 - Ad skipping uses Comskip if installed (`omarchy-pkg-aur-add comskip`), otherwise ffmpeg's black-frame and silence detection, which misses more.
@@ -32,6 +32,20 @@ This is a DualHD-shaped appliance, not a generic PVR.
 - Super+K is Omarchy’s keybindings overlay. It does not open this flyout. Use the antenna, or bind `omarchy-shell -q shell toggle richardb.yagi` (this box: Super+Shift+T in `~/.config/hypr/bindings.lua`).
 - State JSON is not all `0600`.
 - Version in `manifest.json` is `0.1.0`. Not a published 1.0.
+
+## Tuners
+
+Yagi needs an ATSC 1.0 tuner that Linux drives itself: one that shows up as `/dev/dvb/adapterN/frontend0` and lists ATSC among its delivery systems (`dvb-fe-tool -a N`). It uses every adapter it finds.
+
+| Tuner | Status |
+| --- | --- |
+| Hauppauge WinTV-dualHD, ATSC model (`2040:826d`, LGDT3306A + Si2157) | Tested. Two tuners. |
+| Other LGDT3306A + Si2157 USB sticks (Hauppauge WinTV-HVR-955Q, WinTV-quadHD ATSC) | Same chips and kernel driver; untested. |
+| Other ATSC tuners with a Linux DVB driver | Should work; untested. |
+| HDHomeRun and other network tuners | No. They have no `/dev/dvb` device. |
+| ATSC 3.0 / NextGen TV | No. Linux has no drivers, and many stations encrypt it. |
+
+One tuner watches or records, not both at once, except that recording the channel you watch copies it from live TV. Two is what this is built and tested on. More should work, but that is untested.
 
 ## Install
 
