@@ -53,15 +53,15 @@ class TestRecordingsTabs(unittest.TestCase):
         ])
         self.assertEqual(out["rows"], [
             "Today",
-            "Cartoon All-Stars | ● Recording since 10:00 PM · 30 min · 65.3 TOONS · 12.0 MB",
-            "Bugs Bunny and Friends | 8:03–8:11 PM · 8 min · 65.3 TOONS · 1 ad break · 12.0 MB",
+            "Cartoon All-Stars | ● Recording · 30 min · 12.0 MB",
+            "Bugs Bunny and Friends | 8 min · 12.0 MB · skips 1 ad break",
             "Yesterday · Fri Sep 25",
-            "M*A*S*H | 7:29–8:03 PM · 34 min · 65.3 TOONS · 3 ad breaks · 12.0 MB",
+            "M*A*S*H | 34 min · 12.0 MB · skips 3 ad breaks",
         ])
 
-    def test_a_span_across_noon_keeps_both_halves(self):
+    def test_an_empty_file_says_so_instead_of_a_size(self):
         out = self._run(recs=[rec("Morning", NOW - 12 * 3600 + 1800, 120, playable=False)])
-        self.assertEqual(out["rows"][1], "Morning | 11:00 AM–1:00 PM · 2 h · 65.3 TOONS · nothing recorded")
+        self.assertEqual(out["rows"][1], "Morning | 2 h · nothing recorded")
 
     def test_scheduled_lists_recording_then_waiting_then_series(self):
         out = self._run(

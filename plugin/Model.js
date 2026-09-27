@@ -486,23 +486,17 @@ function recordedRows(sorted, nowUnix) {
   return out
 }
 
+// How much is recorded, its size, and the ad breaks playback skips.
 function recordingLine(rec, nowUnix) {
   if (!rec) return ""
   var start = recordingStart(rec)
-  var where = ((rec.channel_number || "") + " " + (rec.station || "")).trim()
+  var live = recordingLive(rec)
   var parts = []
-  if (recordingLive(rec)) {
-    parts.push("● Recording since " + formatClock(start))
-    parts.push(formatLength(nowUnix - start))
-  } else {
-    var end = Number(rec.end || rec.mtime) || start
-    parts.push(formatSpan(start, end))
-    parts.push(formatLength(end - start))
-  }
-  if (where) parts.push(where)
-  if (rec.ads > 0) parts.push(rec.ads === 1 ? "1 ad break" : rec.ads + " ad breaks")
-  if (rec.playable === false && !recordingLive(rec)) parts.push("nothing recorded")
+  if (live) parts.push("● Recording")
+  parts.push(formatLength((live ? nowUnix : (Number(rec.end || rec.mtime) || start)) - start))
+  if (rec.playable === false && !live) parts.push("nothing recorded")
   else if (rec.size_formatted) parts.push(rec.size_formatted)
+  if (rec.ads > 0) parts.push(rec.ads === 1 ? "skips 1 ad break" : "skips " + rec.ads + " ad breaks")
   return parts.join(" · ")
 }
 
