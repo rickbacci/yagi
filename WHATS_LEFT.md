@@ -2,10 +2,10 @@
 
 Next up, in order (Richard's choices, Sep 27):
 
+0. When the VHF antenna and combiner arrive: `yagi signal check 8.1 --adapter 0` and `--adapter 1`, before and after. FOX (RF 8) blocking on Sep 27 was house noise: an electric griddle and a hot server 4 ft away. With both off, 8.1 read clean on both tuners at about 21 dB.
 1. Release cleanup, then publish 0.1.0 as a fresh single-commit repo: README for strangers, trim personal lines from `AGENTS.md` and the docs, move `MEMORY.md` facts into code comments, untrack `MEMORY.md`, `.cursor/rules/`, and this file, fresh-clone install test in a scratch HOME. Undecided: (a) where to publish, GitHub or a Cursor-hosted repo; (b) ship `markets/cleveland.json` as the example market or leave it out; (c) submit the Omarchy plugin listing after the fresh-clone test or later.
 2. Scratch cleanup: `mockups/`, `.icons/`, `icon-preview/`, `.worktrees/components`, `.lint/`, `.t/`, and `~/.cache/yagi/trim-backup` once the trimmed M*A*S*H and Cartoon All-Stars look right.
 3. After 0.1.0: move state and actions out of `plugin/BarWidget.qml` (about 1,950 lines).
-4. Undecided, low priority: show damaged video as blocks (now) or skip broken frames (short freezes).
 
 Open:
 
