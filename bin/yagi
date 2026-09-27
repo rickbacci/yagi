@@ -312,23 +312,13 @@ def cmd_guide(args):
 
 
 def load_favorites() -> list:
-    if os.path.exists(FAVORITES_JSON_PATH):
-        try:
-            with open(FAVORITES_JSON_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-        except Exception:
-            pass
-    return []
+    from engine.favorites import load_favorites as load
+    return load(FAVORITES_JSON_PATH, CHANNELS_JSON_PATH)
 
 
 def save_favorites(favorites: list) -> None:
-    os.makedirs(os.path.dirname(FAVORITES_JSON_PATH), exist_ok=True)
-    tmp = FAVORITES_JSON_PATH + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(favorites, f, indent=2)
-    os.replace(tmp, FAVORITES_JSON_PATH)
+    from engine.favorites import save_favorites as save
+    save(favorites, FAVORITES_JSON_PATH)
 
 
 def load_ui_prefs() -> dict:
@@ -403,43 +393,38 @@ def cmd_pref(args):
 
 
 def cmd_favorite(args):
+    from engine.favorites import favorite_key, favorite_label
     favs = load_favorites()
     action = args.action or "list"
-    target = args.channel
+    target = favorite_key(args.channel, CHANNELS_JSON_PATH) if args.channel else args.channel
 
     if action == "list" or not target:
         if not favs:
             print("No favorite channels saved yet.")
-            print("Add one with: yagi favorite toggle <channel_name>")
+            print("Add one with: yagi favorite toggle <channel>")
             return
         print(f"⭐ Favorite Channels ({len(favs)} total):")
         for f in favs:
-            print(f"  ★ {f}")
+            print(f"  ★ {favorite_label(f, CHANNELS_JSON_PATH)}")
         return
 
+    label = favorite_label(target, CHANNELS_JSON_PATH)
+    if action == "toggle":
+        action = "remove" if target in favs else "add"
     if action == "add":
         if target not in favs:
             favs.append(target)
             save_favorites(favs)
-            print(f"★ Added '{target}' to favorites.")
+            print(f"★ Added {label} to favorites.")
         else:
-            print(f"'{target}' is already in favorites.")
+            print(f"{label} is already in favorites.")
     elif action == "remove":
         if target in favs:
             favs.remove(target)
             save_favorites(favs)
-            print(f"Removed '{target}' from favorites.")
+            print(f"☆ Removed {label} from favorites.")
         else:
-            print(f"'{target}' was not in favorites.")
-    elif action == "toggle":
-        if target in favs:
-            favs.remove(target)
-            save_favorites(favs)
-            print(f"☆ Removed '{target}' from favorites.")
-        else:
-            favs.append(target)
-            save_favorites(favs)
-            print(f"★ Added '{target}' to favorites.")
+            print(f"{label} was not in favorites.")
 
 
 def cmd_hidden(args):

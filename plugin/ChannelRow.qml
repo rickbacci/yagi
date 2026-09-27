@@ -17,7 +17,7 @@ CursorSurface {
   readonly property string stationName: Model.getDisplayTitle(modelData)
   readonly property string channelBadge: Model.getChannelBadge(modelData)
   readonly property bool isRecordingHere: chItem.tv.isChannelRecording(modelData.tune_name || modelData.channel_number)
-  readonly property bool isFav: chItem.tv.isFavorite(modelData.name) || (modelData.tune_name && chItem.tv.isFavorite(modelData.tune_name))
+  readonly property bool isFav: chItem.tv.channelIsFavorite(modelData)
   readonly property bool hiddenView: chItem.tv.channelFilter === "hidden" || chItem.tv.channelIsHidden(chItem.modelData)
 
   height: Math.max(Style.space(36), chLine.implicitHeight + Style.space(12))
@@ -74,7 +74,7 @@ CursorSurface {
     tooltipText: chItem.isFav ? "Remove favorite" : "Add favorite"
     foreground: chItem.isFav ? Color.accent : Color.muted
     fontFamily: chItem.tv.bar.fontFamily
-    onClicked: chItem.tv.toggleFavorite(chItem.modelData.tune_name || chItem.modelData.name)
+    onClicked: chItem.tv.toggleFavorite(chItem.tv.listedKey(chItem.modelData))
   }
 
   Column {

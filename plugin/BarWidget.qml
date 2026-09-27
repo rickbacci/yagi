@@ -784,9 +784,15 @@ BarWidget {
     return false
   }
 
+  // Favorites are channel numbers; a name is left from before and matches by name.
   function channelIsFavorite(ch) {
     if (!ch || !root.favoritesData) return false
-    return root.favoritesData.indexOf(ch.name) !== -1 || (ch.tune_name && root.favoritesData.indexOf(ch.tune_name) !== -1)
+    var num = String(ch.channel_number || "")
+    for (var i = 0; i < root.favoritesData.length; i++) {
+      var f = String(root.favoritesData[i])
+      if (/^\d+(\.\d+)?$/.test(f) ? f === num : (f === ch.name || f === ch.tune_name)) return true
+    }
+    return false
   }
 
   readonly property int listedChannelCount: (root.channelsData || []).length
@@ -1065,9 +1071,6 @@ BarWidget {
     hiddenProc.running = true
   }
 
-  function isFavorite(chName) {
-    return root.favoritesData && root.favoritesData.indexOf(chName) !== -1
-  }
 
   function applyGuide(jsonText) {
     try {

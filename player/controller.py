@@ -335,16 +335,8 @@ def channel_index(channels: List[Dict[str, Any]], query: Optional[str]) -> int:
 
 
 def is_favorite_channel(ch: Optional[Dict[str, Any]], favorites: Optional[List[Any]]) -> bool:
-    if not ch:
-        return False
-    favs = {str(item).strip().lower() for item in (favorites or []) if item}
-    if not favs:
-        return False
-    for key in ("name", "tune_name", "raw_name", "callsign", "channel_number", "network"):
-        ident = str(ch.get(key) or "").strip().lower()
-        if ident and ident in favs:
-            return True
-    return False
+    from engine.favorites import is_favorite
+    return is_favorite(ch, favorites)
 
 
 def surfable_channels(
@@ -379,15 +371,8 @@ def load_surf_prefs() -> Dict[str, Any]:
 
 
 def load_favorites_list() -> List[Any]:
-    if os.path.exists(FAVORITES_JSON_PATH):
-        try:
-            with open(FAVORITES_JSON_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-        except Exception:
-            pass
-    return []
+    from engine.favorites import load_favorites
+    return load_favorites(FAVORITES_JSON_PATH)
 
 
 class MpvController:
