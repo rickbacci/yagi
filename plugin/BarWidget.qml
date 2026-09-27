@@ -1037,13 +1037,12 @@ BarWidget {
     anchors.centerIn: parent
     spacing: Style.space(6)
 
-    Text {
-      id: iconText
-      textFormat: Text.PlainText
-      text: "󰢹"
-      color: root.bar.barForeground
-      font.family: root.bar.fontFamily
-      font.pixelSize: Style.font.body
+    YagiIcon {
+      id: barIcon
+      size: Math.round(Style.font.body * 1.35)
+      color: root.isRecording ? Color.urgent
+           : (root.activeChannelName !== "" || root.isScanning) ? Color.accent
+           : root.bar.barForeground
       anchors.verticalCenter: parent.verticalCenter
     }
 

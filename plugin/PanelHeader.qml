@@ -18,12 +18,10 @@ Item {
     color: Style.normalFillFor(header.tv.bar.foreground, Color.accent)
     borderSpec: Border.controlSpec("normal", header.tv.bar.foreground, Color.accent)
 
-    Text {
+    YagiIcon {
       anchors.centerIn: parent
-      text: header.tv.isScanning ? "󰛳" : "󰢹"
+      size: Math.round(Style.font.display * 1.1)
       color: Color.accent
-      font.family: header.tv.bar.fontFamily
-      font.pixelSize: Style.font.display
     }
   }
 
