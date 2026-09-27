@@ -30,6 +30,8 @@ MAX_MARKS = 2000
 KEEP_SHARE = 0.5
 KEEP_MIN_SEC = 15 * 60
 FINISH_LOCK_KEY = "recording-finish"
+# An ad break this close inside the listing's edge is still the edge: station clocks drift.
+SNAP_SLACK_SEC = 30
 TS_PACKET = 188
 COPY_CHUNK = 8 * 1024 * 1024
 
@@ -282,6 +284,7 @@ def _episode_side(side: Dict[str, Any], ep: Dict[str, Any], source: str, lo: int
         "start": int(a),
         "end": int(b),
         "listed_start": int(ep.get("start_unix") or 0) or None,
+        "listed_end": _end(ep) or None,
         "byte_rate": round((hi - lo) / (b - a), 1) if b > a else None,
         "rule_id": ep.get("rule_id") or side.get("rule_id") or "",
         "status": "complete",
@@ -302,10 +305,23 @@ def in_use(path: str) -> bool:
 
 
 def _uncut(side: Dict[str, Any]) -> bool:
-    """A finished recording nothing has split, trimmed, or marked for ads yet."""
+    """A finished recording nothing has split or trimmed yet. Ad marks move with a trim."""
     if str(side.get("status") or "") != "complete":
         return False
-    return len(side.get("episodes") or []) >= 2 or ("ads" not in side and not side.get("cut"))
+    return len(side.get("episodes") or []) >= 2 or not side.get("cut")
+
+
+def _shift_ads(ads: Any, offset: float, length: float) -> List[List[float]]:
+    """Ad breaks after the first offset seconds are cut away, clipped to what is left."""
+    out = []
+    for pair in ads if isinstance(ads, list) else []:
+        if not (isinstance(pair, list) and len(pair) == 2):
+            continue
+        a, b = float(pair[0]) - offset, float(pair[1]) - offset
+        a, b = max(0.0, a), min(float(length), b)
+        if b - a >= 1:
+            out.append([round(a, 2), round(b, 2)])
+    return out
 
 
 def split_recording(path: str, airings: Optional[List[Dict[str, Any]]] = None) -> List[str]:
@@ -329,13 +345,15 @@ def split_recording(path: str, airings: Optional[List[Dict[str, Any]]] = None) -
     if len(pieces) < 2:
         only = pieces[0][0] if pieces else None
         named = {"title": only["title"], "synopsis": only.get("synopsis", ""), "rule_id": only.get("rule_id") or side.get("rule_id") or "",
-                 "listed_start": int(only.get("start_unix") or 0) or None} if only else {}
+                 "listed_start": int(only.get("start_unix") or 0) or None, "listed_end": _end(only) or None} if only else {}
         if only and not is_game_title(only["title"]):
             lo, hi = pieces[0][1], pieces[0][2]
             if lo > 0 or hi < size:
                 _trim(path, lo, hi)
                 a, b = only["span"][:2]
                 named.update(start=int(a), end=int(b), byte_rate=round((hi - lo) / (b - a), 1) if b > a else None, marks=[])
+                if "ads" in side:
+                    named["ads"] = _shift_ads(side.get("ads"), a - int(side.get("start") or a), b - a)
         patch_sidecar(path, episodes=[], cut=True, **named)
         return [path]
     made: List[str] = []
@@ -401,8 +419,64 @@ def split_waiting(recordings_dir: str) -> List[str]:
     return made
 
 
+def _listed_end(side: Dict[str, Any], airings: Optional[List[Dict[str, Any]]]) -> int:
+    if side.get("listed_end"):
+        return int(side["listed_end"])
+    listed, channel = int(side.get("listed_start") or 0), str(side.get("channel") or "")
+    for row in airings or []:
+        if str(row.get("channel") or "") == channel and int(row.get("start") or 0) == listed:
+            return listed + int(row.get("duration_sec") or 0)
+    return 0
+
+
+def _snappable(side: Dict[str, Any]) -> bool:
+    return (str(side.get("status") or "") == "complete" and bool(side.get("cut")) and not side.get("snapped")
+            and isinstance(side.get("ads"), list) and bool(side.get("listed_start"))
+            and not is_game_title(str(side.get("title") or "")))
+
+
+def snap_to_breaks(path: str, airings: Optional[List[Dict[str, Any]]] = None) -> bool:
+    """Trim to the ad break at the listing's edge: networks put one between shows. True when cut."""
+    from engine.dvr import patch_sidecar, read_sidecar
+
+    side = read_sidecar(path)
+    if not _snappable(side):
+        return False
+    start, end = int(side.get("start") or 0), int(side.get("end") or 0)
+    listed_end = _listed_end(side, _history_airings() if airings is None else airings)
+    length = end - start
+    if length <= 0 or listed_end <= 0:
+        patch_sidecar(path, snapped=True)
+        return False
+    ls, le = int(side["listed_start"]) - start, listed_end - start
+    ads = [p for p in side["ads"] if isinstance(p, list) and len(p) == 2]
+    lead = max([float(b) for a, b in ads if float(b) <= ls + SNAP_SLACK_SEC] or [0.0])
+    tail = min([float(a) for a, b in ads if float(a) >= le - SNAP_SLACK_SEC] or [float(length)])
+    if (lead <= 0 and tail >= length) or tail - lead < (le - ls) - 60:
+        patch_sidecar(path, snapped=True)
+        return False
+    size = os.path.getsize(path)
+    rate = float(side.get("byte_rate") or 0) or size / length
+    lo, hi = _align_down(lead * rate), _align_up(tail * rate, size)
+    _trim(path, lo, hi)
+    patch_sidecar(path, start=int(start + lead), end=int(start + tail), snapped=True,
+                  ads=_shift_ads(ads, lead, tail - lead), byte_rate=round((hi - lo) / (tail - lead), 1))
+    return True
+
+
+def waiting_snaps(recordings_dir: str) -> List[str]:
+    from engine.dvr import read_sidecar
+
+    try:
+        entries = list(os.scandir(recordings_dir))
+    except OSError:
+        return []
+    return sorted(e.path for e in entries
+                  if e.name.endswith(".ts") and e.is_file(follow_symlinks=False) and _snappable(read_sidecar(e.path)))
+
+
 def finish_recordings(recordings_dir: str, min_bytes: int) -> List[str]:
-    """Split finished runs, then mark ad breaks. One finisher at a time; returns files touched."""
+    """Split finished runs, mark ad breaks, then snap edges to them. One finisher at a time; returns files touched."""
     from engine.ads import mark_ads, waiting_marks
 
     touched: List[str] = []
@@ -412,6 +486,14 @@ def finish_recordings(recordings_dir: str, min_bytes: int) -> List[str]:
             for path in waiting_marks(recordings_dir, min_bytes):
                 mark_ads(path)
                 touched.append(path)
+            airings: Optional[List[Dict[str, Any]]] = None
+            for path in waiting_snaps(recordings_dir):
+                if in_use(path):
+                    continue
+                if airings is None:
+                    airings = _history_airings()
+                if snap_to_breaks(path, airings):
+                    touched.append(path)
     except TimeoutError:
         return []
     return touched
@@ -420,4 +502,4 @@ def finish_recordings(recordings_dir: str, min_bytes: int) -> List[str]:
 def finish_waiting(recordings_dir: str, min_bytes: int) -> bool:
     from engine.ads import waiting_marks
 
-    return bool(waiting_splits(recordings_dir) or waiting_marks(recordings_dir, min_bytes))
+    return bool(waiting_splits(recordings_dir) or waiting_marks(recordings_dir, min_bytes) or waiting_snaps(recordings_dir))

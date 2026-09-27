@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from engine.dvr import read_sidecar, write_sidecar
-from engine.episodes import byte_at, chain_from, grow_runs, plan_pieces, run_stop, split_recording, split_waiting
+from engine.episodes import byte_at, chain_from, grow_runs, plan_pieces, run_stop, snap_to_breaks, split_recording, split_waiting
 from engine.schedule import PAD_LATE_SEC, load_schedule, save_schedule
 
 RATE = 1880  # bytes a second, ten TS packets
@@ -136,10 +136,42 @@ class TestSplit(unittest.TestCase):
         self.assertEqual(os.path.getsize(path), len(data))
         self.assertTrue(read_sidecar(path)["cut"])
 
-    def test_a_finished_recording_is_left_alone(self):
+    def test_a_recording_marked_before_the_trim_is_trimmed_and_its_breaks_move(self):
         path, data = self._manual(1800 + 900)
-        write_sidecar(path, dict(read_sidecar(path), ads=[]))
-        self.assertEqual(split_recording(path, airings=[self._airing(0, "Bugs")]), [])
+        write_sidecar(path, dict(read_sidecar(path), ads=[[100, 130], [200, 260], [2000, 2100]]))
+        self.assertEqual(split_recording(path, airings=[self._airing(180, "Bugs")]), [path])
+        side = read_sidecar(path)
+        self.assertEqual((side["start"], side["end"]), (START + 120, START + 180 + 1800 + PAD_LATE_SEC))
+        self.assertEqual(side["ads"], [[0, 10], [80, 140], [1880, 1980]])
+        self.assertEqual(side["listed_end"], START + 180 + 1800)
+        self.assertEqual(split_recording(path, airings=[]), [])
+
+    def _snappable(self, ads, title="Bugs"):
+        path, data = self._manual(2100, title=title)
+        write_sidecar(path, dict(read_sidecar(path), title=title, cut=True, marks=[], byte_rate=RATE, ads=ads,
+                                 listed_start=START + 30, listed_end=START + 30 + 1800))
+        return path, data
+
+    def test_the_edges_snap_to_the_breaks_between_shows(self):
+        path, data = self._snappable([[10, 25], [900, 960], [1850, 1880]])
+        self.assertTrue(snap_to_breaks(path, airings=[]))
+        side = read_sidecar(path)
+        self.assertEqual((side["start"], side["end"], side["snapped"]), (START + 25, START + 1850, True))
+        self.assertEqual(side["ads"], [[875, 935]])
+        lo = 25 * RATE - (25 * RATE) % 188
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), data[lo:1850 * RATE])
+        self.assertFalse(snap_to_breaks(path, airings=[]))
+
+    def test_a_break_inside_the_show_is_not_an_edge(self):
+        path, data = self._snappable([[600, 660], [1700, 1760]])
+        self.assertFalse(snap_to_breaks(path, airings=[]))
+        self.assertEqual(os.path.getsize(path), len(data))
+        self.assertTrue(read_sidecar(path)["snapped"])
+
+    def test_a_game_never_snaps(self):
+        path, data = self._snappable([[10, 25], [1850, 1880]], title="NFL Football")
+        self.assertFalse(snap_to_breaks(path, airings=[]))
         self.assertEqual(os.path.getsize(path), len(data))
 
     def test_a_crash_after_one_piece_resumes(self):
