@@ -411,6 +411,153 @@ function formatClock(unix) {
   return h + ":" + (m < 10 ? "0" : "") + m + " " + (h24 >= 12 ? "PM" : "AM")
 }
 
+var DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+var MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+function _midnight(unix) {
+  var d = new Date(Number(unix) * 1000)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime() / 1000
+}
+
+function formatDay(unix) {
+  var d = new Date(Number(unix) * 1000)
+  return DAY_NAMES[d.getDay()] + " " + MONTH_NAMES[d.getMonth()] + " " + d.getDate()
+}
+
+// "Today", "Yesterday · Fri Sep 25", then "Thu Sep 24".
+function dayLabel(unix, nowUnix) {
+  var days = Math.round((_midnight(nowUnix) - _midnight(unix)) / 86400)
+  if (days <= 0) return "Today"
+  if (days === 1) return "Yesterday · " + formatDay(unix)
+  return formatDay(unix)
+}
+
+// "Today", "Tomorrow", "Mon", then "Mon Oct 5", for things still to come.
+function dayWord(unix, nowUnix) {
+  var days = Math.round((_midnight(unix) - _midnight(nowUnix)) / 86400)
+  if (days <= 0) return "Today"
+  if (days === 1) return "Tomorrow"
+  if (days < 7) return DAY_NAMES[new Date(unix * 1000).getDay()]
+  return formatDay(unix)
+}
+
+// "8:03–8:11 PM"; the first AM/PM goes when both match.
+function formatSpan(start, end) {
+  var a = formatClock(start)
+  var b = formatClock(end)
+  if (a.slice(-2) === b.slice(-2)) a = a.slice(0, -3)
+  return a + "–" + b
+}
+
+function formatLength(sec) {
+  var min = Math.max(0, Math.round(Number(sec) / 60))
+  if (min < 60) return min + " min"
+  var h = Math.floor(min / 60)
+  var m = min % 60
+  return h + " h" + (m ? " " + m + " min" : "")
+}
+
+function recordingStart(rec) {
+  return Number(rec && (rec.start || rec.mtime)) || 0
+}
+
+function recordingLive(rec) {
+  return !!rec && rec.status === "recording" && !rec.end
+}
+
+// Newest first, by when it aired.
+function sortRecordings(recs) {
+  return (recs || []).slice().sort(function(a, b) { return recordingStart(b) - recordingStart(a) })
+}
+
+// Day headers between recordings; index points into the sorted list.
+function recordedRows(sorted, nowUnix) {
+  var out = []
+  var last = ""
+  for (var i = 0; i < (sorted || []).length; i++) {
+    var label = dayLabel(recordingStart(sorted[i]), nowUnix)
+    if (label !== last) {
+      out.push({ header: label, index: -1 })
+      last = label
+    }
+    out.push({ header: "", index: i, rec: sorted[i] })
+  }
+  return out
+}
+
+function recordingLine(rec, nowUnix) {
+  if (!rec) return ""
+  var start = recordingStart(rec)
+  var where = ((rec.channel_number || "") + " " + (rec.station || "")).trim()
+  var parts = []
+  if (recordingLive(rec)) {
+    parts.push("● Recording since " + formatClock(start))
+    parts.push(formatLength(nowUnix - start))
+  } else {
+    var end = Number(rec.end || rec.mtime) || start
+    parts.push(formatSpan(start, end))
+    parts.push(formatLength(end - start))
+  }
+  if (where) parts.push(where)
+  if (rec.ads > 0) parts.push(rec.ads === 1 ? "1 ad break" : rec.ads + " ad breaks")
+  if (rec.playable === false && !recordingLive(rec)) parts.push("nothing recorded")
+  else if (rec.size_formatted) parts.push(rec.size_formatted)
+  return parts.join(" · ")
+}
+
+// Scheduled tab: what is recording, what waits, then each series.
+function scheduledRows(active, waiting, rules, nowUnix, stationOf) {
+  var out = []
+  var upcoming = []
+  var i
+  for (i = 0; i < (active || []).length; i++) {
+    var a = active[i]
+    if (!a) continue
+    var aStart = Number(a.start_time) || nowUnix
+    upcoming.push({ kind: "active", key: "active:" + (a.session_id || i), item: a,
+                    title: a.program_title || a.station || "Recording",
+                    line: "Recording until " + formatClock(aStart + (Number(a.duration_seconds) || 0))
+                          + " · " + ((a.channel_number || "") + " " + (a.station || "")).trim(),
+                    live: true, series: false })
+  }
+  for (i = 0; i < (waiting || []).length; i++) {
+    var w = waiting[i]
+    if (!w) continue
+    var ws = Number(w.start_unix) || 0
+    var wLine = ws ? dayWord(ws, nowUnix) + " " + formatSpan(ws, ws + (Number(w.duration_sec) || 0)) : (w.clock || "")
+    upcoming.push({ kind: "waiting", key: "waiting:" + w.id, item: w, title: w.title || "Scheduled",
+                    line: (w.status === "missed" ? "Missed · " : "") + wLine + " · " + (w.display_name || w.tune_name || ""),
+                    missed: w.status === "missed", series: !!w.rule_id })
+  }
+  if (upcoming.length) out.push({ kind: "header", key: "h:upcoming", title: "Upcoming" })
+  out = out.concat(upcoming)
+  var series = []
+  for (i = 0; i < (rules || []).length; i++) {
+    var r = rules[i]
+    if (!r || !r.id) continue
+    var next = 0
+    for (var j = 0; j < (waiting || []).length; j++) {
+      var s = waiting[j]
+      if (s && s.rule_id === r.id && s.status !== "missed" && (!next || s.start_unix < next)) next = Number(s.start_unix) || 0
+    }
+    var station = (stationOf && stationOf(r.channel)) || r.tune_name || ""
+    series.push({ kind: "series", key: "series:" + r.id, item: r, title: r.title || "Series",
+                  line: ((r.channel || "") + " " + station).trim() + " · "
+                        + (next ? "next " + dayWord(next, nowUnix) + " " + formatClock(next) : "next not listed yet"),
+                  keep: Number(r.keep_last) || 0 })
+  }
+  if (series.length) out.push({ kind: "header", key: "h:series", title: "Series" })
+  out = out.concat(series)
+  var pick = 0
+  for (i = 0; i < out.length; i++) out[i].pick = out[i].kind === "header" ? -1 : pick++
+  return out
+}
+
+function scheduledCount(rows) {
+  return (rows || []).filter(function(r) { return r.kind !== "header" }).length
+}
+
 // The grid opens on the half hour now is in and runs to the last listing,
 // three hours at least and eight at most. Listings reach about five hours.
 var GRID_STEP = 1800

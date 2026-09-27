@@ -8,6 +8,8 @@ Column {
   property real outerSpacing: 0
   property alias flick: recFlick
   property alias rows: recRepeater
+  readonly property bool onRecorded: library.tv.libraryTab === "recorded"
+  readonly property int shownCount: library.onRecorded ? library.tv.librarySorted.length : library.tv.scheduledPicks.length
 
   visible: library.tv.libraryModalOpen
   spacing: Style.space(10)
@@ -93,14 +95,40 @@ Column {
     }
   }
 
+  Row {
+    spacing: Style.space(4)
+
+    Button {
+      text: "Recorded"
+      selected: library.onRecorded
+      fontSize: Style.font.caption
+      foreground: library.tv.bar.foreground
+      onClicked: library.tv.showLibraryTab("recorded")
+    }
+
+    Button {
+      text: library.tv.scheduledPicks.length ? "Scheduled (" + library.tv.scheduledPicks.length + ")" : "Scheduled"
+      tooltipText: "What will record, and each series"
+      selected: !library.onRecorded
+      fontSize: Style.font.caption
+      foreground: library.tv.bar.foreground
+      onClicked: library.tv.showLibraryTab("scheduled")
+    }
+  }
+
   Item {
-    visible: library.tv.recordingsData.length === 0
+    visible: library.shownCount === 0
     width: parent.width
     height: Style.space(80)
 
     Text {
       anchors.centerIn: parent
-      text: "Record from the Guide, then play it back here."
+      width: parent.width
+      horizontalAlignment: Text.AlignHCenter
+      wrapMode: Text.Wrap
+      textFormat: Text.PlainText
+      text: library.onRecorded ? "Record from the Guide, then play it back here."
+                               : "Nothing scheduled. In the Guide, Record takes one airing and Record series takes every one."
       color: Color.muted
       font.family: library.tv.bar.fontFamily
       font.pixelSize: Style.font.caption
@@ -108,13 +136,13 @@ Column {
   }
 
   Item {
-    visible: library.tv.recordingsData.length > 0
+    visible: library.shownCount > 0
     width: parent.width
     implicitHeight: height
     height: {
       if (!visible) return 0
       var content = recCol.implicitHeight
-      var room = library.tv.roomFor(libraryHeader.height + library.outerSpacing + Style.space(24))
+      var room = library.tv.roomFor(libraryHeader.height + library.outerSpacing + Style.space(60))
       if (content > 0) return Math.min(content, room)
       return Math.min(Style.space(120), room)
     }
@@ -136,13 +164,59 @@ Column {
 
         Repeater {
           id: recRepeater
-          model: library.tv.recordingsData
-          delegate: RecordingRow {
-            tv: library.tv
+          model: library.onRecorded ? library.tv.recordedRows : library.tv.scheduledRows
+          delegate: Item {
+            id: entry
+            required property var modelData
+            readonly property bool isHeader: library.onRecorded ? !!entry.modelData.header : entry.modelData.kind === "header"
+            readonly property int pick: library.onRecorded ? entry.modelData.index : entry.modelData.pick
             width: recCol.width
+            height: entry.isHeader ? headText.implicitHeight + Style.space(6) : Style.space(52)
+
+            Text {
+              id: headText
+              visible: entry.isHeader
+              anchors.bottom: parent.bottom
+              anchors.bottomMargin: Style.space(2)
+              textFormat: Text.PlainText
+              text: (library.onRecorded ? entry.modelData.header : entry.modelData.title) || ""
+              color: Color.muted
+              font.family: library.tv.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+
+            RecordingRow {
+              visible: library.onRecorded && !entry.isHeader
+              tv: library.tv
+              width: parent.width
+              rec: entry.modelData.rec || ({})
+              recIndex: entry.pick
+            }
+
+            ScheduledRow {
+              visible: !library.onRecorded && !entry.isHeader
+              tv: library.tv
+              width: parent.width
+              row: entry.modelData
+              pickIndex: entry.pick
+            }
           }
         }
       }
+    }
+  }
+
+  function revealCursor() {
+    var want = library.onRecorded ? library.tv.recCursorIndex : library.tv.schedCursorIndex
+    for (var i = 0; i < recRepeater.count; i++) {
+      var item = recRepeater.itemAt(i)
+      if (!item || item.isHeader || item.pick !== want) continue
+      var top = i > 0 && recRepeater.itemAt(i - 1).isHeader ? recRepeater.itemAt(i - 1).y : item.y
+      if (top < recFlick.contentY) recFlick.contentY = top
+      else if (item.y + item.height > recFlick.contentY + recFlick.height)
+        recFlick.contentY = item.y + item.height - recFlick.height
+      return
     }
   }
 }

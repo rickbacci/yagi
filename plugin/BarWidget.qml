@@ -88,6 +88,16 @@ BarWidget {
   property var ruleIds: ({})
   property var ruleKeep: ({})
   property var ruleByShow: ({})
+  property var ruleList: []
+
+  // Recordings page: two tabs, each with its own cursor.
+  property string libraryTab: "recorded"
+  property int schedCursorIndex: 0
+  readonly property var librarySorted: Model.sortRecordings(root.recordingsData)
+  readonly property var recordedRows: Model.recordedRows(root.librarySorted, root.gridNow)
+  readonly property var scheduledRows: Model.scheduledRows(root.activeRecordings, root.scheduleItems, root.ruleList,
+                                                           root.gridNow, root.stationFor)
+  readonly property var scheduledPicks: root.scheduledRows.filter(function(r) { return r.kind !== "header" })
   property string deleteArmed: ""
   property int guideCursor: 0
   property bool focusAfterTune: false
@@ -216,8 +226,10 @@ BarWidget {
     var ids = {}
     var keep = {}
     var byShow = {}
+    var list = []
     try {
       var rules = (JSON.parse(raw || "{}").rules) || []
+      list = rules
       for (var i = 0; i < rules.length; i++) {
         if (rules[i] && rules[i].id) {
           ids[rules[i].id] = true
@@ -230,6 +242,7 @@ BarWidget {
     root.ruleIds = ids
     root.ruleKeep = keep
     root.ruleByShow = byShow
+    root.ruleList = list
   }
 
   function toggleRecordAll(show) {
@@ -454,11 +467,38 @@ BarWidget {
     }
     root.guideStripOpen = false
     root.recCursorIndex = 0
+    root.schedCursorIndex = 0
+    root.libraryTab = "recorded"
     root.cursorActive = false
     root.libraryModalOpen = true
     recIndexProc.running = false
     recIndexProc.command = [root.binPath, "record", "list"]
     recIndexProc.running = true
+  }
+
+  function showLibraryTab(tab) {
+    root.libraryTab = tab
+    root.cursorActive = false
+    root.deleteArmed = ""
+  }
+
+  function openScheduled() {
+    if (!root.libraryModalOpen) root.toggleLibrary()
+    root.showLibraryTab("scheduled")
+  }
+
+  // Stop what records, drop what waits, end a series. Two presses, like delete.
+  function dropScheduled(row) {
+    if (!row) return
+    if (root.deleteArmed !== row.key) {
+      root.deleteArmed = row.key
+      deleteDisarm.restart()
+      return
+    }
+    root.deleteArmed = ""
+    if (row.kind === "active") root.stopRecord(root.recordingIdent(row.item))
+    else if (row.kind === "waiting") root.removeScheduled(row.item.id)
+    else if (row.kind === "series") root.toggleRecordAll({ id: row.item.id })
   }
 
   function selectChannel(chName) {
@@ -493,7 +533,7 @@ BarWidget {
   }
 
   function listLen() {
-    if (root.libraryModalOpen) return root.recordingsData ? root.recordingsData.length : 0
+    if (root.libraryModalOpen) return root.libraryTab === "recorded" ? root.librarySorted.length : root.scheduledPicks.length
     if (root.guideStripOpen) return root.guideItems().length
     return root.displayChannels ? root.displayChannels.length : 0
   }
@@ -503,6 +543,8 @@ BarWidget {
     if (n <= 0) return
     if (!root.cursorActive) {
       root.cursorActive = true
+    } else if (root.libraryModalOpen && root.libraryTab === "scheduled") {
+      root.schedCursorIndex = Math.max(0, Math.min(n - 1, root.schedCursorIndex + delta))
     } else if (root.libraryModalOpen) {
       root.recCursorIndex = Math.max(0, Math.min(n - 1, root.recCursorIndex + delta))
     } else if (root.guideStripOpen) {
@@ -522,7 +564,7 @@ BarWidget {
   }
 
   function revealCursor() {
-    if (root.libraryModalOpen) root.revealIn(libraryPage.flick, libraryPage.rows, root.recCursorIndex)
+    if (root.libraryModalOpen) libraryPage.revealCursor()
     else if (root.guideStripOpen && root.guideTab === "grid") guidePage.grid.reveal(root.gridRow, root.gridCurrent())
     else if (root.guideStripOpen) root.revealIn(guidePage.showsFlick, guidePage.showsList, root.guideCursor)
     else root.revealIn(channelList.flick, channelList.rows, root.cursorIndex)
@@ -531,7 +573,7 @@ BarWidget {
   function activateCursor() {
     if (!root.cursorActive) return
     if (root.libraryModalOpen) {
-      var rec = root.recordingsData[root.recCursorIndex]
+      var rec = root.libraryTab === "recorded" ? root.librarySorted[root.recCursorIndex] : null
       if (rec) root.playRecording(rec.path || rec.name, rec.playable)
       return
     }
@@ -588,7 +630,7 @@ BarWidget {
   }
 
   function deleteWithConfirm(rec) {
-    if (!rec) return
+    if (!rec || Model.recordingLive(rec)) return
     var target = rec.path || rec.name
     if (root.deleteArmed !== target) {
       root.deleteArmed = target
@@ -1759,13 +1801,16 @@ BarWidget {
         else root.close()
       }
       onMoveRequested: function(dx, dy) {
-        if (root.guideStripOpen && !root.libraryModalOpen && root.guideTab === "grid") root.gridMove(dx, dy)
+        if (root.libraryModalOpen && dx !== 0) root.showLibraryTab(dx > 0 ? "scheduled" : "recorded")
+        else if (root.guideStripOpen && !root.libraryModalOpen && root.guideTab === "grid") root.gridMove(dx, dy)
         else if (dy !== 0) root.moveCursor(dy)
         else if (dx !== 0 && root.guideStripOpen && !root.libraryModalOpen) root.shiftBucket(dx)
       }
       onActivateRequested: root.activateCursor()
       onDeleteRequested: {
-        if (root.libraryModalOpen && root.cursorActive) root.deleteWithConfirm(root.recordingsData[root.recCursorIndex])
+        if (!root.libraryModalOpen || !root.cursorActive) return
+        if (root.libraryTab === "scheduled") root.dropScheduled(root.scheduledPicks[root.schedCursorIndex])
+        else root.deleteWithConfirm(root.librarySorted[root.recCursorIndex])
       }
       onTabRequested: function(direction) {
         if (root.bar && typeof root.bar.switchPanelFrom === "function")
@@ -1786,7 +1831,7 @@ BarWidget {
           return
         }
         if (root.libraryModalOpen && t === "K") {
-          var rec = root.recordingsData[root.recCursorIndex]
+          var rec = root.libraryTab === "recorded" ? root.librarySorted[root.recCursorIndex] : null
           if (root.cursorActive && rec) root.setRecordingKept(rec, !rec.keep)
           return
         }
@@ -1847,7 +1892,7 @@ BarWidget {
               width: parent.width
               message: root.scheduleLine
               clickable: true
-              onClicked: root.guideStripOpen = true
+              onClicked: root.openScheduled()
             }
 
             GuidePage {
