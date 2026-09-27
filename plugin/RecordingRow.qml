@@ -10,7 +10,7 @@ CursorSurface {
   property int recIndex: -1
   readonly property bool live: Model.recordingLive(recRow.rec)
 
-  height: Style.space(52)
+  height: Math.max(Style.space(52), recInfo.implicitHeight + Style.space(14))
   foreground: recRow.tv.bar.foreground
   accent: Color.accent
   hasCursor: recRow.tv.libraryModalOpen && recRow.tv.cursorActive && recRow.tv.recCursorIndex === recRow.recIndex
@@ -35,6 +35,7 @@ CursorSurface {
   }
 
   Column {
+    id: recInfo
     anchors.left: parent.left
     anchors.leftMargin: Style.space(6)
     anchors.right: recRow.live ? parent.right : recKeepBtn.left
@@ -54,14 +55,14 @@ CursorSurface {
         font.family: recRow.tv.bar.fontFamily
         font.pixelSize: Style.font.bodySmall
         font.bold: true
-        elide: Text.ElideRight
+        wrapMode: Text.Wrap
         width: Math.min(implicitWidth, parent.width - (seriesTag.visible ? seriesTag.width + parent.spacing : 0))
       }
 
       Rectangle {
         id: seriesTag
         visible: !!recRow.rec.rule_id
-        anchors.verticalCenter: recTitle.verticalCenter
+        y: Math.max(0, (recTitle.font.pixelSize * 1.3 - height) / 2)
         width: seriesText.implicitWidth + Style.space(10)
         height: seriesText.implicitHeight + Style.space(2)
         radius: Style.spacing.xs
@@ -87,7 +88,7 @@ CursorSurface {
       color: recRow.live ? Color.urgent : Color.muted
       font.family: recRow.tv.bar.fontFamily
       font.pixelSize: Style.font.caption
-      elide: Text.ElideRight
+      wrapMode: Text.Wrap
       width: parent.width
     }
   }

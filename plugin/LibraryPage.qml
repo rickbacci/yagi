@@ -171,7 +171,8 @@ Column {
             readonly property bool isHeader: library.onRecorded ? !!entry.modelData.header : entry.modelData.kind === "header"
             readonly property int pick: library.onRecorded ? entry.modelData.index : entry.modelData.pick
             width: recCol.width
-            height: entry.isHeader ? headText.implicitHeight + Style.space(6) : Style.space(52)
+            height: entry.isHeader ? headText.implicitHeight + Style.space(6)
+                    : (library.onRecorded ? recItem.height : schedItem.height)
 
             Text {
               id: headText
@@ -187,6 +188,7 @@ Column {
             }
 
             RecordingRow {
+              id: recItem
               visible: library.onRecorded && !entry.isHeader
               tv: library.tv
               width: parent.width
@@ -195,6 +197,7 @@ Column {
             }
 
             ScheduledRow {
+              id: schedItem
               visible: !library.onRecorded && !entry.isHeader
               tv: library.tv
               width: parent.width

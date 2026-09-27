@@ -9,7 +9,7 @@ CursorSurface {
   property int pickIndex: -1
   readonly property bool armed: schedRow.tv.deleteArmed === schedRow.row.key
 
-  height: Style.space(52)
+  height: Math.max(Style.space(52), schedInfo.implicitHeight + Style.space(14))
   foreground: schedRow.tv.bar.foreground
   accent: Color.accent
   hasCursor: schedRow.tv.libraryModalOpen && schedRow.tv.cursorActive && schedRow.tv.schedCursorIndex === schedRow.pickIndex
@@ -24,6 +24,7 @@ CursorSurface {
   }
 
   Column {
+    id: schedInfo
     anchors.left: parent.left
     anchors.leftMargin: Style.space(6)
     anchors.right: schedButtons.left
@@ -43,14 +44,14 @@ CursorSurface {
         font.family: schedRow.tv.bar.fontFamily
         font.pixelSize: Style.font.bodySmall
         font.bold: true
-        elide: Text.ElideRight
+        wrapMode: Text.Wrap
         width: Math.min(implicitWidth, parent.width - (seriesTag.visible ? seriesTag.width + parent.spacing : 0))
       }
 
       Rectangle {
         id: seriesTag
         visible: !!schedRow.row.series
-        anchors.verticalCenter: schedTitle.verticalCenter
+        y: Math.max(0, (schedTitle.font.pixelSize * 1.3 - height) / 2)
         width: seriesText.implicitWidth + Style.space(10)
         height: seriesText.implicitHeight + Style.space(2)
         radius: Style.spacing.xs
@@ -76,7 +77,7 @@ CursorSurface {
       color: schedRow.row.live || schedRow.row.missed ? Color.urgent : Color.muted
       font.family: schedRow.tv.bar.fontFamily
       font.pixelSize: Style.font.caption
-      elide: Text.ElideRight
+      wrapMode: Text.Wrap
       width: parent.width
     }
   }
