@@ -20,7 +20,7 @@ loginctl show-session $(loginctl | awk '/seat0/{print $1}') -p Active
 
 ## Signal
 
-While a tune is running, the flyout watch row shows SNR in dB. This demod reports that number in tenths: 223 is 22.3 dB. ATSC 8VSB wants about 15 dB. The strength percent is the same reading, scaled. The picture overlay only speaks up when it is Weak signal or No signal. `yagi signal` reads the tuner live TV is on.
+While a tune is running, the flyout watch row shows SNR in dB. This demod reports that number in tenths: 223 is 22.3 dB. ATSC 8VSB wants about 15 dB. The strength percent is the same reading, scaled. The picture overlay only speaks up when it is Weak signal (under 18 dB) or No signal. `yagi signal` reads the tuner live TV is on.
 
 Height and line-of-sight matter. VHF-High (7–13) wants longer elements. UHF (14–36) is most modern stations. Inside about 15 miles, an amp can overload the LGDT3306A.
 

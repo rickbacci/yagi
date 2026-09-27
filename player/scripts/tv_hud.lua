@@ -1465,16 +1465,17 @@ mp.observe_property("path", "string", function(_, path)
 end)
 
 local signal_busy = false
--- A good picture says nothing. Weak below 25 dB; good again at 26 so it
--- does not flicker. Two bad readings in a row before anything shows.
-local WEAK_DB = 25
-local GOOD_AGAIN_DB = 26
+-- A good picture says nothing. 8VSB breaks up near 15 dB, so weak is under
+-- 18; good again at 19 so it does not flicker. Two bad readings in a row
+-- before anything shows.
+local WEAK_DB = 18
+local GOOD_AGAIN_DB = 19
 local signal_state = "good"
 local bad_streak = 0
 local last_poll = 0
 
 local function signal_color(db)
-    if db and db < 18 then return theme.urgent end
+    if db and db < 15 then return theme.urgent end
     return theme.warn
 end
 

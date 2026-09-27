@@ -38,17 +38,20 @@ end
 
 note_reading(31)
 if signal_label ~= "" or badge.data ~= "" then fail("good signal shows something") end
+note_reading(22)
+note_reading(22)
+if signal_label ~= "" then fail("22 dB is a good picture") end
 
-note_reading(22)
+note_reading(16)
 if signal_label ~= "" then fail("one weak reading shows") end
-note_reading(22)
+note_reading(16)
 if signal_label ~= "Weak signal" then fail("two weak readings: " .. signal_label) end
 if not badge.data:find("Weak signal", 1, true) then fail("no badge while the HUD is hidden") end
 if not badge.data:find("30C0F0", 1, true) then fail("weak is not amber") end
 
-note_reading(25.5)
-if signal_label ~= "Weak signal" then fail("25.5 dB cleared it; needs 26") end
-note_reading(27)
+note_reading(18.5)
+if signal_label ~= "Weak signal" then fail("18.5 dB cleared it; needs 19") end
+note_reading(20)
 if signal_label ~= "" or badge.data ~= "" then fail("good again still shows") end
 
 note_reading(nil)
