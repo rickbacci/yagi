@@ -5,7 +5,7 @@
 
 OTA ATSC 1.0 for Omarchy: bar plugin, pinned PiP, dual-tuner record. Not MythTV, not Kaffeine.
 
-Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts; the record timer reads it on a free tuner every few hours. Search looks at titles and descriptions. Record into `~/Videos/TV` on whichever tuner is free, one show or every airing (Record all). A channel on the tower you are watching is copied out of the live dump instead: no second tuner, and it starts at the top of the show when the pause reaches back that far; back-to-back episodes split into one file each and ad breaks are skipped on playback. Pause-live is the live dump, the whole tower, read once through a fifo. Skip seeks inside the same window. A channel on the same tower comes up in about a second; another tower takes about 3 s of tuner lock first. Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
+Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts; the record timer reads it on a free tuner every few hours. Search looks at titles and descriptions. Record into `~/Videos/TV` on whichever tuner is free, one airing (Record) or every airing (Record series). A channel on the tower you are watching is copied out of the live dump instead: no second tuner, and it starts at the top of the show when the pause reaches back that far; back-to-back episodes split into one file each and ad breaks are skipped on playback. Pause-live is the live dump, the whole tower, read once through a fifo. Skip seeks inside the same window. A channel on the same tower comes up in about a second; another tower takes about 3 s of tuner lock first. Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
 
 Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `yagi`.
 
@@ -114,9 +114,9 @@ cp markets/cleveland.json ~/.config/yagi/station_map.json
 yagi status | scan | scan --full | list | guide | guide refresh | guide search Browns
 yagi play "8.1 FOX" | next | prev | stop | sync | pause | live | seek 10 | fullscreen
 yagi record start 8.1 1h | stop | list | play <file> | delete <file>
-yagi record all <station> --title "M*A*S*H" --channel 19.2 | unall <id> | limit <id> 30
+yagi series | series add <station> --title "M*A*S*H" --channel 19.2 | series remove <id> | series keep <id> 30
 yagi record keep <file> | unkeep <file> | finish | due
-yagi favorite toggle "8.1 FOX"
+yagi favorite toggle 8.1
 yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off
 yagi hidden list | hidden hide 19.1 | hidden show 19.1
 ```
@@ -129,8 +129,8 @@ yagi hidden list | hidden hide 19.1 | hidden show 19.1
 | --- | --- |
 | Everywhere | j/k or ↑/↓ move · Enter picks · Esc closes · `g` Guide · `v` Recordings · `f` Favorites · `a` All · Shift+S scan |
 | Channels | Enter watches (the TV window takes focus) · `r` records the station |
-| Guide | h/l or ←/→ time tabs · `/` search (Enter or ↓ back to the list) · Enter watches if on now, else records · `r` record this one · `a` Record all |
-| Recordings | Enter plays · `x` twice deletes · Shift+K locks |
+| Guide | arrows move in the grid · Enter opens the card, again watches if on now, else records · `/` search (Enter or ↓ to the first match, then ↑/↓ step) · `s` Grid or Shows · `r` Record · `a` Record series |
+| Recordings | ←/→ Recorded or Scheduled · Enter plays · `x` twice deletes, or on Scheduled stops or removes · Shift+K locks |
 
 ## HUD (the TV window has focus — not the plugin, not Super+K)
 

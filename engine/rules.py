@@ -1,4 +1,4 @@
-"""Record all: a show on one channel, any time of day. Each minute its listings join the queue."""
+"""Record series: a show on one channel, any time of day. Each minute its listings join the queue."""
 
 import json
 import os

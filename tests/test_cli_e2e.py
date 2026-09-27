@@ -179,7 +179,7 @@ class TestCliE2E(unittest.TestCase):
             ]}, f)
         with open(os.path.join(tv_dir, "schedule.json"), "w", encoding="utf-8") as f:
             json.dump({"items": [{"rule_id": show_id("mash", "19.2"), "clock": "7:30 PM", "start_unix": 2000000000}]}, f)
-        res = subprocess.run([sys.executable, CLI_BIN, "record", "rules"], capture_output=True, text=True, env=self.env)
+        res = subprocess.run([sys.executable, CLI_BIN, "series"], capture_output=True, text=True, env=self.env)
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("M*A*S*H  19.2  keep 10  next 7:30 PM", res.stdout)
         self.assertIn("Jeopardy!  5.1  keep all  next airing not listed yet", res.stdout)

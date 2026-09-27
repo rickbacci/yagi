@@ -20,7 +20,7 @@ BUCKETS = ("prime", "late", "overnight", "day")
 
 
 def show_id(key: str, channel: str) -> str:
-    """One id per show and channel, so every time-of-day row shares one Record all."""
+    """One id per show and channel, so every time-of-day row shares one series."""
     return hashlib.sha1(f"{key}|{channel}".encode("utf-8")).hexdigest()[:12]
 
 

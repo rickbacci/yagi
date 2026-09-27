@@ -20,19 +20,20 @@ Project `~/Projects/personal/yagi`. CLI `yagi` (`PATH` or `bin/`). Rules: `AGENT
 ```bash
 yagi play "8.1 FOX" | next | prev | stop | sync | pause | live | seek 10
 yagi record start "8.1 FOX" 1h | stop | list | play <file> | delete <file>
-yagi record later | unlater | all | unall | limit | keep | unkeep | due | finish
+yagi record later | unlater | keep | unkeep | due | finish
+yagi series | series add <station> --title T --channel 19.2 | series remove <id> | series keep <id> 10
 yagi list | guide | guide refresh | guide search Browns | status | scan | scan --full
-yagi favorite toggle "8.1 FOX"
+yagi favorite toggle 8.1
 yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off
 yagi hidden list | hidden hide 19.1 | hidden show 19.1
 omarchy-shell shell broadcast richardb.yagi play "8.1 FOX"   # also: stop next prev live guide reloadChannels open close toggle
 ```
 
-Live TV is always the whole tower. A recording is one station; one with no video or audio ID records the whole tower once, and the next recording is just that station. Guide: search (titles and descriptions), time-of-day tabs, one row per show with Watch / Record / Record all. The record timer (`record due`, every minute) starts queued shows, joins back-to-back episodes into one run, and launches `record finish` to split runs and mark ads. After HUD lua: Close TV and retune.
+Live TV is always the whole tower. A recording is one station; one with no video or audio ID records the whole tower once, and the next recording is just that station. Guide: a grid of channels by half hour, search lights matches in it (titles and descriptions); a Shows tab lists one row per show. Watch / Record / Record series (`yagi series`). The record timer (`record due`, every minute) starts queued shows, joins back-to-back episodes into one run, and launches `record finish` to split runs and mark ads. After HUD lua: Close TV and retune.
 
 ## Keys
 
-Panel (Super+Shift+T): j/k move, Enter picks, Esc closes, `g` Guide, `v` Recordings. Guide: h/l time tabs, `/` search, `r` record one, `a` Record all. Recordings: `x` twice deletes, Shift+K locks. Picking a channel or recording focuses the TV window (`yagi focus`).
+Panel (Super+Shift+T): j/k move, Enter picks, Esc closes, `g` Guide, `v` Recordings. Guide: arrows move, Enter opens the card, `/` search, `s` Grid or Shows, `r` Record, `a` Record series. Recordings: ←/→ Recorded or Scheduled, `x` twice deletes, Shift+K locks. Picking a channel or recording focuses the TV window (`yagi focus`).
 
 TV window:
 

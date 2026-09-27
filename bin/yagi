@@ -700,35 +700,6 @@ def cmd_record(args):
             sys.exit(1)
         print("Removed from the waiting list.")
 
-    elif action == "all":
-        from engine.guide import load_guide
-        from engine.rules import add_rule, arm_rules
-        try:
-            rule = add_rule(
-                getattr(args, "title", "") or "",
-                getattr(args, "channel", "") or "",
-                args.target or "",
-            )
-        except ValueError as exc:
-            print(f"Error: {exc}")
-            sys.exit(1)
-        print(f"Recording every {rule['title']} on {rule['channel'] or rule['tune_name']}.")
-        # Queue what is already listed. The timer starts each one.
-        for item in arm_rules(load_guide().get("channels") or {}):
-            print(f"Queued {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
-
-    elif action == "limit":
-        from engine.rules import set_keep_last
-        try:
-            keep = int(args.duration or 0)
-        except ValueError:
-            keep = -1
-        if not args.target or keep < 0 or not set_keep_last(args.target, keep):
-            print("Use: yagi record limit <show id> <how many to keep, 0 for all>")
-            sys.exit(1)
-        DvrManager.refresh_library_index()
-        print(f"Keeping the newest {keep} episodes." if keep else "Keeping every episode.")
-
     elif action in ("keep", "unkeep"):
         if not args.target:
             print("Error: Name the recording.")
@@ -738,28 +709,6 @@ def cmd_record(args):
             print(f"File not found: {args.target}")
             sys.exit(1)
         print("Kept. The size limit will not delete it." if action == "keep" else "The size limit may delete it again.")
-
-    elif action == "rules":
-        from engine.rules import load_rules
-        from engine.schedule import load_schedule
-        rules = load_rules()
-        if not rules:
-            print("No shows are set to record every airing.")
-            return
-        queued = sorted(load_schedule(), key=lambda row: int(row.get("start_unix") or 0))
-        for rule in rules:
-            keep = int(rule.get("keep_last") or 0)
-            nxt = next((row for row in queued if str(row.get("rule_id") or "") == rule.get("id")), None)
-            when = f"next {nxt.get('clock') or nxt.get('start_unix')}" if nxt else "next airing not listed yet"
-            print(f"{rule.get('id')}  {rule.get('title')}  {rule.get('channel') or rule.get('tune_name')}  "
-                  f"{'keep ' + str(keep) if keep else 'keep all'}  {when}")
-
-    elif action == "unall":
-        from engine.rules import remove_rule
-        if not args.target or not remove_rule(args.target):
-            print("That show is not set to record.")
-            sys.exit(1)
-        print("Stopped recording that show.")
 
     elif action == "due":
         from engine.release import refresh
@@ -848,6 +797,57 @@ def cmd_record(args):
             prog = r["title"][:30]
             print(f"{r['date_formatted']:<17} {r['channel_number']:<6} {r['station']:<10} {prog:<32} {r['size_formatted']}")
         print("=" * 85)
+
+
+def cmd_series(args):
+    """Record every airing of a show: list, add, remove, keep."""
+    from engine.rules import add_rule, arm_rules, load_rules, remove_rule, set_keep_last
+    action = args.action or "list"
+
+    if action == "list":
+        from engine.schedule import load_schedule
+        rules = load_rules()
+        if not rules:
+            print("No series are recording.")
+            print('Add one with: yagi series add <station> --title "M*A*S*H" --channel 19.2')
+            return
+        queued = sorted(load_schedule(), key=lambda row: int(row.get("start_unix") or 0))
+        for rule in rules:
+            keep = int(rule.get("keep_last") or 0)
+            nxt = next((row for row in queued if str(row.get("rule_id") or "") == rule.get("id")), None)
+            when = f"next {nxt.get('clock') or nxt.get('start_unix')}" if nxt else "next airing not listed yet"
+            print(f"{rule.get('id')}  {rule.get('title')}  {rule.get('channel') or rule.get('tune_name')}  "
+                  f"{'keep ' + str(keep) if keep else 'keep all'}  {when}")
+
+    elif action == "add":
+        from engine.guide import load_guide
+        try:
+            rule = add_rule(args.title or "", args.channel or "", args.target or "")
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
+        print(f"Recording every {rule['title']} on {rule['channel'] or rule['tune_name']}.")
+        # Queue what is already listed. The timer starts each one.
+        for item in arm_rules(load_guide().get("channels") or {}):
+            print(f"Queued {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
+
+    elif action == "remove":
+        if not args.target or not remove_rule(args.target):
+            print("No series has that id. See: yagi series")
+            sys.exit(1)
+        print("Stopped recording that series. Its recordings stay.")
+
+    elif action == "keep":
+        from engine.dvr import DvrManager
+        try:
+            keep = int(args.count or 0)
+        except ValueError:
+            keep = -1
+        if not args.target or keep < 0 or not set_keep_last(args.target, keep):
+            print("Use: yagi series keep <id> <how many to keep, 0 for all>")
+            sys.exit(1)
+        DvrManager.refresh_library_index()
+        print(f"Keeping the newest {keep} episodes." if keep else "Keeping every episode.")
 
 
 def main():
@@ -957,7 +957,7 @@ def main():
 
     # record / dvr
     p_rec = subparsers.add_parser("record", aliases=["dvr", "rec"], help="DVR recording control")
-    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "all", "unall", "rules", "finish", "limit", "keep", "unkeep"], default="list", help="Record action. all/unall: record every airing of a show. rules: list those shows. limit: keep the newest N of a show. keep/unkeep: shield a recording from the size limit. finish: split runs and mark ad breaks")
+    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "finish", "keep", "unkeep"], default="list", help="Record action. later/unlater: one airing from the Guide. keep/unkeep: shield a recording from the size limit. finish: split runs and mark ad breaks. For every airing of a show, see: yagi series")
     p_rec.add_argument("target", nargs="?", help="Channel to record or file to delete")
     p_rec.add_argument("duration", nargs="?", help="Optional duration limit (e.g. 30m, 1h, 300s)")
     p_rec.add_argument("--title", default="", help="Program name for the file and the list")
@@ -966,8 +966,16 @@ def main():
     p_rec.add_argument("--end-clock", dest="end_clock", default="", help="End clock label")
     p_rec.add_argument("--display-name", dest="display_name", default="", help="Station line")
     p_rec.add_argument("--extra", default="", help="Extra time after the show, e.g. 30m")
-    p_rec.add_argument("--channel", default="", help="Channel number, for record all")
     p_rec.set_defaults(func=cmd_record)
+
+    p_series = subparsers.add_parser("series", help="Record every airing of a show")
+    p_series.add_argument("action", nargs="?", choices=["list", "add", "remove", "keep"], default="list",
+                          help="list (default), add <station> --title T --channel N, remove <id>, keep <id> <N, 0 for all>")
+    p_series.add_argument("target", nargs="?", help="Station to add, or the series id")
+    p_series.add_argument("count", nargs="?", help="For keep: how many episodes, 0 for all")
+    p_series.add_argument("--title", default="", help="Show title")
+    p_series.add_argument("--channel", default="", help="Channel number")
+    p_series.set_defaults(func=cmd_series)
 
     args = parser.parse_args()
     args.func(args)

@@ -969,7 +969,7 @@ class DvrManager:
     ) -> List[str]:
         """Make room. A show's keep-newest limit goes first, then the size cap.
 
-        The cap deletes Record all episodes before anything you recorded by hand,
+        The cap deletes series episodes before anything you recorded by hand,
         oldest first. It never deletes a kept recording, one still recording, or
         the newest one, even when that one alone is over the cap.
         """

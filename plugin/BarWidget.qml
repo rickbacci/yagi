@@ -249,11 +249,11 @@ BarWidget {
     if (!show) return
     ruleProc.running = false
     if (show.id && root.ruleIds[show.id]) {
-      ruleProc.command = [root.binPath, "record", "unall", show.id]
+      ruleProc.command = [root.binPath, "series", "remove", show.id]
     } else {
       if (!show.tune_name) return
       ruleProc.command = [
-        root.binPath, "record", "all", show.tune_name,
+        root.binPath, "series", "add", show.tune_name,
         "--title", show.title || "",
         "--channel", show.channel || ""
       ]
@@ -996,7 +996,7 @@ BarWidget {
     var cur = root.ruleKeep[show.id] || 0
     var next = cur === 0 ? 10 : (cur === 10 ? 30 : 0)
     ruleProc.running = false
-    ruleProc.command = [root.binPath, "record", "limit", show.id, String(next)]
+    ruleProc.command = [root.binPath, "series", "keep", show.id, String(next)]
     ruleProc.running = true
   }
 
