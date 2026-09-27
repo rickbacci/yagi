@@ -20,6 +20,41 @@ PACKET = b"\x47" + b"\x00" * 187
 KEYFRAME = bytes([0x47, 0x40, 0x00, 0x10]) + b"\x00\x00\x01\xb3" + b"\x00" * 180
 
 
+def _ts(pid, payload=b"", start=False):
+    head = bytes([0x47, (0x40 if start else 0) | (pid >> 8), pid & 0xFF, 0x10])
+    return (head + payload + b"\xff" * 184)[:188]
+
+
+def _section(table_id, body):
+    """A PSI section with a placeholder CRC. The copier does not check it."""
+    length = len(body) + 5 + 4
+    return bytes([table_id, 0xB0 | (length >> 8), length & 0xFF]) + b"\x00\x01\xc1\x00\x00" + body + b"\x00" * 4
+
+
+def _pat(programs):
+    body = b"".join(bytes([n >> 8, n & 0xFF, 0xE0 | (pid >> 8), pid & 0xFF]) for n, pid in programs)
+    return _ts(0, b"\x00" + _section(0x00, body), start=True)
+
+
+def _pmt(pid, program, video, audio):
+    sec = bytearray(_section(0x02, bytes([0xE0 | (video >> 8), video & 0xFF, 0xF0, 0x00,
+                                          0x02, 0xE0 | (video >> 8), video & 0xFF, 0xF0, 0x00,
+                                          0x81, 0xE0 | (audio >> 8), audio & 0xFF, 0xF0, 0x00])))
+    sec[3], sec[4] = program >> 8, program & 0xFF
+    return _ts(pid, b"\x00" + bytes(sec), start=True)
+
+
+def _video_key(pid):
+    return _ts(pid, b"\x00\x00\x01\xb3", start=True)
+
+
+TOWER = (
+    [_ts(0x51), _ts(0x31)]
+    + [_pat([(3, 0x30), (5, 0x50)]), _pmt(0x30, 3, 0x31, 0x32), _pmt(0x50, 5, 0x51, 0x52)]
+    + [_ts(0x31), _ts(0x52), _video_key(0x51), _ts(0x32), _ts(0x51), _ts(0x1FFB), _ts(0x52)]
+)
+
+
 class TestCopier(unittest.TestCase):
     def _run(self, src, dest, start, **kw):
         stop = threading.Event()
@@ -66,6 +101,53 @@ class TestCopier(unittest.TestCase):
             self.assertFalse(thread.is_alive())
             self.assertEqual(result["pos"], 188 * 8)
 
+    def _pids(self, data):
+        return [((data[i + 1] & 0x1F) << 8) | data[i + 2] for i in range(0, len(data), 188)]
+
+    def test_only_the_channel_is_kept_and_it_opens_on_its_tables(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dest = os.path.join(tmp, "live.ts"), os.path.join(tmp, "rec.ts")
+            with open(src, "wb") as f:
+                f.write(b"".join(TOWER))
+            stop, thread, _ = self._run(src, dest, 0, service_id=5)
+            self._wait_size(dest, 188 * 5)
+            with open(src, "ab") as f:
+                f.write(_ts(0x31) + _ts(0x51))
+            self._wait_size(dest, 188 * 6)
+            stop.set()
+            thread.join(2)
+            with open(dest, "rb") as f:
+                pids = self._pids(f.read())
+            self.assertEqual(pids, [0x00, 0x50, 0x51, 0x51, 0x52, 0x51])
+
+    def test_the_channel_keyframe_can_come_reads_after_its_tables(self):
+        tower = [_pat([(5, 0x50)]), _pmt(0x50, 5, 0x51, 0x52)] + [_ts(0x51)] * 6 + [_video_key(0x51), _ts(0x52)]
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dest = os.path.join(tmp, "live.ts"), os.path.join(tmp, "rec.ts")
+            with open(src, "wb") as f:
+                f.write(b"".join(tower))
+            with patch("engine.live_copy.CHUNK", 188 * 2):
+                stop, thread, _ = self._run(src, dest, 0, service_id=5)
+                self._wait_size(dest, 188 * 4)
+                stop.set()
+                thread.join(2)
+            with open(dest, "rb") as f:
+                data = f.read()
+            self.assertEqual(self._pids(data), [0x00, 0x50, 0x51, 0x52])
+            self.assertEqual(data[2 * 188:3 * 188], _video_key(0x51))
+
+    def test_a_channel_with_no_pmt_is_copied_whole(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dest = os.path.join(tmp, "live.ts"), os.path.join(tmp, "rec.ts")
+            with open(src, "wb") as f:
+                f.write(b"".join(TOWER))
+            stop, thread, _ = self._run(src, dest, 0, service_id=9, learn_bytes=188 * len(TOWER))
+            self._wait_size(dest, 188 * 4)
+            stop.set()
+            thread.join(2)
+            with open(dest, "rb") as f:
+                self.assertIn(0x32, self._pids(f.read()))
+
     def test_a_dump_that_stops_growing_ends_the_copy(self):
         with tempfile.TemporaryDirectory() as tmp:
             src, dest = os.path.join(tmp, "live.ts"), os.path.join(tmp, "rec.ts")
@@ -98,8 +180,8 @@ class TestStartLiveCopy(unittest.TestCase):
                     recordings_dir=tmp, channels_file=channels, active_path=active,
                 )
             cmd = popen.call_args[0][0]
-            self.assertTrue(cmd[-4].endswith("live_copy.py"))
-            self.assertEqual(cmd[-3:], ["/cache/live.ts", session.file_path, "1880"])
+            self.assertTrue(cmd[-5].endswith("live_copy.py"))
+            self.assertEqual(cmd[-4:], ["/cache/live.ts", session.file_path, "1880", "5"])
             self.assertTrue(session.copies_live)
             self.assertEqual((session.adapter_id, session.socket_path, session.start_time), (0, "", 1000.0))
             side = read_sidecar(session.file_path)
