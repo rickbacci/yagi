@@ -1,4 +1,4 @@
-# Omarchy TV — Hardware
+# Yagi — Hardware
 
 ATSC 1.0 / Clear QAM on Linux `DVBv5`. This box: Hauppauge WinTV-dualHD.
 
@@ -16,11 +16,11 @@ getfacl /dev/dvb/adapter1/frontend0
 loginctl show-session $(loginctl | awk '/seat0/{print $1}') -p Active
 ```
 
-`femon` is optional. This box may not have it. SNR while a tune runs is on the flyout watch row. The live dump logs lock times and `SNR:` lines to `~/.cache/omarchy/tv/timeshift/dump.log`.
+`femon` is optional. This box may not have it. SNR while a tune runs is on the flyout watch row. The live dump logs lock times and `SNR:` lines to `~/.cache/yagi/timeshift/dump.log`.
 
 ## Signal
 
-While a tune is running, the flyout watch row shows SNR in dB. This demod reports that number in tenths: 223 is 22.3 dB. ATSC 8VSB wants about 15 dB. The strength percent is the same reading, scaled. The picture overlay only speaks up when it is Weak signal or No signal. `omarchy-tv signal` reads the tuner live TV is on.
+While a tune is running, the flyout watch row shows SNR in dB. This demod reports that number in tenths: 223 is 22.3 dB. ATSC 8VSB wants about 15 dB. The strength percent is the same reading, scaled. The picture overlay only speaks up when it is Weak signal or No signal. `yagi signal` reads the tuner live TV is on.
 
 Height and line-of-sight matter. VHF-High (7–13) wants longer elements. UHF (14–36) is most modern stations. Inside about 15 miles, an amp can overload the LGDT3306A.
 
@@ -36,12 +36,12 @@ ATSC A/53: DTV pilot is 310 kHz above the lower band edge, i.e. nominal center *
 
 | What | Where |
 | --- | --- |
-| Channels, guide, now-playing, DVR index | `~/.config/omarchy/tv/` |
-| Optional RF names | `~/.config/omarchy/tv/station_map.json` (copy `markets/cleveland.json`) |
+| Channels, guide, now-playing, DVR index | `~/.config/yagi/` |
+| Optional RF names | `~/.config/yagi/station_map.json` (copy `markets/cleveland.json`) |
 | MPV channel table | `~/.config/mpv/channels.conf` |
 | Library recordings | `~/Videos/TV` |
-| Pause dump (whole tower) | `~/.cache/omarchy/tv/timeshift/live.ts` |
-| Live dump and picture logs | `~/.cache/omarchy/tv/timeshift/dump.log`, `hud.log` |
-| Sockets | `$XDG_RUNTIME_DIR/omarchy-tv-*.sock` |
+| Pause dump (whole tower) | `~/.cache/yagi/timeshift/live.ts` |
+| Live dump and picture logs | `~/.cache/yagi/timeshift/dump.log`, `hud.log` |
+| Sockets | `$XDG_RUNTIME_DIR/yagi-*.sock` |
 
 Pause does not appear in Recordings. Use Record (`r`) or Save (`y`) for `Videos/TV`. The pause writer stops when the file is an hour of air ahead of the playhead. It grows about 8.7 GB an hour while the TV is open. Close TV still deletes it.

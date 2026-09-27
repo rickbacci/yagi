@@ -65,7 +65,7 @@ class TestPathsSecurity(unittest.TestCase):
             get_runtime_socket("a/b.sock")
 
     def test_socket_constants(self):
-        self.assertTrue(MPV_SOCKET_PATH.endswith("omarchy-tv-mpv.sock"))
+        self.assertTrue(MPV_SOCKET_PATH.endswith("yagi-mpv.sock"))
         from engine.paths import RECORDINGS_ACTIVE_PATH, PLAYER_STATE_PATH, UI_PREFS_PATH, STATION_MAP_PATH, RECORDINGS_INDEX_PATH, TIMESHIFT_DIR, TIMESHIFT_FILE, TIMESHIFT_ACTIVE_PATH, TIMESHIFT_SOCKET_PATH, FOLLOW_SOCKET_PATH, FOLLOW_FIFO_PATH, TUNE_LOCK_PATH
         self.assertTrue(RECORDINGS_ACTIVE_PATH.endswith("recordings_active.json"))
         self.assertTrue(PLAYER_STATE_PATH.endswith("player_state.json"))
@@ -75,10 +75,10 @@ class TestPathsSecurity(unittest.TestCase):
         self.assertTrue(TIMESHIFT_DIR.endswith("timeshift"))
         self.assertTrue(TIMESHIFT_FILE.endswith("live.ts"))
         self.assertTrue(TIMESHIFT_ACTIVE_PATH.endswith("timeshift_active.json"))
-        self.assertTrue(TIMESHIFT_SOCKET_PATH.endswith("omarchy-tv-timeshift.sock"))
-        self.assertTrue(FOLLOW_SOCKET_PATH.endswith("omarchy-tv-follow.sock"))
-        self.assertTrue(FOLLOW_FIFO_PATH.endswith("omarchy-tv-follow.fifo"))
-        self.assertTrue(TUNE_LOCK_PATH.endswith("omarchy-tv-tune.lock"))
+        self.assertTrue(TIMESHIFT_SOCKET_PATH.endswith("yagi-timeshift.sock"))
+        self.assertTrue(FOLLOW_SOCKET_PATH.endswith("yagi-follow.sock"))
+        self.assertTrue(FOLLOW_FIFO_PATH.endswith("yagi-follow.fifo"))
+        self.assertTrue(TUNE_LOCK_PATH.endswith("yagi-tune.lock"))
 
     def test_ensure_private_dir_tightens_mode(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

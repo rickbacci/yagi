@@ -3,5 +3,5 @@
 # Only the main checkout publishes; a commit in a worktree stays on its branch.
 [ "$(git rev-parse --path-format=absolute --git-dir)" = "$(git rev-parse --path-format=absolute --git-common-dir)" ] || exit 0
 top="$(git rev-parse --show-toplevel)" || exit 0
-python3 -P "$top/engine/release.py" "$top" || echo "omarchy-tv: the record timer still runs the previous commit." >&2
+python3 -P "$top/engine/release.py" "$top" || echo "yagi: the record timer still runs the previous commit." >&2
 exit 0

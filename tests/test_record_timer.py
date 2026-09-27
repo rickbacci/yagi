@@ -16,12 +16,12 @@ from engine.guide import GUIDE_GRAB_GAP_SEC, guide_grab_due, run_guide_update
 from engine.paths import LIVE_SLICE, REC_SLICE, TUNER_SLICE, dump_unit, in_unit, own_scope, state_lock, stop_unit
 from engine.schedule import next_window, save_schedule
 
-CLI_BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "omarchy-tv")
+CLI_BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "yagi")
 
 
 def _load_cli():
-    loader = importlib.machinery.SourceFileLoader("omarchy_tv_cli", CLI_BIN)
-    spec = importlib.util.spec_from_loader("omarchy_tv_cli", loader)
+    loader = importlib.machinery.SourceFileLoader("yagi_cli", CLI_BIN)
+    spec = importlib.util.spec_from_loader("yagi_cli", loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
@@ -47,7 +47,7 @@ class TestOwnScope(unittest.TestCase):
     def test_a_named_unit_in_a_slice_stops_within_two_seconds(self):
         with mock.patch("engine.paths.systemd_user", return_value=True):
             cmd = own_scope(["python3", "tower_dump.py"], unit=dump_unit(1), slice_name=TUNER_SLICE)
-        self.assertIn("--unit=omarchy-tv-dump1.scope", cmd)
+        self.assertIn("--unit=yagi-dump1.scope", cmd)
         self.assertIn(f"--slice={TUNER_SLICE}", cmd)
         self.assertEqual(cmd[cmd.index("-p") + 1], "TimeoutStopSec=2")
         self.assertEqual(cmd[cmd.index("--") + 1:], ["python3", "tower_dump.py"])
@@ -59,7 +59,7 @@ class TestOwnScope(unittest.TestCase):
         self.assertEqual(run.call_args[0][0], ["systemctl", "--user", "stop", LIVE_SLICE])
 
     def test_in_unit_reads_this_process_cgroup(self):
-        group = f"0::/user.slice/omarchy-tv.slice/{LIVE_SLICE}/run-1.scope\n"
+        group = f"0::/user.slice/yagi.slice/{LIVE_SLICE}/run-1.scope\n"
         with mock.patch("builtins.open", mock.mock_open(read_data=group)):
             self.assertTrue(in_unit(LIVE_SLICE))
             self.assertFalse(in_unit(REC_SLICE))
@@ -114,7 +114,7 @@ class TestGuideStepsAside(unittest.TestCase):
     def test_a_show_arms_before_the_next_tick_can_miss_its_start(self):
         from engine.schedule import PAD_EARLY_SEC
 
-        timer = os.path.join(os.path.dirname(CLI_BIN), "..", "systemd", "user", "omarchy-tv-record.timer")
+        timer = os.path.join(os.path.dirname(CLI_BIN), "..", "systemd", "user", "yagi-record.timer")
         with open(timer, encoding="utf-8") as f:
             unit = f.read()
         slack = int(unit.split("AccuracySec=")[1].split("s")[0])

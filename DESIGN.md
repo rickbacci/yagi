@@ -1,4 +1,4 @@
-# Omarchy TV — Design
+# Yagi — Design
 
 Thin local appliance: Quickshell chrome, Python for DVB/scan/EPG/DVR/timeshift, MPV for decode and HUD. No MySQL, no root, no second frontend.
 
@@ -10,7 +10,7 @@ Python engine (tuner · scan · guide · DVR · timeshift · tower_dump)
    /dev/dvb          MPV PiP + tv_hud.lua
 ```
 
-No `Panel.qml`. The flyout is `BarWidget.qml`’s `KeyboardPanel`. The widget root exposes `opened` / `open()` / `close()` so `omarchy-shell shell toggle richardb.omarchy-tv` can summon it the same way as audio and bluetooth.
+No `Panel.qml`. The flyout is `BarWidget.qml`’s `KeyboardPanel`. The widget root exposes `opened` / `open()` / `close()` so `omarchy-shell shell toggle richardb.yagi` can summon it the same way as audio and bluetooth.
 
 ## Decisions
 
@@ -18,7 +18,7 @@ No `Panel.qml`. The flyout is `BarWidget.qml`’s `KeyboardPanel`. The widget ro
 
 **ATSC.** Every frequency is nominal `+28615` Hz (A/53 pilot). Scan dwell ≥ 1.2 s. Do not round tables to `000000`.
 
-**Library vs pause-live.** `r` writes keepable files to `$XDG_VIDEOS_DIR/TV` (Recordings, on a free tuner). Space pauses the throwaway `live.ts` under `$XDG_CACHE_HOME/omarchy/tv/timeshift` (the live dump). Save (`y`) copies the paused stretch into Recordings. They can run together.
+**Library vs pause-live.** `r` writes keepable files to `$XDG_VIDEOS_DIR/TV` (Recordings, on a free tuner). Space pauses the throwaway `live.ts` under `$XDG_CACHE_HOME/yagi/timeshift` (the live dump). Save (`y`) copies the paused stretch into Recordings. They can run together.
 
 **Play path.** The PiP plays the dump, not `dvb://`, so pause can seek (a For now choice, not hardware). `engine/tower_dump.py` holds the live tuner open for the whole session and copies the whole tower into growing `live.ts`. A follower copies that onto a fifo. The window reads it once as `fd://0`, and reads 2 MB before its first frame. Skip and live SEEK the follower. Close TV wipes the dump. End of a library file retunes the last live station. One window.
 
@@ -34,4 +34,4 @@ No `Panel.qml`. The flyout is `BarWidget.qml`’s `KeyboardPanel`. The widget ro
 
 **Picture IDs.** Live TV is always the whole tower, so a missing ID never stops the picture. A recording is one station. A station whose lineup still has no video or audio ID records the whole tower once, and a live dump of it learns them too. Those IDs are saved, and the next recording of that station is just that station. A whole-tower recording plays its own station by program id. You do not walk the lineup to fill them in.
 
-Repo rules: `AGENTS.md`. Agent how-to: `skills/omarchy-tv/SKILL.md`. Install: `README.md`. Leftover: `WHATS_LEFT.md`. Hardware: `HARDWARE_AND_TROUBLESHOOTING.md`.
+Repo rules: `AGENTS.md`. Agent how-to: `skills/yagi/SKILL.md`. Install: `README.md`. Leftover: `WHATS_LEFT.md`. Hardware: `HARDWARE_AND_TROUBLESHOOTING.md`.

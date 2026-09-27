@@ -7,13 +7,13 @@ import "Model.js" as Model
 
 BarWidget {
   id: root
-  moduleName: "richardb.omarchy-tv"
+  moduleName: "richardb.yagi"
 
   readonly property string tvConfigDir: Model.tvConfigDir(
     Quickshell.env("XDG_CONFIG_HOME"),
     Quickshell.env("HOME")
   )
-  property string binPath: "omarchy-tv"
+  property string binPath: "yagi"
 
   property bool popupOpen: false
   readonly property bool opened: root.popupOpen
@@ -1108,12 +1108,12 @@ BarWidget {
         root.toggle()
       }
     }
-    onEntered: if (root.bar) root.bar.showTooltip(root, "Omarchy TV — Over-The-Air Television")
+    onEntered: if (root.bar) root.bar.showTooltip(root, "Yagi — Over-The-Air Television")
     onExited: if (root.bar) root.bar.hideTooltip(root)
   }
 
   IpcHandler {
-    target: "richardb.omarchy-tv"
+    target: "richardb.yagi"
 
     function reloadStatus(): void {
       scanStatusFile.reload()
@@ -1176,8 +1176,8 @@ BarWidget {
     }
   }
 
-  readonly property string cliBesidePluginPath: Model.fileUrlToPath(Qt.resolvedUrl("../bin/omarchy-tv"))
-  readonly property string cliBesideRootPath: Model.fileUrlToPath(Qt.resolvedUrl("bin/omarchy-tv"))
+  readonly property string cliBesidePluginPath: Model.fileUrlToPath(Qt.resolvedUrl("../bin/yagi"))
+  readonly property string cliBesideRootPath: Model.fileUrlToPath(Qt.resolvedUrl("bin/yagi"))
 
   Process {
     id: cliCheckPlugin
@@ -1195,7 +1195,7 @@ BarWidget {
     id: cliCheckRoot
     command: ["test", "-x", root.cliBesideRootPath]
     onExited: function(code) {
-      if (code === 0 && root.binPath === "omarchy-tv")
+      if (code === 0 && root.binPath === "yagi")
         root.binPath = root.cliBesideRootPath
     }
   }

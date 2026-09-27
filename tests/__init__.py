@@ -21,7 +21,7 @@ time.tzset()
 
 # /tmp is RAM on some machines. TMPDIR still wins.
 _parent = os.environ.get("TMPDIR") or os.path.join(
-    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "omarchy", "tv-test-tmp"
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"), "yagi", "test-tmp"
 )
 os.makedirs(_parent, exist_ok=True)
 SANDBOX = tempfile.mkdtemp(prefix="run-", dir=_parent)
@@ -30,7 +30,7 @@ atexit.register(shutil.rmtree, SANDBOX, True)
 # Sockets need a short path: a private dir inside the real runtime dir when there is one.
 _real_run = os.environ.get("XDG_RUNTIME_DIR") or ""
 if os.path.isdir(_real_run) and os.access(_real_run, os.W_OK):
-    _run = tempfile.mkdtemp(prefix="omarchy-tv-test-", dir=_real_run)
+    _run = tempfile.mkdtemp(prefix="yagi-test-", dir=_real_run)
     atexit.register(shutil.rmtree, _run, True)
 else:
     _run = os.path.join(SANDBOX, "run")

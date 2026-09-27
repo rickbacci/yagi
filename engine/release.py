@@ -1,6 +1,6 @@
 """The record timer runs a copy of the last commit, never the working tree.
 
-Each commit unpacks to ~/.local/share/omarchy-tv/releases/<sha>, and current
+Each commit unpacks to ~/.local/share/yagi/releases/<sha>, and current
 points at it. An edit saved halfway in the repo never reaches a recording.
 Standard library only: the git hooks run this without the app's environment.
 
@@ -17,12 +17,12 @@ import tarfile
 import time
 from typing import Optional
 
-DEFAULT_ROOT = os.path.expanduser("~/.local/share/omarchy-tv")
+DEFAULT_ROOT = os.path.expanduser("~/.local/share/yagi")
 # A record finish or Guide update can still be running from an older copy.
 KEEP_NEWEST = 3
 KEEP_SECS = 24 * 3600
-TIMER = "omarchy-tv-record.timer"
-UNITS = ("omarchy-tv-record.service", TIMER)
+TIMER = "yagi-record.timer"
+UNITS = ("yagi-record.service", TIMER)
 
 
 def _git(repo: str, *args: str) -> bytes:

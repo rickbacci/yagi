@@ -10,7 +10,7 @@ import threading
 import unittest
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-CLI_BIN = os.path.join(PROJECT_ROOT, "bin", "omarchy-tv")
+CLI_BIN = os.path.join(PROJECT_ROOT, "bin", "yagi")
 PACKET = 188
 RATE = 188000
 CURSOR = PACKET * 1000
@@ -68,19 +68,19 @@ class TestCliWindow(unittest.TestCase):
         # Socket paths have a 108-byte limit. The sandbox runtime dir is short.
         self.run_tmp = tempfile.TemporaryDirectory(dir=os.environ["XDG_RUNTIME_DIR"])
         root = self.tmp.name
-        config = os.path.join(root, "config", "omarchy", "tv")
+        config = os.path.join(root, "config", "yagi")
         cache = os.path.join(root, "cache")
         runtime = self.run_tmp.name
         os.makedirs(config, mode=0o700)
-        os.makedirs(os.path.join(cache, "omarchy", "tv", "timeshift"), mode=0o700)
-        self.dump = os.path.join(cache, "omarchy", "tv", "timeshift", "live.ts")
+        os.makedirs(os.path.join(cache, "yagi", "timeshift"), mode=0o700)
+        self.dump = os.path.join(cache, "yagi", "timeshift", "live.ts")
         with open(self.dump, "wb") as handle:
             handle.write(b"\x47" + b"\x00" * 187)
             handle.truncate(DUMP_BYTES)
         with open(os.path.join(config, "channels.json"), "w", encoding="utf-8") as handle:
             json.dump({"channels": [{"name": "Quest", "tune_name": "Quest"}]}, handle)
-        self.mpv_sock = os.path.join(runtime, "omarchy-tv-mpv.sock")
-        self.follow_sock = os.path.join(runtime, "omarchy-tv-follow.sock")
+        self.mpv_sock = os.path.join(runtime, "yagi-mpv.sock")
+        self.follow_sock = os.path.join(runtime, "yagi-follow.sock")
         self.state_path = os.path.join(config, "timeshift_active.json")
         self.mpv_cmds = []
         self.follow_lines = []

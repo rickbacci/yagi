@@ -1,5 +1,5 @@
 """
-Omarchy TV - Electronic Program Guide (EPG) Engine
+Yagi - Electronic Program Guide (EPG) Engine
 Manages schedule data, program synopses, and airings in guide.json.
 Provides current and upcoming show information for major broadcast stations.
 """

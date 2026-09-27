@@ -1,5 +1,5 @@
 """
-Omarchy TV - Dual-Tuner DVR & Recording Engine
+Yagi - Dual-Tuner DVR & Recording Engine
 Handles background ATSC broadcast recording, hardware tuner leasing,
 active recording tracking, and file lifecycle management.
 """
@@ -759,7 +759,7 @@ class DvrManager:
         safe_channel = sanitize_filename(channel_number)
 
         session_id = f"dvr-{safe_channel}-{int(time.time())}"
-        socket_path = get_runtime_socket(f"omarchy-tv-{session_id}.sock")
+        socket_path = get_runtime_socket(f"yagi-{session_id}.sock")
 
         if os.path.exists(socket_path):
             try:

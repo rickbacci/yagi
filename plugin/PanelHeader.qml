@@ -60,7 +60,7 @@ Item {
 
     Text {
       textFormat: Text.PlainText
-      text: "Omarchy TV"
+      text: "Yagi"
       color: header.tv.bar.foreground
       font.family: header.tv.bar.fontFamily
       font.pixelSize: Style.font.subtitle

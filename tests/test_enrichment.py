@@ -1,5 +1,5 @@
 """
-Unit tests for Omarchy TV - Channel Metadata Enrichment & Station Mapping
+Unit tests for Yagi - Channel Metadata Enrichment & Station Mapping
 """
 
 import os

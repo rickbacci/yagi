@@ -1,5 +1,5 @@
 """
-Omarchy TV - MPV Player Controller & IPC Manager
+Yagi - MPV Player Controller & IPC Manager
 Launches MPV with Wayland hardware decoding, Hyprland window rules, and JSON IPC.
 """
 
@@ -102,8 +102,8 @@ def focus_tv_window(wait: float = 3.0) -> bool:
     deadline = time.time() + wait
     while True:
         clients = _hypr_json("clients") or []
-        if any(isinstance(c, dict) and c.get("class") == "omarchy-tv" for c in clients):
-            return _hypr_dispatch('hl.dsp.focus({ window = "class:^omarchy-tv$" })')
+        if any(isinstance(c, dict) and c.get("class") == "yagi" for c in clients):
+            return _hypr_dispatch('hl.dsp.focus({ window = "class:^yagi$" })')
         if time.time() >= deadline:
             return False
         time.sleep(0.2)
@@ -125,20 +125,20 @@ def _hypr_dispatch(lua: str) -> bool:
 def _hypr_tv_client():
     clients = _hypr_json("clients") or []
     return next(
-        (c for c in clients if isinstance(c, dict) and c.get("class") == "omarchy-tv"),
+        (c for c in clients if isinstance(c, dict) and c.get("class") == "yagi"),
         None,
     )
 
 
 def _toggle_omarchy_fullscreen(target_tv: bool = False) -> None:
-    """Unpin omarchy-tv if needed, then the same fullscreen dispatcher Omarchy Super+F uses.
+    """Unpin the Yagi window if needed, then the same fullscreen dispatcher Omarchy Super+F uses.
 
     Pin is a static window-rule effect. Super+F on a pinned client stays at
     fullscreen 0 (measured on this Hyprland). Super+F special-cases the PiP
     when it is the focused window. `--player` targets the TV window from CLI.
     """
     active = _hypr_json("activewindow") or {}
-    target = active if active.get("class") == "omarchy-tv" else None
+    target = active if active.get("class") == "yagi" else None
     if target_tv and target is None:
         target = _hypr_tv_client()
     addr = (target or {}).get("address")
@@ -228,7 +228,7 @@ def _stated_player_pid_dead(state_path: Optional[str] = None) -> bool:
 
 
 def _is_tv_window(pid: int) -> bool:
-    """A living omarchy-tv mpv. A reused pid is some other program."""
+    """A living yagi mpv. A reused pid is some other program."""
     if pid <= 1:
         return False
     try:
@@ -236,7 +236,7 @@ def _is_tv_window(pid: int) -> bool:
             args = f.read().split(b"\0")
     except OSError:
         return False
-    return b"--wayland-app-id=omarchy-tv" in args
+    return b"--wayland-app-id=yagi" in args
 
 
 def _clear_player_state_if_running(state_path: Optional[str] = None) -> None:
@@ -283,7 +283,7 @@ def is_follow_path(path: Optional[str]) -> bool:
     low = p.lower()
     if low in ("-", "fd://0", "fdclose://0", "/dev/stdin"):
         return True
-    if p == FOLLOW_FIFO_PATH or p.endswith("omarchy-tv-follow.fifo"):
+    if p == FOLLOW_FIFO_PATH or p.endswith("yagi-follow.fifo"):
         return True
     return False
 
@@ -648,7 +648,7 @@ class MpvController:
             )
             for line in out.splitlines():
                 args = line.split()
-                if "--wayland-app-id=omarchy-tv" not in args or ours not in args:
+                if "--wayland-app-id=yagi" not in args or ours not in args:
                     continue
                 try:
                     pids.add(int(line.split(None, 1)[0]))
@@ -708,14 +708,14 @@ class MpvController:
             self._reap_stale_window()
 
         hud_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "tv_hud.lua")
-        cli_bin = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "bin", "omarchy-tv")
+        cli_bin = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "bin", "yagi")
         live_dump = is_timeshift_path(file_path)
         cmd = [
             "mpv",
             f"--input-ipc-server={self.socket_path}",
-            "--wayland-app-id=omarchy-tv",
-            "--x11-name=omarchy-tv",
-            "--title=Omarchy TV",
+            "--wayland-app-id=yagi",
+            "--x11-name=yagi",
+            "--title=Yagi",
             "--force-window=immediate",
             "--hwdec=auto-safe",
             "--keepaspect-window=no",

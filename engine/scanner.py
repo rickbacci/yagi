@@ -1,5 +1,5 @@
 """
-Omarchy TV - ATSC Frequency Scanner & Channel Discovery Engine
+Yagi - ATSC Frequency Scanner & Channel Discovery Engine
 Performs fast, intelligent OTA broadcast scanning with real-time JSON progress.
 """
 

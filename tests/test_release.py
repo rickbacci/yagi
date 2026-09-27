@@ -31,7 +31,7 @@ class TestRelease(unittest.TestCase):
         subprocess.run(["git", "-C", self.repo, *args], check=True, capture_output=True, env=env)
 
     def _commit(self, text):
-        path = os.path.join(self.repo, "bin", "omarchy-tv")
+        path = os.path.join(self.repo, "bin", "yagi")
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
         os.chmod(path, 0o755)
@@ -39,17 +39,17 @@ class TestRelease(unittest.TestCase):
         self._git("commit", "-q", "-m", text)
 
     def _current(self):
-        with open(os.path.join(self.root, "current", "bin", "omarchy-tv"), encoding="utf-8") as f:
+        with open(os.path.join(self.root, "current", "bin", "yagi"), encoding="utf-8") as f:
             return f.read()
 
     def test_uncommitted_edits_never_reach_the_timer(self):
         self._commit("one")
-        with open(os.path.join(self.repo, "bin", "omarchy-tv"), "w", encoding="utf-8") as f:
+        with open(os.path.join(self.repo, "bin", "yagi"), "w", encoding="utf-8") as f:
             f.write("half saved")
         sha = publish(self.repo, self.root)
         self.assertEqual(self._current(), "one")
         self.assertEqual(current_sha(self.root), sha)
-        self.assertTrue(os.access(os.path.join(self.root, "current", "bin", "omarchy-tv"), os.X_OK))
+        self.assertTrue(os.access(os.path.join(self.root, "current", "bin", "yagi"), os.X_OK))
 
     def test_a_new_commit_moves_current_and_keeps_the_last_copy(self):
         self._commit("one")

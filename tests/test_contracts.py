@@ -1,5 +1,5 @@
 """
-Contract and schema validation tests for Omarchy TV.
+Contract and schema validation tests for Yagi.
 Ensures IPC and state file boundaries between Python engine and Quickshell UI never break.
 """
 
@@ -14,7 +14,7 @@ from engine.scanner import AtscScanner, write_scan_status
 
 
 class SchemaValidator:
-    """Zero-dependency schema and invariant validator for Omarchy TV IPC files."""
+    """Zero-dependency schema and invariant validator for Yagi IPC files."""
 
     @staticmethod
     def validate_channels_json(data: Dict[str, Any]) -> List[str]:

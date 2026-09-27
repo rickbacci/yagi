@@ -1,5 +1,5 @@
 """
-Omarchy TV - Channel Metadata Enrichment & Station Mapping
+Yagi - Channel Metadata Enrichment & Station Mapping
 Maps raw ATSC RF scan entries to user-friendly Major.Minor channel numbers,
 network affiliations (NBC, ABC, CBS, FOX, PBS, CW), and human callsigns.
 

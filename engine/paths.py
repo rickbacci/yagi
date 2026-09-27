@@ -1,5 +1,5 @@
 """
-Omarchy TV - Shared Paths & Runtime Security
+Yagi - Shared Paths & Runtime Security
 Centralizes configuration, socket locations, and directories with secure permissions.
 """
 
@@ -17,7 +17,7 @@ DIR_PRIVATE = 0o700
 FILE_PRIVATE = 0o600
 
 _XDG_CONFIG = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-CONFIG_DIR = os.path.join(_XDG_CONFIG, "omarchy", "tv")
+CONFIG_DIR = os.path.join(_XDG_CONFIG, "yagi")
 CHANNELS_JSON_PATH = os.path.join(CONFIG_DIR, "channels.json")
 FAVORITES_JSON_PATH = os.path.join(CONFIG_DIR, "favorites.json")
 HIDDEN_JSON_PATH = os.path.join(CONFIG_DIR, "hidden.json")
@@ -35,12 +35,12 @@ PLAYER_STATE_PATH = os.path.join(CONFIG_DIR, "player_state.json")
 UI_PREFS_PATH = os.path.join(CONFIG_DIR, "ui_prefs.json")
 STATION_MAP_PATH = os.path.join(CONFIG_DIR, "station_map.json")
 _XDG_CACHE = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
-TIMESHIFT_DIR = os.path.join(_XDG_CACHE, "omarchy", "tv", "timeshift")
+TIMESHIFT_DIR = os.path.join(_XDG_CACHE, "yagi", "timeshift")
 TIMESHIFT_FILE = os.path.join(TIMESHIFT_DIR, "live.ts")
 TIMESHIFT_NEXT_FILE = os.path.join(TIMESHIFT_DIR, "live.next.ts")
 TIMESHIFT_ACTIVE_PATH = os.path.join(CONFIG_DIR, "timeshift_active.json")
 # A tower dump a recording kept when live TV moved on. Close TV does not wipe it.
-KEPT_DUMP_DIR = os.path.join(_XDG_CACHE, "omarchy", "tv", "kept")
+KEPT_DUMP_DIR = os.path.join(_XDG_CACHE, "yagi", "kept")
 TUNE_STATUS_PATH = os.path.join(CONFIG_DIR, "tune_status.json")
 
 
@@ -72,15 +72,15 @@ def touch_private_file(path: str) -> None:
     chmod_private_file(path)
 
 
-LIVE_SLICE = "omarchy-tv-live.slice"
-REC_SLICE = "omarchy-tv-rec.slice"
-TUNER_SLICE = "omarchy-tv-tuner.slice"
-FOLLOW_UNIT = "omarchy-tv-follow.scope"
+LIVE_SLICE = "yagi-live.slice"
+REC_SLICE = "yagi-rec.slice"
+TUNER_SLICE = "yagi-tuner.slice"
+FOLLOW_UNIT = "yagi-follow.scope"
 
 
 def dump_unit(adapter_id: int) -> str:
     """One tower dump per tuner. A recording can keep one after live TV moves on."""
-    return f"omarchy-tv-dump{int(adapter_id)}.scope"
+    return f"yagi-dump{int(adapter_id)}.scope"
 
 
 def systemd_user() -> bool:
@@ -158,7 +158,7 @@ def state_lock(key: str, timeout: Optional[float] = None) -> Iterator[None]:
 
     Nests inside one thread. Raises TimeoutError after timeout seconds.
     """
-    name = "omarchy-tv-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16] + ".flock"
+    name = "yagi-" + hashlib.sha1(key.encode("utf-8")).hexdigest()[:16] + ".flock"
     held = getattr(_lock_depth, "held", None)
     if held is None:
         held = _lock_depth.held = {}
@@ -192,9 +192,9 @@ def state_lock(key: str, timeout: Optional[float] = None) -> Iterator[None]:
         os.close(fd)
 
 
-MPV_SOCKET_PATH = get_runtime_socket("omarchy-tv-mpv.sock")
-TIMESHIFT_SOCKET_PATH = get_runtime_socket("omarchy-tv-timeshift.sock")
-TIMESHIFT_NEXT_SOCKET_PATH = get_runtime_socket("omarchy-tv-timeshift-next.sock")
-FOLLOW_SOCKET_PATH = get_runtime_socket("omarchy-tv-follow.sock")
-FOLLOW_FIFO_PATH = get_runtime_socket("omarchy-tv-follow.fifo")
-TUNE_LOCK_PATH = get_runtime_socket("omarchy-tv-tune.lock")
+MPV_SOCKET_PATH = get_runtime_socket("yagi-mpv.sock")
+TIMESHIFT_SOCKET_PATH = get_runtime_socket("yagi-timeshift.sock")
+TIMESHIFT_NEXT_SOCKET_PATH = get_runtime_socket("yagi-timeshift-next.sock")
+FOLLOW_SOCKET_PATH = get_runtime_socket("yagi-follow.sock")
+FOLLOW_FIFO_PATH = get_runtime_socket("yagi-follow.fifo")
+TUNE_LOCK_PATH = get_runtime_socket("yagi-tune.lock")

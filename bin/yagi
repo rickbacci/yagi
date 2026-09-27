@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Omarchy TV - Command Line Interface
+Yagi - Command Line Interface
 """
 
 import os
@@ -38,7 +38,7 @@ def cmd_status(args):
     except OSError:
         on = False
     sha = current_sha()
-    print(f"Record timer: on, runs {sha}" if on and sha else "Record timer: off. Run `omarchy-tv install` to record.")
+    print(f"Record timer: on, runs {sha}" if on and sha else "Record timer: off. Run `yagi install` to record.")
 
 
 def cmd_install(args):
@@ -131,7 +131,7 @@ def cmd_scan(args):
 
 def cmd_list(args):
     if not os.path.exists(CHANNELS_JSON_PATH):
-        print("No channels found. Run `omarchy-tv scan` first!")
+        print("No channels found. Run `yagi scan` first!")
         return
 
     with open(CHANNELS_JSON_PATH, "r") as f:
@@ -199,7 +199,7 @@ def cmd_guide(args):
     if action == "forget":
         query = getattr(args, "query", None) or []
         if len(query) < 2 or not delete_airing(query[0], int(query[1])):
-            print("Name the channel and the start time. Example: omarchy-tv guide forget 5.1 1726964100")
+            print("Name the channel and the start time. Example: yagi guide forget 5.1 1726964100")
             sys.exit(1)
         print("Removed that airing.")
         return
@@ -366,7 +366,7 @@ def cmd_pref(args):
         elif value in ("hidden",):
             prefs["channel_filter"] = "hidden"
         else:
-            print("Use: omarchy-tv pref filter favorites|all|hidden")
+            print("Use: yagi pref filter favorites|all|hidden")
             return
         save_ui_prefs(prefs)
         print(f"Channel list filter is {prefs['channel_filter']}.")
@@ -381,7 +381,7 @@ def cmd_pref(args):
             try:
                 gb = float(value)
             except ValueError:
-                print("Use: omarchy-tv pref library-max auto|50|100|250|off")
+                print("Use: yagi pref library-max auto|50|100|250|off")
                 return
             if gb < 0:
                 print("Library cap must be auto, off, or a size in GB.")
@@ -399,7 +399,7 @@ def cmd_pref(args):
             print(f"Recording library cap is {format_bytes(budget)}.")
         return
 
-    print("Unknown pref. Use: omarchy-tv pref filter favorites|all|hidden | pref library-max auto|50|100|250|off")
+    print("Unknown pref. Use: yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off")
 
 
 def cmd_favorite(args):
@@ -410,7 +410,7 @@ def cmd_favorite(args):
     if action == "list" or not target:
         if not favs:
             print("No favorite channels saved yet.")
-            print("Add one with: omarchy-tv favorite toggle <channel_name>")
+            print("Add one with: yagi favorite toggle <channel_name>")
             return
         print(f"⭐ Favorite Channels ({len(favs)} total):")
         for f in favs:
@@ -448,14 +448,14 @@ def cmd_hidden(args):
     action = args.action or "list"
     if action == "hide":
         if not args.channel:
-            print("Name the channel number. Example: omarchy-tv hidden hide 19.1")
+            print("Name the channel number. Example: yagi hidden hide 19.1")
             sys.exit(1)
         items = hide_channel(args.channel)
         print(f"Hid {args.channel}. {len(items)} hidden.")
         return
     if action == "show":
         if not args.channel:
-            print("Name the channel number. Example: omarchy-tv hidden show 19.10")
+            print("Name the channel number. Example: yagi hidden show 19.10")
             sys.exit(1)
         items = show_channel(args.channel)
         print(f"Showing {args.channel}. {len(items)} hidden.")
@@ -603,7 +603,7 @@ def cmd_record(args):
 
     if action == "start":
         if not args.target:
-            print("Error: Specify a channel to record. Example: omarchy-tv record start 8.1 [duration]")
+            print("Error: Specify a channel to record. Example: yagi record start 8.1 [duration]")
             sys.exit(1)
         duration_sec = parse_duration_str(args.duration)
         dur_msg = f" for {args.duration}" if args.duration else ""
@@ -689,7 +689,7 @@ def cmd_record(args):
     elif action == "later":
         from engine.schedule import add_later
         if not args.target:
-            print("Error: Name the station. Example: omarchy-tv record later WEWSHD 3600s --title \"News 5\" --gps 1 --clock \"11:00 PM\"")
+            print("Error: Name the station. Example: yagi record later WEWSHD 3600s --title \"News 5\" --gps 1 --clock \"11:00 PM\"")
             sys.exit(1)
         try:
             extra = parse_duration_str(getattr(args, "extra", "") or "") or 0
@@ -739,7 +739,7 @@ def cmd_record(args):
         except ValueError:
             keep = -1
         if not args.target or keep < 0 or not set_keep_last(args.target, keep):
-            print("Use: omarchy-tv record limit <show id> <how many to keep, 0 for all>")
+            print("Use: yagi record limit <show id> <how many to keep, 0 for all>")
             sys.exit(1)
         DvrManager.refresh_library_index()
         print(f"Keeping the newest {keep} episodes." if keep else "Keeping every episode.")
@@ -838,7 +838,7 @@ def cmd_record(args):
         recordings = DvrManager.refresh_library_index()
         if not recordings:
             print(f"No recordings found in {RECORDINGS_DIR}.")
-            print("Start a recording with: omarchy-tv record start <channel> [duration]")
+            print("Start a recording with: yagi record start <channel> [duration]")
             return
         print(f"📼 Recorded Broadcasts ({len(recordings)} total in {RECORDINGS_DIR}):")
         print("=" * 85)
@@ -851,7 +851,7 @@ def cmd_record(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Omarchy TV - Modern Linux Over-The-Air Television")
+    parser = argparse.ArgumentParser(description="Yagi - Modern Linux Over-The-Air Television")
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     # status
@@ -933,7 +933,7 @@ def main():
     p_fs.add_argument(
         "--player",
         action="store_true",
-        help="Target the omarchy-tv window even if it is not focused",
+        help="Target the yagi window even if it is not focused",
     )
     p_fs.set_defaults(func=cmd_fullscreen)
 

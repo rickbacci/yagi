@@ -1,5 +1,5 @@
 """
-Unit tests for Omarchy TV - Electronic Program Guide (EPG)
+Unit tests for Yagi - Electronic Program Guide (EPG)
 """
 
 import os

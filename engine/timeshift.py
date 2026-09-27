@@ -1,7 +1,7 @@
 """
 Throwaway pause-live buffer: dump Tuner 0 to a growing MPEG-TS file.
 
-A detached reader copies live.ts onto a fifo and outlives `omarchy-tv play`.
+A detached reader copies live.ts onto a fifo and outlives `yagi play`.
 The window opens that fifo once. Skip and live SEEK the reader. Channel
 change is the only loadfile. Close TV wipes the dump and the reader. This
 is not a library recording and not dvb:// cache.

@@ -16,7 +16,7 @@ from engine.paths import GUIDE_STATUS_PATH, SCAN_STATUS_PATH, get_runtime_socket
 
 DVB_ROOT = "/dev/dvb"
 SCAN_HEARTBEAT_SECS = 15
-YIELD_PATH = get_runtime_socket("omarchy-tv-guide-yield")
+YIELD_PATH = get_runtime_socket("yagi-guide-yield")
 YIELD_FRESH_SECS = 30
 
 

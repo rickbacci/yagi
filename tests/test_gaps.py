@@ -144,8 +144,8 @@ class TestChannelHelpers(unittest.TestCase):
         with patch.object(MpvController, "is_running", return_value=False), \
              patch("player.controller._stated_player_pid", return_value=0), \
              patch("player.controller.subprocess.check_output", return_value=(
-                 "4321 mpv --input-ipc-server=/no/such/sock --wayland-app-id=omarchy-tv\n"
-                 "4322 mpv --input-ipc-server=/real/omarchy-tv-mpv.sock --wayland-app-id=omarchy-tv\n"
+                 "4321 mpv --input-ipc-server=/no/such/sock --wayland-app-id=yagi\n"
+                 "4322 mpv --input-ipc-server=/real/yagi-mpv.sock --wayland-app-id=yagi\n"
                  "99 other\n"
              )), \
              patch("player.controller.os.kill", side_effect=kill), \
@@ -230,19 +230,19 @@ class TestTimeshiftStop(unittest.TestCase):
 
                 threading.Thread(target=serve, daemon=True).start()
                 self.assertEqual(Timeshift.follow_pos(), 1880)
-            with patch("engine.timeshift.subprocess.check_output", return_value="12 mpv --stream-dump=/x omarchy/tv/timeshift/live.ts\nbad\n1 mpv --stream-dump=/x omarchy/tv/timeshift/live.ts\n"), \
+            with patch("engine.timeshift.subprocess.check_output", return_value="12 mpv --stream-dump=/x yagi/timeshift/live.ts\nbad\n1 mpv --stream-dump=/x yagi/timeshift/live.ts\n"), \
                  patch.object(Timeshift, "_kill_pid") as kill:
                 Timeshift._reap_orphan_dumps(keep_pid=12)
             kill.assert_not_called()
             listing = (
-                "40 python3 /r/engine/tower_dump.py 0 551028615 /c/omarchy/tv/timeshift/live.ts /s /l\n"
-                "41 mpv --script-opts=tv_hud-timeshift-file=/c/omarchy/tv/timeshift/live.ts fd://0\n"
-                "42 mpv --stream-dump=/c/omarchy/tv/timeshift/live.ts dvb://FOX\n"
-                "43 bash -c pgrep -af tower_dump.py; tail /c/omarchy/tv/timeshift/dump.log --stream-dump=\n"
-                "44 python3 /r/engine/tower_dump.py 0 551028615 /other/omarchy/tv/timeshift/live.ts /s /l\n"
+                "40 python3 /r/engine/tower_dump.py 0 551028615 /c/yagi/timeshift/live.ts /s /l\n"
+                "41 mpv --script-opts=tv_hud-timeshift-file=/c/yagi/timeshift/live.ts fd://0\n"
+                "42 mpv --stream-dump=/c/yagi/timeshift/live.ts dvb://FOX\n"
+                "43 bash -c pgrep -af tower_dump.py; tail /c/yagi/timeshift/dump.log --stream-dump=\n"
+                "44 python3 /r/engine/tower_dump.py 0 551028615 /other/yagi/timeshift/live.ts /s /l\n"
             )
             with patch("engine.timeshift.subprocess.check_output", return_value=listing), \
-                 patch("engine.timeshift.TIMESHIFT_DIR", "/c/omarchy/tv/timeshift"), \
+                 patch("engine.timeshift.TIMESHIFT_DIR", "/c/yagi/timeshift"), \
                  patch.object(Timeshift, "_kill_pid") as kill:
                 Timeshift._reap_orphan_dumps()
             self.assertEqual([c.args[0] for c in kill.call_args_list], [40, 42])
@@ -252,7 +252,7 @@ class TestTimeshiftStop(unittest.TestCase):
                  patch("engine.timeshift.stop_unit", return_value=True) as stop, \
                  patch("engine.timeshift.subprocess.check_output") as sweep:
                 Timeshift._reap_orphan_dumps()
-            self.assertEqual([c.args[0] for c in stop.call_args_list], ["omarchy-tv-dump0.scope", "omarchy-tv-dump1.scope"])
+            self.assertEqual([c.args[0] for c in stop.call_args_list], ["yagi-dump0.scope", "yagi-dump1.scope"])
             sweep.assert_not_called()
 
     def test_wait_frontend_free_keeps_waiting_when_fuser_fails(self):

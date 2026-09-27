@@ -1,5 +1,5 @@
 """
-Unit tests for Omarchy TV - MPV Player Controller & Channel Cycling
+Unit tests for Yagi - MPV Player Controller & Channel Cycling
 """
 
 import os
@@ -33,7 +33,7 @@ from engine.timeshift import Timeshift
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 LUA_HUD = os.path.join(PROJECT_ROOT, "player", "scripts", "tv_hud.lua")
-CLI_BIN = os.path.join(PROJECT_ROOT, "bin", "omarchy-tv")
+CLI_BIN = os.path.join(PROJECT_ROOT, "bin", "yagi")
 
 
 _CLEVELAND = load_station_map(os.path.join(PROJECT_ROOT, "markets", "cleveland.json"))
@@ -525,7 +525,7 @@ class TestMpvPlayerController(unittest.TestCase):
 
     def test_reconcile_keeps_the_pause_while_a_slow_window_lives(self):
         window = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(10)", "--wayland-app-id=omarchy-tv"]
+            [sys.executable, "-c", "import time; time.sleep(10)", "--wayland-app-id=yagi"]
         )
         try:
             update_player_state(True, channel="WKYC-HD", pid=window.pid)
@@ -984,7 +984,7 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
 
     def test_seek_back_while_delayed_uses_the_live_cursor(self):
         self.server.path_value = FOLLOW_FIFO_PATH
-        with patch("player.controller.Timeshift.load_state", return_value={"view": "delayed", "paused": False, "skip_busy": False, "playhead_byte": 1880, "follow_socket": "/run/user/1000/omarchy-tv-follow.sock"}), \
+        with patch("player.controller.Timeshift.load_state", return_value={"view": "delayed", "paused": False, "skip_busy": False, "playhead_byte": 1880, "follow_socket": "/run/user/1000/yagi-follow.sock"}), \
              patch("player.controller.Timeshift.follow_pos", return_value=37_600_000), \
              patch("player.controller.Timeshift.delay_sec", return_value=30.0), \
              patch("player.controller.Timeshift.send_follow_seek", return_value=True) as mock_seek, \
@@ -1128,7 +1128,7 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertNotIn("string.lower(p.network) == string.lower(matched_ch.network)", src)
         self.assertNotIn("Projects/personal", src)
         self.assertIn("debug.getinfo(1, \"S\")", src)
-        self.assertIn("/bin/omarchy-tv", src)
+        self.assertIn("/bin/yagi", src)
         self.assertIn('args = {cli, "sync", "--reap", pid}', src)
         self.assertIn("detach = true", src)
 
@@ -1137,7 +1137,7 @@ class TestOmarchyFullscreen(unittest.TestCase):
     @patch("player.controller.subprocess.run")
     def test_unpins_tv_then_uses_omarchy_dispatcher(self, mock_run):
         tv = {
-            "class": "omarchy-tv",
+            "class": "yagi",
             "address": "0xabc",
             "pinned": True,
             "fullscreen": 0,
@@ -1271,9 +1271,9 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("function hide():", src)
         self.assertIn('record", "stop"', src)
         self.assertIn("tvConfigDir", src)
-        self.assertIn("../bin/omarchy-tv", src)
-        self.assertNotIn('Quickshell.env("HOME") || "") + "/.config/omarchy/tv', src)
-        self.assertNotIn('readonly property string binPath: "omarchy-tv"', src)
+        self.assertIn("../bin/yagi", src)
+        self.assertNotIn('Quickshell.env("HOME") || "") + "/.config/yagi', src)
+        self.assertNotIn('readonly property string binPath: "yagi"', src)
         self.assertIn("Model.currentProgram(program, root.guideClockMin)", src)
         self.assertIn("chItem.onNow", src)
         self.assertIn("Model.channelSubLine(chItem.stationName, chItem.onNext)", src)
@@ -1360,7 +1360,7 @@ class TestPluginManifest(unittest.TestCase):
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         self.assertEqual(data["schemaVersion"], 1)
-        self.assertEqual(data["id"], "richardb.omarchy-tv")
+        self.assertEqual(data["id"], "richardb.yagi")
         self.assertEqual(data["kinds"], ["bar-widget"])
         self.assertEqual(data["entryPoints"]["barWidget"], "plugin/BarWidget.qml")
         self.assertTrue(os.path.isfile(os.path.join(PROJECT_ROOT, "plugin", "BarWidget.qml")))

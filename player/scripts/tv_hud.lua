@@ -1,4 +1,4 @@
--- Omarchy TV - Modern Broadcast Heads-Up Display (Live TV OSD)
+-- Yagi - Modern Broadcast Heads-Up Display (Live TV OSD)
 -- Replaces retro desktop seekbars with a sleek, glassmorphic TV banner and transport HUD.
 
 local utils = require "mp.utils"
@@ -44,16 +44,16 @@ local xdg_config = os.getenv("XDG_CONFIG_HOME")
 if not xdg_config or xdg_config == "" then
     xdg_config = (os.getenv("HOME") or "") .. "/.config"
 end
-local CHANNELS_PATH = xdg_config .. "/omarchy/tv/channels.json"
-local GUIDE_PATH = xdg_config .. "/omarchy/tv/guide.json"
-local RECORDINGS_PATH = xdg_config .. "/omarchy/tv/recordings_active.json"
-local PLAYER_STATE_PATH = xdg_config .. "/omarchy/tv/player_state.json"
-local TIMESHIFT_ACTIVE_PATH = xdg_config .. "/omarchy/tv/timeshift_active.json"
+local CHANNELS_PATH = xdg_config .. "/yagi/channels.json"
+local GUIDE_PATH = xdg_config .. "/yagi/guide.json"
+local RECORDINGS_PATH = xdg_config .. "/yagi/recordings_active.json"
+local PLAYER_STATE_PATH = xdg_config .. "/yagi/player_state.json"
+local TIMESHIFT_ACTIVE_PATH = xdg_config .. "/yagi/timeshift_active.json"
 local xdg_cache = os.getenv("XDG_CACHE_HOME")
 if not xdg_cache or xdg_cache == "" then
     xdg_cache = (os.getenv("HOME") or "") .. "/.cache"
 end
-local TIMESHIFT_DIR = xdg_cache .. "/omarchy/tv/timeshift"
+local TIMESHIFT_DIR = xdg_cache .. "/yagi/timeshift"
 local xdg_state = os.getenv("XDG_STATE_HOME")
 if not xdg_state or xdg_state == "" then
     xdg_state = (os.getenv("HOME") or "") .. "/.local/state"
@@ -192,7 +192,7 @@ local function follow_sock_opt()
     if p and p ~= "" then return p end
     local runtime = os.getenv("XDG_RUNTIME_DIR") or ""
     if runtime ~= "" then
-        return runtime .. "/omarchy-tv-follow.sock"
+        return runtime .. "/yagi-follow.sock"
     end
     return nil
 end
@@ -209,18 +209,18 @@ local function is_timeshift_playback()
     if path:match("^http://127%.0%.0%.1:") and path:find("/live.ts", 1, true) then
         return true
     end
-    if follow_sock_opt() and (path == "-" or path:match("^fd://") or path:match("^fdclose://") or path:find("omarchy-tv-follow.fifo", 1, true)) then
+    if follow_sock_opt() and (path == "-" or path:match("^fd://") or path:match("^fdclose://") or path:find("yagi-follow.fifo", 1, true)) then
         return true
     end
     if path == "" or path:match("^dvb://") then return false end
     return path:sub(1, #TIMESHIFT_DIR) == TIMESHIFT_DIR
-        or path:find("/omarchy/tv/timeshift/", 1, true) ~= nil
+        or path:find("/yagi/timeshift/", 1, true) ~= nil
 end
 
 local function is_follow_pipe()
     local path = mp.get_property("path") or ""
     return path == "-" or path:match("^fd://") or path:match("^fdclose://")
-        or path:find("omarchy-tv-follow.fifo", 1, true) ~= nil
+        or path:find("yagi-follow.fifo", 1, true) ~= nil
 end
 
 local function is_library_playback()
@@ -311,14 +311,14 @@ local function tv_cli()
     if src:sub(1, 1) == "@" then src = src:sub(2) end
     local root = src:match("^(.*)/player/scripts/tv_hud%.lua$")
     if root then
-        local candidate = root .. "/bin/omarchy-tv"
+        local candidate = root .. "/bin/yagi"
         local f = io.open(candidate, "r")
         if f then
             f:close()
             return candidate
         end
     end
-    return "omarchy-tv"
+    return "yagi"
 end
 
 local function cli_async(argv)
@@ -1606,7 +1606,7 @@ mp.add_forced_key_binding("MBTN_MID", "tv_mute_mid", function()
     show_hud()
 end)
 
--- Fullscreen is Omarchy Super+F only (see omarchy-tv fullscreen). Do not
+-- Fullscreen is Omarchy Super+F only (see yagi fullscreen). Do not
 -- bind `f` or double-click — stock mpv fullscreen is also off.
 mp.add_forced_key_binding("c", "tv_sub_cycle", function()
     mp.command("cycle sub")

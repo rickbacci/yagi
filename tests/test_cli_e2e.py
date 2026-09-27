@@ -1,5 +1,5 @@
 """
-End-to-End CLI tests for Omarchy TV.
+End-to-End CLI tests for Yagi.
 Verifies symlink resolution, argument parsing, subshell execution, and sandbox isolation.
 """
 
@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-CLI_BIN = os.path.join(PROJECT_ROOT, "bin", "omarchy-tv")
+CLI_BIN = os.path.join(PROJECT_ROOT, "bin", "yagi")
 
 
 class TestCliE2E(unittest.TestCase):
@@ -32,7 +32,7 @@ class TestCliE2E(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_cli_direct_execution(self):
-        """Direct execution of bin/omarchy-tv with --help must succeed."""
+        """Direct execution of bin/yagi with --help must succeed."""
         res = subprocess.run(
             [sys.executable, CLI_BIN, "--help"],
             capture_output=True,
@@ -40,14 +40,14 @@ class TestCliE2E(unittest.TestCase):
             env=self.env
         )
         self.assertEqual(res.returncode, 0)
-        self.assertIn("Omarchy TV - Modern Linux Over-The-Air Television", res.stdout)
+        self.assertIn("Yagi - Modern Linux Over-The-Air Television", res.stdout)
         self.assertIn("status", res.stdout)
         self.assertIn("scan", res.stdout)
         self.assertIn("play", res.stdout)
 
     def test_cli_symlink_invocation(self):
-        """Executing omarchy-tv via a symlink outside the repo must resolve imports cleanly."""
-        symlink_bin = os.path.join(self.temp_dir.name, "omarchy-tv")
+        """Executing yagi via a symlink outside the repo must resolve imports cleanly."""
+        symlink_bin = os.path.join(self.temp_dir.name, "yagi")
         os.symlink(CLI_BIN, symlink_bin)
 
         # Execute the symlink directly (exercising shebang + realpath)
@@ -58,10 +58,10 @@ class TestCliE2E(unittest.TestCase):
             env=self.env
         )
         self.assertEqual(res.returncode, 0, f"Symlink execution failed: {res.stderr}")
-        self.assertIn("Omarchy TV", res.stdout)
+        self.assertIn("Yagi", res.stdout)
 
     def test_cli_status_command(self):
-        """omarchy-tv status must discover hardware tuners and exit 0."""
+        """yagi status must discover hardware tuners and exit 0."""
         res = subprocess.run(
             [sys.executable, CLI_BIN, "status"],
             capture_output=True,
@@ -73,9 +73,9 @@ class TestCliE2E(unittest.TestCase):
         self.assertNotIn("Traceback", res.stderr)
 
     def test_cli_channels_empty(self):
-        """omarchy-tv channels must report 'No channels found' gracefully when empty."""
+        """yagi channels must report 'No channels found' gracefully when empty."""
         # Use a fake TV config directory inside sandbox
-        tv_dir = os.path.join(self.sandbox_config, "omarchy", "tv")
+        tv_dir = os.path.join(self.sandbox_config, "yagi")
         os.makedirs(tv_dir, exist_ok=True)
 
         res = subprocess.run(
@@ -89,8 +89,8 @@ class TestCliE2E(unittest.TestCase):
         self.assertFalse("Traceback" in res.stderr)
 
     def test_cli_channels_with_data(self):
-        """omarchy-tv channels must format channel list when channels.json exists."""
-        tv_dir = os.path.join(self.sandbox_config, "omarchy", "tv")
+        """yagi channels must format channel list when channels.json exists."""
+        tv_dir = os.path.join(self.sandbox_config, "yagi")
         os.makedirs(tv_dir, exist_ok=True)
         with open(os.path.join(tv_dir, "channels.json"), "w", encoding="utf-8") as f:
             json.dump({"channels": [{"channel_number": "8.1", "display_name": "FOX 8", "frequency": 551028615}]}, f)
@@ -106,7 +106,7 @@ class TestCliE2E(unittest.TestCase):
         self.assertIn("FOX 8", res.stdout)
 
     def test_cli_favorite_toggle_and_list(self):
-        """omarchy-tv favorite toggle and list must manage favorites in sandbox."""
+        """yagi favorite toggle and list must manage favorites in sandbox."""
         # Initially empty list
         res_list = subprocess.run(
             [sys.executable, CLI_BIN, "favorite", "list"],
@@ -148,7 +148,7 @@ class TestCliE2E(unittest.TestCase):
         self.assertIn("Removed 'FOX' from favorites", res_toggle2.stdout)
 
     def test_cli_record_subcommands(self):
-        """omarchy-tv record list and status must execute cleanly in sandbox."""
+        """yagi record list and status must execute cleanly in sandbox."""
         res_list = subprocess.run(
             [sys.executable, CLI_BIN, "record", "list"],
             capture_output=True,
@@ -176,7 +176,7 @@ class TestCliE2E(unittest.TestCase):
         )
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("20.00 GB", res.stdout)
-        prefs_path = os.path.join(self.sandbox_config, "omarchy", "tv", "ui_prefs.json")
+        prefs_path = os.path.join(self.sandbox_config, "yagi", "ui_prefs.json")
         with open(prefs_path, encoding="utf-8") as f:
             data = json.load(f)
         self.assertEqual(data["library_max_gb"], 20)

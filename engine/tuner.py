@@ -1,5 +1,5 @@
 """
-Omarchy TV - Tuner Hardware Manager
+Yagi - Tuner Hardware Manager
 Detects, queries, and allocates Linux DVB adapters for ATSC OTA television.
 """
 

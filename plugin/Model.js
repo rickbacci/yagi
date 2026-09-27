@@ -1,4 +1,4 @@
-// Omarchy TV - Model and Helpers
+// Yagi - Model and Helpers
 
 function formatFreq(freqHz) {
   if (!freqHz) return "";
@@ -416,6 +416,6 @@ function fileUrlToPath(url) {
 function tvConfigDir(xdgConfigHome, home) {
   var xdg = String(xdgConfigHome || "")
   if (xdg.length)
-    return xdg + "/omarchy/tv"
-  return String(home || "") + "/.config/omarchy/tv"
+    return xdg + "/yagi"
+  return String(home || "") + "/.config/yagi"
 }

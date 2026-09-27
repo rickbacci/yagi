@@ -70,7 +70,7 @@ class TestStateLock(unittest.TestCase):
                 kids.append(subprocess.Popen([sys.executable, "-c", code, key], env=full_env))
             for kid in kids:
                 self.assertEqual(kid.wait(timeout=30), 0)
-            with open(os.path.join(tmp, "omarchy", "tv", "timeshift_active.json"), encoding="utf-8") as f:
+            with open(os.path.join(tmp, "yagi", "timeshift_active.json"), encoding="utf-8") as f:
                 state = json.load(f)
             for key in ("a", "b"):
                 for n in range(60):
