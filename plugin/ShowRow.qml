@@ -80,10 +80,13 @@ Item {
     }
 
     Button {
-      visible: !!showRow.airing && !showRow.ruled
-      text: showRow.oneState === "recording" ? "Recording"
+      visible: !!showRow.airing && (!showRow.ruled || showRow.oneState !== "")
+      text: showRow.ruled && showRow.oneState === "recording" ? "Stop this one"
+            : showRow.ruled ? "Skip this one"
+            : showRow.oneState === "recording" ? "Recording"
             : (showRow.oneState === "scheduled" ? "Scheduled" : "Record")
-      tooltipText: showRow.oneState === "recording" ? "Stop this recording"
+      tooltipText: showRow.ruled ? "Just this airing. The series keeps recording the rest"
+            : showRow.oneState === "recording" ? "Stop this recording"
             : (showRow.oneState === "scheduled" ? "Don't record this"
             : (showRow.airing && showRow.airing.on_now ? "Record the rest of this one"
             : "Record the next one, " + ((showRow.modelData.next && showRow.modelData.next.day) || "") + " " + ((showRow.airing && showRow.airing.start) || "")))
