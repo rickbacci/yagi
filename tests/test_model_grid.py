@@ -83,6 +83,15 @@ class TestGrid(unittest.TestCase):
         self.assertEqual(g["count"], 1)
         self.assertTrue(g["rows"][0]["blocks"][0][5])
 
+    def test_a_team_name_is_a_maybe_for_a_game_with_no_description(self):
+        guide = dict(GUIDE, **{"8.1": {"programs": [prog("NFL Football", 0, 210), prog("MLB Baseball", 12600, 180)]}})
+        chans = CHANNELS + [{"channel_number": "8.1", "name": "FOX", "tune_name": "FOX"}]
+        payload = {"channels": chans, "guide": guide, "now": NOW, "query": "browns", "shown": None}
+        res = subprocess.run(["node", "-e", RUNNER, MODEL, json.dumps(payload)], capture_output=True, text=True, timeout=30)
+        g = json.loads(res.stdout)
+        self.assertEqual([r["ch"] for r in g["rows"]], ["43.1", "8.1"])
+        self.assertEqual([b[5] for b in g["rows"][1]["blocks"]], [True, False])
+
     def test_a_team_in_the_description_lights_the_game(self):
         g = self._grid("akron")
         self.assertEqual(g["rows"][0]["ch"], "3.1")

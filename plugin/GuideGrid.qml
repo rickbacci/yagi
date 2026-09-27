@@ -222,7 +222,7 @@ Item {
     radius: Style.spacing.labelGap
     color: isCursor ? Style.selectedFillFor(grid.fg, Color.accent) : Style.normalFillFor(grid.fg, Color.accent)
     border.width: isCursor || (searching && modelData.match) ? 1 : 0
-    border.color: Color.accent
+    border.color: searching && modelData.maybe && !isCursor ? Color.muted : Color.accent
     opacity: searching && !modelData.match ? 0.3 : 1
 
     Rectangle {
@@ -252,7 +252,8 @@ Item {
       y: Style.space(21)
       width: parent.width - Style.space(12)
       textFormat: Text.PlainText
-      text: cell.modelData.on_now ? "until " + Model.formatClock(cell.modelData.end) : Model.formatClock(cell.modelData.start)
+      text: cell.searching && cell.modelData.maybe ? "no teams listed"
+            : cell.modelData.on_now ? "until " + Model.formatClock(cell.modelData.end) : Model.formatClock(cell.modelData.start)
       color: Color.muted
       font.family: grid.tv.bar.fontFamily
       font.pixelSize: Style.font.caption
@@ -322,10 +323,10 @@ Item {
       }
 
       Text {
-        visible: !!(card.block && card.block.synopsis)
+        visible: !!(card.block && (card.block.synopsis || card.block.maybe))
         width: parent.width
         textFormat: Text.PlainText
-        text: card.block ? card.block.synopsis : ""
+        text: !card.block ? "" : (card.block.synopsis || "The station lists no teams for this game, so it might not be the one you searched for.")
         color: Color.muted
         font.family: grid.tv.bar.fontFamily
         font.pixelSize: Style.font.caption
@@ -348,8 +349,11 @@ Item {
         }
 
         Button {
-          text: card.recState === "recording" ? "Recording" : (card.recState === "scheduled" ? "Scheduled" : "Record")
-          tooltipText: card.recState === "recording" ? "Stop this recording"
+          text: card.series && card.recState === "recording" ? "Stop this one"
+                : card.series && card.recState === "scheduled" ? "Skip this one"
+                : card.recState === "recording" ? "Recording" : (card.recState === "scheduled" ? "Scheduled" : "Record")
+          tooltipText: card.series && card.recState !== "" ? "Just this airing. The series keeps recording the rest"
+                : card.recState === "recording" ? "Stop this recording"
                 : (card.recState === "scheduled" ? "Don't record this"
                 : (card.block && card.block.on_now ? "Record the rest of this one" : "Record this one when it airs"))
           selected: card.recState !== ""

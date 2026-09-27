@@ -223,8 +223,27 @@ function queryWords(query) {
   return words.join(" ").length < 2 ? [] : words
 }
 
+// Nicknames only, for games a station lists with no description.
+var TEAMS = {
+  football: "bears bengals bills broncos browns buccaneers bucs cardinals chargers chiefs colts commanders cowboys dolphins eagles falcons 49ers niners giants jaguars jags jets lions packers panthers patriots pats raiders rams ravens saints seahawks steelers texans titans vikings",
+  basketball: "hawks celtics nets hornets bulls cavaliers cavs mavericks mavs nuggets pistons warriors rockets pacers clippers lakers grizzlies heat bucks timberwolves wolves pelicans knicks thunder magic 76ers sixers suns blazers kings spurs raptors jazz wizards",
+  baseball: "diamondbacks dbacks braves orioles sox cubs reds guardians rockies tigers astros royals angels dodgers marlins brewers twins mets yankees athletics phillies pirates padres giants mariners cardinals rays rangers jays nationals nats",
+  hockey: "ducks bruins sabres flames hurricanes canes blackhawks avalanche avs jackets stars wings oilers panthers kings wild canadiens habs predators preds devils islanders rangers senators sens flyers penguins pens sharks kraken blues lightning leafs canucks knights capitals caps jets"
+}
+var SPORT_WORDS = { football: /football|\bnfl\b/, basketball: /basketball|\bnba\b/, baseball: /baseball|\bmlb\b/, hockey: /hockey|\bnhl\b/ }
+
+function _teamSport(words, title) {
+  for (var sport in SPORT_WORDS) {
+    if (!SPORT_WORDS[sport].test(title)) continue
+    var teams = " " + TEAMS[sport] + " "
+    for (var w = 0; w < words.length; w++) if (teams.indexOf(" " + words[w] + " ") !== -1) return sport
+  }
+  return ""
+}
+
 // Games list as "NFL Football" with the teams only in the description, so a
-// title miss still counts when every word is in the description.
+// title miss still counts when every word is in the description. A game with
+// no description is a maybe when a word is a team in its sport.
 function progMatch(prog, words) {
   var title = String((prog && prog.title) || "")
   if (!words.length || !title || isFillerTitle(title)) return null
@@ -236,7 +255,9 @@ function progMatch(prog, words) {
     if (!_hasWord(folded, words[w])) inTitle = false
     if (!_hasWord(folded, words[w]) && !_hasWord(about, words[w])) inAbout = false
   }
-  return (inTitle || inAbout) ? { by_title: inTitle } : null
+  if (inTitle || inAbout) return { by_title: inTitle }
+  if (!about && isGameTitle(title) && _teamSport(words, folded)) return { by_title: false, maybe: true }
+  return null
 }
 
 function searchGuide(guideData, query, nowMin) {
@@ -596,6 +617,7 @@ function gridRows(channels, guideData, t0, nowUnix, query, shown) {
         began_before: start < t0,
         on_now: start <= now && now < end,
         match: !!hit,
+        maybe: !!(hit && hit.maybe),
         channel_number: String(ch.channel_number || ""),
         tune_name: ch.tune_name || ch.name || row.tune_name || "",
         display_name: getDisplayTitle(ch),
