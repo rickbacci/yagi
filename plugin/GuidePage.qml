@@ -6,39 +6,104 @@ Column {
   id: guide
   required property var tv
   required property Item keyTarget
-  property alias searchField: guideStripSearch
+  property alias searchField: guideSearch
+  property alias grid: guideGrid
   property alias showsFlick: stripFlick
   property alias showsList: showsRepeater
-  property alias hitsFlick: stripSearchFlick
-  property alias hitsList: hitsRepeater
+
+  readonly property bool onGrid: guide.tv.guideTab === "grid"
 
   visible: guide.tv.guideStripOpen
   spacing: Style.space(6)
 
-  TextField {
-    id: guideStripSearch
+  Item {
     width: parent.width
-    placeholderText: "Search shows and teams"
-    Keys.onEscapePressed: {
-      text = ""
-      guide.keyTarget.forceActiveFocus()
+    height: Math.max(tabRow.implicitHeight, guideSearch.implicitHeight)
+
+    Row {
+      id: tabRow
+      spacing: Style.space(4)
+      anchors.verticalCenter: parent.verticalCenter
+
+      Button {
+        text: "Grid"
+        tooltipText: "What is on each channel, by time"
+        selected: guide.onGrid
+        fontSize: Style.font.caption
+        foreground: guide.tv.bar.foreground
+        onClicked: guide.tv.showGuideTab("grid")
+      }
+
+      Button {
+        text: "Shows"
+        tooltipText: "Shows the Guide has seen, by time of day"
+        selected: !guide.onGrid
+        fontSize: Style.font.caption
+        foreground: guide.tv.bar.foreground
+        onClicked: guide.tv.showGuideTab("shows")
+      }
     }
-    Keys.onReturnPressed: {
-      guide.keyTarget.forceActiveFocus()
-      guide.tv.cursorActive = true
-      guide.tv.guideCursor = 0
+
+    TextField {
+      id: guideSearch
+      anchors.left: tabRow.right
+      anchors.leftMargin: Style.space(10)
+      anchors.right: matchCount.visible ? matchCount.left : parent.right
+      anchors.rightMargin: matchCount.visible ? Style.space(8) : 0
+      anchors.verticalCenter: parent.verticalCenter
+      placeholderText: guide.onGrid ? "Search shows and teams" : "Filter shows"
+      Keys.onEscapePressed: {
+        text = ""
+        guide.keyTarget.forceActiveFocus()
+      }
+      Keys.onReturnPressed: guide.tv.leaveGuideSearch()
+      Keys.onDownPressed: guide.tv.leaveGuideSearch()
+      font.family: guide.tv.bar.fontFamily
+      onTextChanged: guide.tv.guideSearchText = text
     }
-    Keys.onDownPressed: {
-      guide.keyTarget.forceActiveFocus()
-      guide.tv.cursorActive = true
-      guide.tv.guideCursor = 0
+
+    Text {
+      id: matchCount
+      visible: guide.onGrid && guide.tv.guideSearchActive
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      textFormat: Text.PlainText
+      text: guide.tv.gridMatchCount === 1 ? "1 match" : guide.tv.gridMatchCount + " matches"
+      color: Color.accent
+      font.family: guide.tv.bar.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: true
     }
+  }
+
+  ChannelTabs {
+    tv: guide.tv
+    visible: guide.onGrid
+  }
+
+  GuideGrid {
+    id: guideGrid
+    tv: guide.tv
+    visible: guide.onGrid && guide.tv.gridRows.length > 0
+    width: parent.width
+    height: guide.tv.guideListRoom()
+  }
+
+  Text {
+    visible: guide.onGrid && guide.tv.gridRows.length === 0
+    width: parent.width
+    textFormat: Text.PlainText
+    text: guide.tv.guideSearchActive
+          ? "Nothing listed matches. Stations list about the next five hours, so search again closer to air time."
+          : "No listings yet for these channels. Each Guide update adds what the stations send."
+    color: Color.muted
     font.family: guide.tv.bar.fontFamily
-    onTextChanged: guide.tv.guideSearchText = text
+    font.pixelSize: Style.font.caption
+    wrapMode: Text.Wrap
   }
 
   Row {
-    visible: !guide.tv.guideSearchActive
+    visible: !guide.onGrid
     spacing: Style.space(4)
 
     Repeater {
@@ -61,11 +126,11 @@ Column {
   }
 
   Text {
-    visible: !guide.tv.guideSearchActive && guide.tv.guideShowRows.length === 0
+    visible: !guide.onGrid && guide.tv.guideShowRows.length === 0
     width: parent.width
     textFormat: Text.PlainText
     text: guide.tv.showsLoading ? "Reading the Guide…"
-          : "Nothing listed for this time yet. Each Guide update adds what the stations send."
+          : (guide.tv.guideSearchActive ? "No show here matches." : "Nothing listed for this time yet. Each Guide update adds what the stations send.")
     color: Color.muted
     font.family: guide.tv.bar.fontFamily
     font.pixelSize: Style.font.caption
@@ -79,7 +144,7 @@ Column {
     contentWidth: width
     contentHeight: stripShowsCol.implicitHeight
     clip: true
-    visible: !guide.tv.guideSearchActive && guide.tv.guideShowRows.length > 0
+    visible: !guide.onGrid && guide.tv.guideShowRows.length > 0
     flickableDirection: Flickable.VerticalFlick
     boundsBehavior: Flickable.StopAtBounds
 
@@ -95,85 +160,6 @@ Column {
           tv: guide.tv
           width: stripShowsCol.width
         }
-      }
-    }
-  }
-
-  Flickable {
-    id: stripSearchFlick
-    width: parent.width
-    height: Math.min(stripSearchCol.implicitHeight, guide.tv.guideListRoom())
-    contentWidth: width
-    contentHeight: stripSearchCol.implicitHeight
-    clip: true
-    visible: guide.tv.guideSearchActive && guide.tv.guideSearchHits.length > 0
-    flickableDirection: Flickable.VerticalFlick
-    boundsBehavior: Flickable.StopAtBounds
-
-    Column {
-      id: stripSearchCol
-      width: stripSearchFlick.width
-
-      Repeater {
-        id: hitsRepeater
-        model: guide.tv.guideSearchHits
-        delegate: HitRow {
-          tv: guide.tv
-          width: stripSearchCol.width
-        }
-      }
-    }
-  }
-
-  Text {
-    visible: guide.tv.guideSearchActive && guide.tv.guideSearchHits.length === 0
-    width: parent.width
-    textFormat: Text.PlainText
-    text: "Nothing listed matches. Stations only list the next few hours, so search again closer to air time."
-    color: Color.muted
-    font.family: guide.tv.bar.fontFamily
-    font.pixelSize: Style.font.caption
-    wrapMode: Text.Wrap
-  }
-
-  Text {
-    visible: guide.tv.scheduleItems.length > 0
-    textFormat: Text.PlainText
-    text: "Waiting to record"
-    color: guide.tv.bar.foreground
-    font.family: guide.tv.bar.fontFamily
-    font.pixelSize: Style.font.caption
-    font.bold: true
-  }
-
-  Repeater {
-    model: guide.tv.scheduleItems
-    delegate: Row {
-      id: waitRow
-      required property var modelData
-      width: guide.width
-      spacing: Style.space(6)
-
-      Text {
-        width: Math.max(0, parent.width - stripRemove.width - parent.spacing)
-        textFormat: Text.PlainText
-        text: (waitRow.modelData.status === "missed" ? "Missed · " : "")
-              + (waitRow.modelData.display_name || waitRow.modelData.tune_name || "")
-              + " · " + (waitRow.modelData.title || "")
-              + (waitRow.modelData.clock ? " · " + waitRow.modelData.clock : "")
-        color: Color.accent
-        font.family: guide.tv.bar.fontFamily
-        font.pixelSize: Style.font.caption
-        elide: Text.ElideRight
-        anchors.verticalCenter: parent.verticalCenter
-      }
-
-      Button {
-        id: stripRemove
-        text: "Remove"
-        fontSize: Style.font.caption
-        foreground: guide.tv.bar.foreground
-        onClicked: guide.tv.removeScheduled(waitRow.modelData.id)
       }
     }
   }

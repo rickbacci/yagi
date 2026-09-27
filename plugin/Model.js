@@ -218,11 +218,30 @@ function _hasWord(text, word) {
   return false
 }
 
+function queryWords(query) {
+  var words = String(query || "").toLowerCase().split(/\s+/).filter(function(w) { return w })
+  return words.join(" ").length < 2 ? [] : words
+}
+
 // Games list as "NFL Football" with the teams only in the description, so a
 // title miss still counts when every word is in the description.
+function progMatch(prog, words) {
+  var title = String((prog && prog.title) || "")
+  if (!words.length || !title || isFillerTitle(title)) return null
+  var folded = title.toLowerCase()
+  var about = String((prog && prog.synopsis) || "").toLowerCase()
+  var inTitle = true
+  var inAbout = !!about
+  for (var w = 0; w < words.length; w++) {
+    if (!_hasWord(folded, words[w])) inTitle = false
+    if (!_hasWord(folded, words[w]) && !_hasWord(about, words[w])) inAbout = false
+  }
+  return (inTitle || inAbout) ? { by_title: inTitle } : null
+}
+
 function searchGuide(guideData, query, nowMin) {
-  var words = String(query || "").toLowerCase().split(/\s+/).filter(function(w) { return w })
-  if (words.join(" ").length < 2 || !guideData) return []
+  var words = queryWords(query)
+  if (!words.length || !guideData) return []
   var now = (nowMin === undefined || nowMin === null || nowMin < 0) ? minutesNow() : nowMin
   var nowUnix = Date.now() / 1000
   var hits = []
@@ -234,19 +253,11 @@ function searchGuide(guideData, query, nowMin) {
     for (i = 0; i < programs.length; i++) {
       var prog = programs[i]
       var title = String((prog && prog.title) || "")
-      if (!title || isFillerTitle(title)) continue
       var began = programUnix(prog)
       if (began > 0 && began + (Number(prog.duration_sec) || 1800) <= nowUnix) continue
-      var folded = title.toLowerCase()
-      var about = String((prog && prog.synopsis) || "").toLowerCase()
-      var inTitle = true
-      var inAbout = !!about
-      var w
-      for (w = 0; w < words.length; w++) {
-        if (!_hasWord(folded, words[w])) inTitle = false
-        if (!_hasWord(folded, words[w]) && !_hasWord(about, words[w])) inAbout = false
-      }
-      if (!inTitle && !inAbout) continue
+      var found = progMatch(prog, words)
+      if (!found) continue
+      var inTitle = found.by_title
       var block = {
         title: title,
         start: prog.start || "",
@@ -304,6 +315,13 @@ function bucketNow() {
   if (h >= 23 || h < 2) return "late"
   if (h >= 2 && h < 6) return "overnight"
   return "day"
+}
+
+// The Shows tab filter: every word in the title.
+function filterShowsByQuery(shows, query) {
+  var words = queryWords(query)
+  if (!words.length) return shows || []
+  return (shows || []).filter(function(s) { return !!progMatch({ title: s && s.title }, words) })
 }
 
 // Shows with a pattern first, then one-offs. Each keeps its start-time order.
@@ -382,6 +400,115 @@ function programUnix(prog) {
   var gps = Number(prog && prog.gps_start) || 0
   if (gps <= 0) return 0
   return gps + 315964800 - 18
+}
+
+function formatClock(unix) {
+  var d = new Date(Number(unix) * 1000)
+  var h24 = d.getHours()
+  var h = h24 % 12
+  if (h === 0) h = 12
+  var m = d.getMinutes()
+  return h + ":" + (m < 10 ? "0" : "") + m + " " + (h24 >= 12 ? "PM" : "AM")
+}
+
+// The grid opens on the half hour now is in and runs to the last listing,
+// three hours at least and eight at most. Listings reach about five hours.
+var GRID_STEP = 1800
+var GRID_MIN_SEC = 3 * 3600
+var GRID_MAX_SEC = 8 * 3600
+
+function gridStart(nowUnix) {
+  var n = Math.floor(Number(nowUnix) || Date.now() / 1000)
+  return n - (n % GRID_STEP)
+}
+
+// One row per channel. Searching keeps only channels with a match, whatever
+// the channel tab; outside marks a channel the tab would not have shown.
+function gridRows(channels, guideData, t0, nowUnix, query, shown) {
+  var words = queryWords(query)
+  var cap = t0 + GRID_MAX_SEC
+  var now = Number(nowUnix) || Date.now() / 1000
+  var out = []
+  var list = channels || []
+  for (var i = 0; i < list.length; i++) {
+    var ch = list[i]
+    var row = matchGuideProgram(ch, guideData) || {}
+    var programs = row.programs || []
+    var blocks = []
+    var matches = 0
+    for (var j = 0; j < programs.length; j++) {
+      var prog = programs[j]
+      var start = programUnix(prog)
+      if (start <= 0) continue
+      var dur = Number(prog.duration_sec) || 1800
+      var end = start + dur
+      if (end <= t0 || start >= cap) continue
+      var hit = words.length ? progMatch(prog, words) : null
+      if (hit) matches++
+      blocks.push({
+        title: String(prog.title || ""),
+        synopsis: String(prog.synopsis || ""),
+        start: start,
+        end: end,
+        x0: Math.max(start, t0),
+        x1: Math.min(end, cap),
+        began_before: start < t0,
+        on_now: start <= now && now < end,
+        match: !!hit,
+        channel_number: String(ch.channel_number || ""),
+        tune_name: ch.tune_name || ch.name || row.tune_name || "",
+        display_name: getDisplayTitle(ch),
+        gps_start: Number(prog.gps_start) || 0,
+        duration_sec: dur
+      })
+    }
+    blocks.sort(function(a, b) { return a.start - b.start })
+    if (words.length && !matches) continue
+    out.push({ channel: ch, blocks: blocks, matches: matches, outside: !!(words.length && shown && shown.indexOf(ch) === -1) })
+  }
+  return out
+}
+
+function gridEnd(rows, t0) {
+  var end = t0 + GRID_MIN_SEC
+  for (var i = 0; i < (rows || []).length; i++) {
+    var blocks = rows[i].blocks || []
+    for (var j = 0; j < blocks.length; j++) end = Math.max(end, blocks[j].x1)
+  }
+  return Math.min(end, t0 + GRID_MAX_SEC)
+}
+
+function gridMatchCount(rows) {
+  var n = 0
+  for (var i = 0; i < (rows || []).length; i++) n += rows[i].matches || 0
+  return n
+}
+
+// The block airing at time t, or the nearest one after it, or the last.
+function blockAt(blocks, t) {
+  var list = blocks || []
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].x0 <= t && t < list[i].x1) return i
+    if (list[i].x0 > t) return i
+  }
+  return list.length - 1
+}
+
+// The shape toggleHitRecord and scheduledId read.
+function blockAiring(b) {
+  if (!b) return null
+  return {
+    tune_name: b.tune_name,
+    channel_number: b.channel_number,
+    title: b.title,
+    synopsis: b.synopsis,
+    gps_start: b.gps_start,
+    duration_sec: b.duration_sec,
+    start: formatClock(b.start),
+    end: formatClock(b.end),
+    on_now: b.on_now,
+    display_name: b.display_name
+  }
 }
 
 function guideHourBlocks(channels, nowUnix) {

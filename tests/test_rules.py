@@ -1,4 +1,4 @@
-"""Record all: listings join the queue once, at any hour, reruns are skipped, series blurbs are not."""
+"""Record series: listings join the queue once, at any hour, reruns are skipped, series blurbs are not."""
 
 import json
 import os

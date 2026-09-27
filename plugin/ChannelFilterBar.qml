@@ -9,37 +9,9 @@ Row {
   visible: filters.tv.showChannelBrowser
   spacing: Style.space(6)
 
-  Row {
+  ChannelTabs {
     id: filterTabRow
-    spacing: Style.space(4)
-
-    Button {
-      text: "Favorites (" + filters.tv.favoriteVisibleCount + ")"
-      tooltipText: "Channels you starred"
-      selected: filters.tv.channelFilter === "favorites"
-      fontSize: Style.font.caption
-      foreground: filters.tv.bar.foreground
-      onClicked: filters.tv.setChannelFilter("favorites")
-    }
-
-    Button {
-      text: "All (" + (filters.tv.watchableChannels ? filters.tv.watchableChannels.length : 0) + ")"
-      tooltipText: "Every channel you haven't hidden"
-      selected: filters.tv.channelFilter === "all"
-      fontSize: Style.font.caption
-      foreground: filters.tv.bar.foreground
-      onClicked: filters.tv.setChannelFilter("all")
-    }
-
-    Button {
-      visible: filters.tv.hiddenData && filters.tv.hiddenData.length > 0
-      text: "Hidden (" + filters.tv.hiddenData.length + ")"
-      tooltipText: "Channels you hid"
-      selected: filters.tv.channelFilter === "hidden"
-      fontSize: Style.font.caption
-      foreground: filters.tv.bar.foreground
-      onClicked: filters.tv.setChannelFilter("hidden")
-    }
+    tv: filters.tv
   }
 
   Item {

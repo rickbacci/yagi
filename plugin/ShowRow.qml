@@ -19,7 +19,7 @@ Item {
 
   Rectangle {
     anchors.fill: parent
-    visible: showRow.tv.cursorActive && !showRow.tv.guideSearchActive && showRow.tv.guideCursor === showRow.index
+    visible: showRow.tv.cursorActive && showRow.tv.guideCursor === showRow.index
     radius: Style.spacing.labelGap
     color: Style.hoverFillFor(showRow.tv.bar.foreground, Color.accent)
   }
@@ -104,8 +104,8 @@ Item {
     }
 
     Button {
-      text: showRow.ruled ? "Recording all" : "Record all"
-      tooltipText: showRow.ruled ? "Stop recording this show" : "Record every new airing on " + (showRow.modelData.channel || "this channel") + ", any time of day"
+      text: showRow.ruled ? "Series on" : "Record series"
+      tooltipText: showRow.ruled ? "Stop recording every airing" : "Record every airing on " + (showRow.modelData.channel || "this channel") + ", any time of day"
       selected: showRow.ruled
       enabled: showRow.ruled || !!showRow.modelData.tune_name
       fontSize: Style.font.caption

@@ -91,8 +91,31 @@ BarWidget {
   property string deleteArmed: ""
   property int guideCursor: 0
   property bool focusAfterTune: false
-  onGuideSearchActiveChanged: root.guideCursor = 0
+  onGuideSearchActiveChanged: {
+    root.guideCursor = 0
+    root.gridCardOpen = false
+    root.gridRow = 0
+    root.gridCol = 0
+  }
   onShowBucketChanged: root.guideCursor = 0
+
+  // Guide grid: its cursor is a row and a block; gridTime keeps the column on up and down.
+  property string guideTab: "grid"
+  property int gridRow: 0
+  property int gridCol: 0
+  property real gridTime: 0
+  property bool gridCardOpen: false
+  readonly property real gridNow: {
+    root.guideClockMin
+    return Date.now() / 1000
+  }
+  readonly property real gridStart: Model.gridStart(root.gridNow)
+  readonly property var gridRows: root.guideStripOpen
+    ? Model.gridRows(root.guideSearchActive ? root.watchableChannels : root.displayChannels, root.guideData,
+                     root.gridStart, root.gridNow, root.guideSearchActive ? root.guideSearchText : "", root.displayChannels)
+    : []
+  readonly property real gridEnd: Model.gridEnd(root.gridRows, root.gridStart)
+  readonly property int gridMatchCount: Model.gridMatchCount(root.gridRows)
 
   Timer {
     id: deleteDisarm
@@ -100,7 +123,7 @@ BarWidget {
     onTriggered: root.deleteArmed = ""
   }
   property string showBucket: Model.bucketNow()
-  readonly property var guideShowRows: Model.filterShows(root.showItems, root.showBucket)
+  readonly property var guideShowRows: Model.filterShowsByQuery(Model.filterShows(root.showItems, root.showBucket), root.guideSearchText)
   property var scheduleItems: []
   readonly property string scheduleLine: {
     var items = root.scheduleItems || []
@@ -116,7 +139,6 @@ BarWidget {
   }
   property string guideSearchText: ""
   readonly property bool guideSearchActive: root.guideSearchText.replace(/\s+/g, " ").trim().length >= 2
-  readonly property var guideSearchHits: Model.searchGuide(root.guideData, root.guideSearchText, root.guideClockMin) || []
 
   function roomFor(chromeHeight) {
     var avail = popup.availableCardHeight
@@ -134,10 +156,9 @@ BarWidget {
     return ""
   }
 
-  // Header, search, tabs, and the waiting list take the rest.
+  // Header, search, and tabs take the rest.
   function guideListRoom() {
-    var waiting = (root.scheduleItems || []).length
-    return root.roomFor(Style.space(230) + (waiting ? Style.space(24) + waiting * Style.space(30) : 0))
+    return root.roomFor(Style.space(190))
   }
 
   function flyoutContentWidth() {
@@ -326,7 +347,103 @@ BarWidget {
     root.guideSearchText = ""
     guidePage.searchField.text = ""
     root.guideClockMin = Model.minutesNow()
+    root.gridCardOpen = false
+    root.cursorActive = false
     root.guideStripOpen = true
+  }
+
+  function showGuideTab(tab) {
+    root.guideTab = tab
+    root.gridCardOpen = false
+    root.cursorActive = false
+    root.guideCursor = 0
+  }
+
+  // Return or Down in the search box: into the grid at the first match, or the top of the shows.
+  function leaveGuideSearch() {
+    keyCatcher.forceActiveFocus()
+    root.cursorActive = true
+    root.guideCursor = 0
+    if (root.guideTab === "grid") root.gridHome()
+    Qt.callLater(root.revealCursor)
+  }
+
+  function gridBlocksAt(r) {
+    var row = (root.gridRows || [])[r]
+    return row ? row.blocks : []
+  }
+
+  function gridCurrent() {
+    return root.gridBlocksAt(root.gridRow)[root.gridCol] || null
+  }
+
+  function gridHome() {
+    root.gridCardOpen = false
+    if (root.guideSearchActive) {
+      root.gridRow = 0
+      root.gridCol = 0
+      root.gridStepMatch(1)
+      return
+    }
+    root.gridRow = 0
+    root.gridTime = root.gridNow
+    root.gridCol = Math.max(0, Model.blockAt(root.gridBlocksAt(0), root.gridNow))
+  }
+
+  // Up and down step through search matches in reading order.
+  function gridStepMatch(dir) {
+    var rows = root.gridRows || []
+    var list = []
+    var at = -1
+    for (var r = 0; r < rows.length; r++) {
+      for (var c = 0; c < rows[r].blocks.length; c++) {
+        if (!rows[r].blocks[c].match) continue
+        if (r === root.gridRow && c === root.gridCol) at = list.length
+        list.push([r, c])
+      }
+    }
+    if (!list.length) return
+    var next = at === -1 ? (dir > 0 ? 0 : list.length - 1) : Math.max(0, Math.min(list.length - 1, at + dir))
+    root.gridRow = list[next][0]
+    root.gridCol = list[next][1]
+    var b = root.gridCurrent()
+    if (b) root.gridTime = b.x0
+  }
+
+  function gridMove(dx, dy) {
+    var rows = root.gridRows || []
+    if (!rows.length) return
+    if (!root.cursorActive) {
+      root.cursorActive = true
+      root.gridHome()
+      Qt.callLater(root.revealCursor)
+      return
+    }
+    root.gridCardOpen = false
+    if (dy !== 0 && root.guideSearchActive) {
+      root.gridStepMatch(dy)
+    } else if (dy !== 0) {
+      root.gridRow = Math.max(0, Math.min(rows.length - 1, root.gridRow + dy))
+      root.gridCol = Math.max(0, Model.blockAt(root.gridBlocksAt(root.gridRow), root.gridTime))
+    } else if (dx !== 0) {
+      var n = root.gridBlocksAt(root.gridRow).length
+      root.gridCol = Math.max(0, Math.min(n - 1, root.gridCol + dx))
+      var b = root.gridCurrent()
+      if (b) root.gridTime = b.x0
+    }
+    Qt.callLater(root.revealCursor)
+  }
+
+  // Enter opens the card; with it open, Enter watches what is on or records what is coming.
+  function gridActivate() {
+    var b = root.gridCurrent()
+    if (!b) return
+    if (!root.gridCardOpen) {
+      root.gridCardOpen = true
+      return
+    }
+    if (b.on_now) root.selectChannel(b.tune_name || b.channel_number)
+    else root.toggleHitRecord(Model.blockAiring(b))
   }
 
   function toggleLibrary() {
@@ -406,7 +523,7 @@ BarWidget {
 
   function revealCursor() {
     if (root.libraryModalOpen) root.revealIn(libraryPage.flick, libraryPage.rows, root.recCursorIndex)
-    else if (root.guideStripOpen && root.guideSearchActive) root.revealIn(guidePage.hitsFlick, guidePage.hitsList, root.guideCursor)
+    else if (root.guideStripOpen && root.guideTab === "grid") guidePage.grid.reveal(root.gridRow, root.gridCurrent())
     else if (root.guideStripOpen) root.revealIn(guidePage.showsFlick, guidePage.showsList, root.guideCursor)
     else root.revealIn(channelList.flick, channelList.rows, root.cursorIndex)
   }
@@ -427,7 +544,7 @@ BarWidget {
   }
 
   function guideItems() {
-    return root.guideSearchActive ? (root.guideSearchHits || []) : (root.guideShowRows || [])
+    return root.guideShowRows || []
   }
 
   function guideCurrent() {
@@ -435,25 +552,32 @@ BarWidget {
   }
 
   function guideCurrentAiring() {
+    if (root.guideTab === "grid") return Model.blockAiring(root.gridCurrent())
     var item = root.guideCurrent()
-    if (!item) return null
-    return root.guideSearchActive ? item : Model.showAiring(item)
+    return item ? Model.showAiring(item) : null
   }
 
   function guideActivate() {
+    if (root.guideTab === "grid") {
+      root.gridActivate()
+      return
+    }
     var item = root.guideCurrent()
     if (!item) return
-    var airing = root.guideCurrentAiring()
+    var airing = Model.showAiring(item)
     if (airing && airing.on_now) root.selectChannel(airing.tune_name || airing.channel_number)
     else if (airing) root.toggleHitRecord(airing)
     else root.toggleRecordAll(item)
   }
 
   function guideRecordAll() {
+    if (root.guideTab === "grid") {
+      var airing = root.guideCurrentAiring()
+      if (airing) root.toggleHitRecordAll(airing)
+      return
+    }
     var item = root.guideCurrent()
-    if (!item) return
-    if (root.guideSearchActive) root.toggleHitRecordAll(item)
-    else root.toggleRecordAll(item)
+    if (item) root.toggleRecordAll(item)
   }
 
   function shiftBucket(dx) {
@@ -1629,13 +1753,15 @@ BarWidget {
       anchors.fill: parent
       blocked: guidePage.searchField.activeFocus
       onCloseRequested: {
-        if (root.guideStripOpen) root.guideStripOpen = false
+        if (root.gridCardOpen) root.gridCardOpen = false
+        else if (root.guideStripOpen) root.guideStripOpen = false
         else if (root.libraryModalOpen) root.libraryModalOpen = false
         else root.close()
       }
       onMoveRequested: function(dx, dy) {
-        if (dy !== 0) root.moveCursor(dy)
-        else if (dx !== 0 && root.guideStripOpen && !root.libraryModalOpen && !root.guideSearchActive) root.shiftBucket(dx)
+        if (root.guideStripOpen && !root.libraryModalOpen && root.guideTab === "grid") root.gridMove(dx, dy)
+        else if (dy !== 0) root.moveCursor(dy)
+        else if (dx !== 0 && root.guideStripOpen && !root.libraryModalOpen) root.shiftBucket(dx)
       }
       onActivateRequested: root.activateCursor()
       onDeleteRequested: {
@@ -1646,9 +1772,11 @@ BarWidget {
           root.bar.switchPanelFrom(root, direction)
       }
       onTextKey: function(t) {
-        if (root.guideStripOpen && !root.libraryModalOpen && (t === "/" || t === "r" || t === "a")) {
+        if (root.guideStripOpen && !root.libraryModalOpen && (t === "/" || t === "r" || t === "a" || t === "s")) {
           if (t === "/") {
             guidePage.searchField.forceActiveFocus()
+          } else if (t === "s") {
+            root.showGuideTab(root.guideTab === "grid" ? "shows" : "grid")
           } else if (t === "r") {
             var airing = root.guideCurrentAiring()
             if (airing) root.toggleHitRecord(airing)
