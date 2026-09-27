@@ -104,3 +104,67 @@ class TestPruneLeavesAWritingFile(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTunerLock(unittest.TestCase):
+    """Live TV and scans claim a tuner under the same lock recordings and the Guide use."""
+
+    def _hold(self, key):
+        import threading
+
+        held, done = threading.Event(), threading.Event()
+
+        def run():
+            with state_lock(key):
+                held.set()
+                done.wait(5)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        held.wait(2)
+        return done, thread
+
+    def _start_live(self, claims):
+        from unittest import mock
+        from engine import pool
+        from engine.timeshift import Timeshift
+
+        with mock.patch.object(Timeshift, "load_state", return_value={}), \
+                mock.patch("engine.pool.claims", return_value=claims), \
+                mock.patch.object(Timeshift, "wipe"), \
+                mock.patch.object(Timeshift, "_reap_orphan_dumps"), \
+                mock.patch("engine.timeshift.LIVE_LOCK_WAIT_SECS", 0.2), \
+                mock.patch.object(Timeshift, "_capture_live") as capture:
+            with self.assertRaises(pool.BothTunersBusy):
+                Timeshift.start_dump("LAFF", adapter_id=0)
+        capture.assert_not_called()
+
+    def test_live_gives_way_to_a_recording_mid_start(self):
+        from engine import pool
+
+        done, thread = self._hold(pool.lock_key(0))
+        try:
+            self._start_live({})
+        finally:
+            done.set()
+            thread.join(2)
+
+    def test_live_refuses_a_tuner_a_recording_took_while_it_waited(self):
+        self._start_live({0: "record"})
+
+    def test_a_scan_reports_busy_while_the_tuner_is_locked(self):
+        from unittest import mock
+        from engine import pool
+        from engine.scanner import AtscScanner
+
+        done, thread = self._hold(pool.lock_key(1))
+        try:
+            with tempfile.TemporaryDirectory() as tmp, \
+                    mock.patch("engine.scanner.SCAN_STATUS_PATH", os.path.join(tmp, "scan.json")), \
+                    mock.patch("engine.scanner.TunerManager.adapter_is_free", return_value=True), \
+                    mock.patch("engine.pool.claims", return_value={}):
+                events = list(AtscScanner(adapter_id=1).scan())
+        finally:
+            done.set()
+            thread.join(2)
+        self.assertEqual(events[0]["status"], "error")

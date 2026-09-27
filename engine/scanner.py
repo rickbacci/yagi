@@ -3,6 +3,7 @@ Omarchy TV - ATSC Frequency Scanner & Channel Discovery Engine
 Performs fast, intelligent OTA broadcast scanning with real-time JSON progress.
 """
 
+import contextlib
 import os
 import sys
 import json
@@ -12,7 +13,7 @@ import subprocess
 from typing import List, Dict, Generator, Any, Optional
 from engine import pool
 from engine.tuner import TunerManager
-from engine.paths import CHANNELS_JSON_PATH, MPV_CHANNELS_CONF, SCAN_STATUS_PATH
+from engine.paths import CHANNELS_JSON_PATH, MPV_CHANNELS_CONF, SCAN_STATUS_PATH, state_lock
 
 
 def write_scan_status(status_dict: Dict[str, Any], status_path: Optional[str] = None) -> None:
@@ -115,7 +116,17 @@ class AtscScanner:
         freq_list = get_atsc_frequencies(quick_mode=quick_mode)
         total_freqs = len(freq_list)
 
-        if not self._work_tuner_ready(adapter):
+        # Held for the whole scan. Recordings, live TV, and the Guide tune under it too.
+        tuner_lock = contextlib.ExitStack()
+        try:
+            if adapter < 0:
+                raise TimeoutError(adapter)
+            tuner_lock.enter_context(state_lock(pool.lock_key(adapter), timeout=0.5))
+            ready = self._work_tuner_ready(adapter)
+        except TimeoutError:
+            ready = False
+        if not ready:
+            tuner_lock.close()
             ev_busy = {
                 "status": "error",
                 "is_scanning": False,
@@ -318,6 +329,7 @@ class AtscScanner:
                     os.unlink(out_conf_path)
                 except OSError:
                     pass
+            tuner_lock.close()
 
     def _parse_scan_output(self, conf_path: str) -> List[Dict[str, Any]]:
         """Parses DVBv5 channel scan output into structured channel records."""

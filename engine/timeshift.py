@@ -55,6 +55,8 @@ MIN_PLAYABLE_BYTES = 256 * 1024
 # ATSC lock plus PAT/PMT can exceed a few seconds. Do not kill a dump that is
 # still writing just because this floor is not hit yet.
 DUMP_WAIT_SECS = 20
+# A recording starting on this tuner, or a Guide tower giving way.
+LIVE_LOCK_WAIT_SECS = 8.0
 DUMP_GROWING_BYTES = 32 * 1024
 
 TS_PACKET = 188
@@ -1439,8 +1441,33 @@ class Timeshift:
             cls.ensure_dir()
 
         cls._reap_orphan_dumps()
+        # Recordings and the Guide tune under this lock too. Once it is ours, nothing else is mid-start here.
+        key = pool.lock_key(adapter_id)
+        busy = f"{pool.busy_text()} Stop a recording to watch."
+        try:
+            with state_lock(key, timeout=LIVE_LOCK_WAIT_SECS):
+                if pool.claims().get(adapter_id) in ("record", "scan"):
+                    raise pool.BothTunersBusy(busy)
+                return cls._capture_live(name, adapter_id, held.get(adapter_id) == "guide", keep_follow, follow_pid, follow_socket)
+        except TimeoutError as exc:
+            if str(exc) != key:
+                raise
+            raise pool.BothTunersBusy(busy) from None
+
+    @classmethod
+    def _capture_live(
+        cls,
+        name: str,
+        adapter_id: int,
+        from_guide: bool,
+        keep_follow: bool,
+        follow_pid: int,
+        follow_socket: str,
+    ) -> Optional[str]:
+        from engine import pool
+
         # A Guide tower asked to yield lets go within a second or two.
-        cls._wait_frontend_free(timeout=4.0 if held.get(adapter_id) == "guide" else 0.8, adapter_id=adapter_id)
+        cls._wait_frontend_free(timeout=4.0 if from_guide else 0.8, adapter_id=adapter_id)
         sock = TIMESHIFT_SOCKET_PATH
         tower_t = time.time()
         proc = cls._capture_dump(name, adapter_id, TIMESHIFT_FILE, sock, "dump.log")
