@@ -204,7 +204,8 @@ def arm_rules(
                 text = episode_text(prog.get("synopsis"))
                 if text and text not in shared and text in seen:
                     continue
-                extra: Dict[str, Any] = {"rule_id": rule["id"], "synopsis": str(prog.get("synopsis") or "")}
+                extra: Dict[str, Any] = {"rule_id": rule["id"], "synopsis": str(prog.get("synopsis") or ""),
+                                         "channel": str(rule.get("channel") or "")}
                 before = programs[index - 1] if index else None
                 after = programs[index + 1] if index + 1 < len(programs) else None
                 # Back to back on this channel: no pad, so one episode does not eat the next.

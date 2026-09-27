@@ -1148,6 +1148,30 @@ class TestTimeshift(unittest.TestCase):
                     "tune_name": "WKYC-HD", "channel_number": "3.1",
                 }), "WKYC-HD")
 
+    def test_a_recording_on_a_drt_tunes_the_drt(self):
+        """19.1 and 19.10 are both WOIO-HD; recording 19.10 must not tune 19.1."""
+        from engine.dvr import DvrManager
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            conf = os.path.join(tmp_dir, "channels.conf")
+            listed = os.path.join(tmp_dir, "channels.json")
+            with open(conf, "w", encoding="utf-8") as f:
+                f.write(
+                    "WOIO-HD:195028615:8VSB:49:52:2\n"
+                    "19.1:195028615:8VSB:49:52:2\n"
+                    "WOIO-HD:509028615:8VSB:65:68:4\n"
+                    "19.10:509028615:8VSB:65:68:4\n"
+                )
+            with open(listed, "w", encoding="utf-8") as f:
+                json.dump({"channels": [
+                    {"channel_number": "19.1", "name": "WOIO-HD", "tune_name": "WOIO-HD"},
+                    {"channel_number": "19.10", "name": "WOIO-HD", "tune_name": "WOIO-HD"},
+                ]}, f)
+            with patch("engine.timeshift.MPV_CHANNELS_CONF", conf):
+                number, _station, tune = DvrManager._resolve_channel("19.10", listed)
+                self.assertEqual((number, tune), ("19.10", "19.10"))
+                self.assertEqual(Timeshift._conf_freq(tune), 509028615)
+                self.assertEqual(Timeshift.service_id(tune), 4)
+
     def test_learned_pid_replaces_a_copy_on_that_tower_only(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             conf = os.path.join(tmp_dir, "channels.conf")

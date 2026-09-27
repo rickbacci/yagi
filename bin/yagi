@@ -687,6 +687,7 @@ def cmd_record(args):
                 end_clock=getattr(args, "end_clock", "") or "",
                 display_name=getattr(args, "display_name", "") or "",
                 extra_end_sec=extra,
+                extra={"channel": args.channel} if getattr(args, "channel", "") else None,
             )
         except ValueError as exc:
             print(f"Error: {exc}")
@@ -745,7 +746,9 @@ def cmd_record(args):
             if chosen.get("id") in taken:
                 continue
             from engine.timeshift import Timeshift
-            if pool.pick_work() is None and not Timeshift.live_source(chosen.get("tune_name") or ""):
+            query = chosen.get("channel") or chosen.get("tune_name") or ""
+            tune = DvrManager._resolve_channel(query, CHANNELS_JSON_PATH)[2]
+            if pool.pick_work() is None and not Timeshift.live_source(tune):
                 print(f"Waiting. {chosen.get('title') or 'That show'} stays listed. {pool.busy_text()}")
                 continue
             run = chain_from(load_schedule(), chosen)
@@ -753,7 +756,7 @@ def cmd_record(args):
             remaining = max(60, int(run_stop(run) - time.time()))
             try:
                 session = DvrManager.start_recording(
-                    chosen.get("tune_name") or "",
+                    query,
                     duration=remaining,
                     program_title=chosen.get("title") or "",
                 )
@@ -966,6 +969,7 @@ def main():
     p_rec.add_argument("--end-clock", dest="end_clock", default="", help="End clock label")
     p_rec.add_argument("--display-name", dest="display_name", default="", help="Station line")
     p_rec.add_argument("--extra", default="", help="Extra time after the show, e.g. 30m")
+    p_rec.add_argument("--channel", default="", help="For later: the channel number, when two channels share a station name")
     p_rec.set_defaults(func=cmd_record)
 
     p_series = subparsers.add_parser("series", help="Record every airing of a show")

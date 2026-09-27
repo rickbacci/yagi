@@ -283,6 +283,7 @@ BarWidget {
       "--end-clock", show.end || "",
       "--display-name", show.display_name || show.tune_name
     ]
+    if (show.channel_number) cmd.push("--channel", String(show.channel_number))
     if (Model.isGameTitle(show.title)) cmd.push("--extra", Model.gameExtraMin() + "m")
     schedProc.command = cmd
     schedProc.running = true
@@ -344,7 +345,7 @@ BarWidget {
       if (!root.freeTunerForRecording()) return
       var left = Model.recordDurationArg(show, root.guideClockMin)
       if (left && Model.isGameTitle(show.title)) left = (parseInt(left, 10) + Model.gameExtraMin()) + "m"
-      root.startRecord(show.tune_name, left, show.title || "")
+      root.startRecord(show.channel_number || show.tune_name, left, show.title || "")
       return
     }
     root.scheduleLater(show)
@@ -692,7 +693,7 @@ BarWidget {
     for (i = 0; i < list.length; i++) {
       var item = list[i]
       if (!item) continue
-      if (item.tune_name === chName || item.name === chName) {
+      if (item.channel_number === chName || item.tune_name === chName || item.name === chName) {
         ch = item
         break
       }
@@ -712,7 +713,7 @@ BarWidget {
   function cursorChannelIdent() {
     if (root.cursorActive && root.displayChannels && root.displayChannels.length > 0) {
       var ch = root.displayChannels[root.cursorIndex]
-      if (ch) return ch.tune_name || ch.name || ""
+      if (ch) return root.listedKey(ch)
     }
     return root.activeChannelName || ""
   }

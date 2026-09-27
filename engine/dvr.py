@@ -684,10 +684,11 @@ class DvrManager:
         matched = match_channel(channel_query, channels) if channels else None
         if not matched:
             return channel_query, channel_query, channel_query
+        from engine.timeshift import Timeshift
         return (
             matched.get("channel_number") or channel_query,
             matched.get("station") or matched.get("name") or channel_query,
-            matched.get("tune_name") or channel_query,
+            Timeshift.conf_name(matched) or channel_query,
         )
 
     @classmethod
