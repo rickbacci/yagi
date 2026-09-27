@@ -919,7 +919,8 @@ local function render_hud()
     local delayed = is_ts and (paused or ts_delay > LIVE_SLACK) or ((not is_file) and (paused or behind_live()))
     local status = "LIVE"
     if is_library then
-        status = "PLAYBACK"
+        local dur = atsc_duration()
+        status = dur > 0 and (fmt_clock(virt_update()) .. " / " .. fmt_clock(dur)) or "PLAYBACK"
     elseif is_ts and (paused or ts_delay > LIVE_SLACK) then
         status = fmt_clock(ts_delay) .. " BEHIND"
     elseif delayed then
@@ -998,7 +999,7 @@ local function render_hud()
             side_y, theme.urgent, clip(rec_label, 16)
         )
     end
-    if paused or delayed then
+    if is_library or paused or delayed then
         local frac = 0
         if is_library then
             frac = (file_progress() or 0) / 100
@@ -1013,6 +1014,18 @@ local function render_hud()
         ass = ass .. box(0, 92, 1280, 4, theme.track, "00")
         if fill > 0 then
             ass = ass .. box(0, 92, fill, 4, theme.accent, "00")
+        end
+        local side = is_library and library_side() or nil
+        local dur = is_library and atsc_duration() or 0
+        if type(side) == "table" and type(side.ads) == "table" and dur > 0 then
+            for _, span in ipairs(side.ads) do
+                local a = type(span) == "table" and tonumber(span[1]) or nil
+                local b = type(span) == "table" and tonumber(span[2]) or nil
+                if a and b and b > a then
+                    local x = math.floor(1280 * a / dur)
+                    ass = ass .. box(x, 92, math.max(2, math.floor(1280 * (b - a) / dur)), 4, theme.urgent, "60")
+                end
+            end
         end
     end
 
