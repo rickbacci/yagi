@@ -23,6 +23,7 @@ yagi record start "8.1 FOX" 1h | stop | list | play <file> | delete <file>
 yagi record later | unlater | keep | unkeep | due | finish
 yagi series | series add <station> --title T --channel 19.2 | series remove <id> | series keep <id> 10
 yagi list | guide | guide refresh | guide search Browns | status | scan | scan --full
+yagi signal check 8.1   # C/N and damaged packets every 2 s; live tuner or a free one
 yagi favorite toggle 8.1
 yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off
 yagi hidden list | hidden hide 19.1 | hidden show 19.1

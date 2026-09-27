@@ -77,6 +77,21 @@ def _print_signal_plain(adapter_id: int) -> None:
 
 
 def cmd_signal(args):
+    if args.action == "check":
+        from engine.signal_check import check
+        query = args.channel
+        if not query:
+            from engine.timeshift import Timeshift
+            query = str(Timeshift.load_state().get("channel") or "")
+        if not query:
+            print("Name a channel. Example: yagi signal check 8.1")
+            sys.exit(1)
+        try:
+            check(query, seconds=args.seconds)
+        except (ValueError, RuntimeError) as exc:
+            print(exc)
+            sys.exit(1)
+        return
     adapter_id = args.adapter
     if adapter_id is None:
         from engine import pool
@@ -866,7 +881,10 @@ def main():
     subparsers.add_parser("uninstall", help="Stop the record timer (before plugin remove)").set_defaults(func=cmd_uninstall)
 
     p_signal = subparsers.add_parser("signal", help="Show SNR and strength for the picture tuner")
-    p_signal.add_argument("action", nargs="?", choices=["watch"], help="Print a new reading each second")
+    p_signal.add_argument("action", nargs="?", choices=["watch", "check"],
+                          help="watch: a reading each second. check <channel>: signal and damaged packets, on live TV's tuner or a free one")
+    p_signal.add_argument("channel", nargs="?", help="For check: the channel. Default: what live TV is on")
+    p_signal.add_argument("--seconds", type=int, default=30, help="For check: how long, up to 600")
     p_signal.add_argument("--plain", action="store_true", help=argparse.SUPPRESS)
     p_signal.add_argument("--adapter", type=int, default=None, help="Tuner to read. Default: the one live TV is on")
     p_signal.set_defaults(func=cmd_signal)

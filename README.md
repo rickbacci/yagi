@@ -131,6 +131,7 @@ yagi record start 8.1 1h | stop | list | play <file> | delete <file>
 yagi series | series add <station> --title "M*A*S*H" --channel 19.2 | series remove <id> | series keep <id> 30
 yagi record keep <file> | unkeep <file> | finish | due
 yagi favorite toggle 8.1
+yagi signal | signal watch | signal check 8.1 --seconds 60
 yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off
 yagi hidden list | hidden hide 19.1 | hidden show 19.1
 ```
