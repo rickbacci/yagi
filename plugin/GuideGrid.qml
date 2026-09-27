@@ -54,6 +54,20 @@ Item {
     interactive: false
     clip: true
 
+    // Ticks here, not lines through the grid: the block fill is translucent,
+    // so a line would split an hour-long show in two.
+    Repeater {
+      model: grid.slots
+      delegate: Rectangle {
+        required property int index
+        x: index * grid.slotWidth
+        y: grid.headHeight - height
+        width: 1
+        height: Style.space(6)
+        color: Color.muted
+      }
+    }
+
     Repeater {
       model: grid.slots
       delegate: Text {
@@ -161,17 +175,6 @@ Item {
     contentHeight: grid.rows.length * grid.rowHeight
     boundsBehavior: Flickable.StopAtBounds
     clip: true
-
-    Repeater {
-      model: grid.slots
-      delegate: Rectangle {
-        required property int index
-        x: index * grid.slotWidth
-        width: 1
-        height: body.contentHeight
-        color: Style.normalFillFor(grid.fg, Color.accent)
-      }
-    }
 
     Repeater {
       model: grid.rows
