@@ -493,6 +493,7 @@ def cmd_live(args):
     target = getattr(args, "channel", None)
     print("📺 Returning to live TV...")
     if not player.return_to_live(target):
+        player.send_command(["script-message", "tv-live-failed"])
         print("Failed to return to live TV. Tune a channel first, then try again.")
         sys.exit(1)
 

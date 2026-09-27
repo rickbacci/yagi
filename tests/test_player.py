@@ -1094,7 +1094,7 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn('cli_async({"seek"', src)
         self.assertIn('cli_async({"live"})', src)
         eof = src[src.index("local function on_dump_eof"):src.index('mp.register_event("playback-restart"')]
-        self.assertIn('cli_async({"live"})', eof)
+        self.assertIn("go_live()", eof)
         self.assertNotIn('cli_async({"seek"', eof)
         self.assertNotIn("loadfile", eof)
         self.assertEqual(src.count("drop-buffers"), 1)
@@ -1131,6 +1131,11 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("/bin/yagi", src)
         self.assertIn('args = {cli, "sync", "--reap", pid}', src)
         self.assertIn("detach = true", src)
+        request_live = src[src.index("local function request_live()"):src.index("local function go_live()")]
+        library = request_live[request_live.index("if is_library_playback() then"):]
+        self.assertLess(library.index("detach = true"), library.index("return"))
+        self.assertIn('mp.add_forced_key_binding("l", "tv_return_live", return_live)', src)
+        self.assertIn('"tv-live-failed"', src)
 
 
 class TestOmarchyFullscreen(unittest.TestCase):

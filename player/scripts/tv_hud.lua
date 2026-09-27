@@ -1109,6 +1109,16 @@ local apply_virt_seek
 
 local function request_live()
     local cli = tv_cli()
+    -- From a recording, `live` quits this player to open live, and mpv kills its attached children on quit.
+    if is_library_playback() then
+        mp.command_native_async({
+            name = "subprocess",
+            playback_only = false,
+            detach = true,
+            args = {cli, "live"},
+        }, function() end)
+        return
+    end
     mp.command_native_async({
         name = "subprocess",
         playback_only = false,
@@ -1308,8 +1318,17 @@ mp.add_forced_key_binding("PGDWN", "tv_prev_break", function() jump_break(-1) en
 mp.register_script_message("tv-seek", function(delta)
     seek_rel(tonumber(delta) or SEEK_STEP)
 end)
-mp.register_script_message("tv-live-edge", function()
+local function return_live()
+    if is_library_playback() then
+        go_live()
+        return
+    end
     cli_async({"live"})
+end
+mp.register_script_message("tv-live-edge", return_live)
+mp.register_script_message("tv-live-failed", function()
+    returning_live = false
+    mp.osd_message("Could not return to live", 4)
 end)
 local function cover_picture()
     blanking = true
@@ -1354,9 +1373,7 @@ mp.add_hook("on_preloaded", 50, function()
     program_pending = not select_program(false)
 end)
 mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)
-mp.add_forced_key_binding("l", "tv_return_live", function()
-    cli_async({"live"})
-end)
+mp.add_forced_key_binding("l", "tv_return_live", return_live)
 mp.add_forced_key_binding("WHEEL_UP", "tv_vol_up", vol_up)
 mp.add_forced_key_binding("WHEEL_DOWN", "tv_vol_down", vol_down)
 
@@ -1406,7 +1423,7 @@ end)
 
 local function on_dump_eof()
     if is_library_playback() then
-        cli_async({"live"})
+        go_live()
         return
     end
 end
