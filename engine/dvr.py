@@ -999,6 +999,8 @@ class DvrManager:
         rec_real = os.path.realpath(rec_dir)
         quiet_before = time.time() - PRUNE_QUIET_SECS
 
+        from engine.episodes import in_use
+
         def remove(item: Dict[str, Any]) -> bool:
             if item.get("keep") or float(item.get("mtime") or 0) > quiet_before:
                 return False
@@ -1008,6 +1010,9 @@ class DvrManager:
                     return False
                 real_path = os.path.realpath(path)
                 if os.path.commonpath([rec_real, real_path]) != rec_real or real_path in protected:
+                    return False
+                # Playing, or Comskip still reading it.
+                if in_use(real_path):
                     return False
                 os.remove(path)
             except (OSError, ValueError):

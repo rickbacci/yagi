@@ -202,6 +202,25 @@ class TestDvrEngine(unittest.TestCase):
             self.assertTrue(os.path.exists(paths[1]))
             self.assertTrue(os.path.exists(paths[2]))
 
+    def test_the_size_cap_skips_a_recording_that_is_playing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = []
+            for i, name in enumerate(["watching.ts", "old.ts", "new.ts"]):
+                path = os.path.join(tmp_dir, name)
+                with open(path, "wb") as f:
+                    f.write(b"x" * 3000)
+                os.utime(path, (1000 + i, 1000 + i))
+                paths.append(path)
+            with open(paths[0], "rb"), \
+                    patch("engine.dvr.resolve_library_budget_bytes", return_value=7000):
+                removed = DvrManager.enforce_library_budget(
+                    recordings_dir=tmp_dir,
+                    active_path=os.path.join(tmp_dir, "active.json"),
+                    rules_path=os.path.join(tmp_dir, "rules.json"),
+                )
+            self.assertEqual(removed, [paths[1]])
+            self.assertTrue(os.path.exists(paths[0]))
+
     def _library(self, tmp_dir, rows):
         paths = {}
         for i, (name, size, side) in enumerate(rows):
