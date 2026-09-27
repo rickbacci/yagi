@@ -42,6 +42,25 @@ class TestPick(unittest.TestCase):
         self.assertEqual(pool.free_count({1: "guide"}), 1)
 
 
+class TestOneTuner(unittest.TestCase):
+    def test_the_tuners_are_the_adapters_with_a_frontend(self):
+        with tempfile.TemporaryDirectory() as root:
+            for name in ("adapter0/frontend0", "adapter2/frontend0", "adapter1/demux0", "adapterX/frontend0"):
+                os.makedirs(os.path.join(root, os.path.dirname(name)), exist_ok=True)
+                open(os.path.join(root, name), "w").close()
+            self.assertEqual(pool.detect_adapters(root), (0, 2))
+
+    def test_one_tuner_does_one_job_and_never_names_a_missing_tuner(self):
+        with mock.patch.object(pool, "adapters", return_value=(0,)):
+            self.assertEqual(pool.pick_work({}), 0)
+            self.assertEqual(pool.pick_live({}), 0)
+            self.assertIsNone(pool.pick_work({0: "live"}))
+            self.assertEqual(pool.free_count({}), 1)
+            with self.assertRaises(pool.BothTunersBusy) as busy:
+                pool.pick_live({0: "record"})
+            self.assertIn("The tuner is busy.", str(busy.exception))
+
+
 class TestYield(unittest.TestCase):
     def test_guide_yields_only_its_own_tuner(self):
         with tempfile.TemporaryDirectory(dir=os.environ.get("XDG_RUNTIME_DIR")) as d:

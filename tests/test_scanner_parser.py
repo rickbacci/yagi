@@ -108,10 +108,11 @@ class TestScannerParser(unittest.TestCase):
         self.assertIn("NamedTemporaryFile", src)
 
     def test_scan_uses_work_tuner_and_refuses_when_busy(self):
-        from engine.tuner import WORK_ADAPTER
         scanner = AtscScanner()
-        self.assertEqual(scanner._resolve_adapter(), WORK_ADAPTER)
-        self.assertEqual(WORK_ADAPTER, 1)
+        with patch("engine.pool.claims", return_value={}):
+            self.assertEqual(scanner._resolve_adapter(), 1)
+        with patch("engine.pool.claims", return_value={0: "live", 1: "record"}):
+            self.assertEqual(scanner._resolve_adapter(), -1)
         with tempfile.TemporaryDirectory() as tmp:
             status = os.path.join(tmp, "scan_status.json")
             with patch("engine.scanner.SCAN_STATUS_PATH", status), \

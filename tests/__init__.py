@@ -2,6 +2,7 @@
 
 Run from the repo root: python3 -m unittest
 engine.paths reads the environment once, at import, so this runs first.
+Tests see two tuners, whatever this machine has.
 """
 
 import atexit
@@ -48,3 +49,7 @@ for _var, _name in (
     os.makedirs(_path, mode=0o700)
     os.environ[_var] = _path
 tempfile.tempdir = None
+
+import engine.pool  # noqa: E402
+
+engine.pool.adapters = lambda: (0, 1)

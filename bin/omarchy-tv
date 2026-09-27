@@ -23,6 +23,10 @@ from player.controller import MpvController
 
 
 def cmd_status(args):
+    if getattr(args, "count", False):
+        from engine import pool
+        print(len(pool.adapters()))
+        return
     tuners = TunerManager.list_tuners()
     print(f"Discovered {len(tuners)} tuner adapters:")
     for t in tuners:
@@ -578,7 +582,7 @@ def _grab_guide_if_due():
         from engine.schedule import next_window
         guide = load_guide()
         # With both tuners free a coming recording takes the other one.
-        soon = next_window() if pool.free_count() < 2 else None
+        soon = next_window() if pool.free_count() < len(pool.adapters()) else None
         if not guide_grab_due(time.time(), guide.get("updated_at"), not guide_tuner_free(), next_record_at=soon):
             return
         from engine.paths import own_scope
@@ -793,7 +797,7 @@ def cmd_record(args):
                 continue
             from engine.timeshift import Timeshift
             if pool.pick_work() is None and not Timeshift.live_source(chosen.get("tune_name") or ""):
-                print(f"Waiting. {chosen.get('title') or 'That show'} stays listed. Both tuners are busy.")
+                print(f"Waiting. {chosen.get('title') or 'That show'} stays listed. {pool.busy_text()}")
                 continue
             run = chain_from(load_schedule(), chosen)
             taken.update(row.get("id") for row in run)
@@ -852,6 +856,7 @@ def main():
 
     # status
     p_status = subparsers.add_parser("status", help="Show tuner and playback status")
+    p_status.add_argument("--count", action="store_true", help=argparse.SUPPRESS)
     p_status.set_defaults(func=cmd_status)
 
     subparsers.add_parser("install", help="Start the record timer (after plugin add)").set_defaults(func=cmd_install)

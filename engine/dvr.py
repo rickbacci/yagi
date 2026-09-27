@@ -159,7 +159,8 @@ def patch_sidecar(file_path: str, **fields: Any) -> Dict[str, Any]:
 
 
 ATSC_BYTES_PER_SEC = 19_390_000 / 8
-BOTH_BUSY_MESSAGE = "Both tuners are busy. Stop a recording or close the TV."
+def busy_message() -> str:
+    return f"{pool.busy_text()} Stop a recording or close the TV."
 
 
 def byte_rate(size: int, start: float, end: float) -> Optional[float]:
@@ -558,7 +559,7 @@ class DvrManager:
         if adapter is None:
             adapter = pool.pick_work(pool.claims(kwargs.get("active_path")))
             if adapter is None:
-                raise RuntimeError(BOTH_BUSY_MESSAGE)
+                raise RuntimeError(busy_message())
             kwargs["adapter_override"] = adapter
         key = pool.lock_key(adapter)
         try:
@@ -567,7 +568,7 @@ class DvrManager:
         except TimeoutError as exc:
             if str(exc) != key:
                 raise
-            raise RuntimeError(BOTH_BUSY_MESSAGE) from None
+            raise RuntimeError(busy_message()) from None
 
     @staticmethod
     def _show_start(channel_number: str, now: float) -> Optional[float]:
@@ -751,7 +752,7 @@ class DvrManager:
         # The tuner start_recording picked. Live TV, a scan, or another recording may have taken it since.
         adapter_id = WORK_ADAPTER if adapter_override is None else adapter_override
         if pool.claims(act_path).get(adapter_id) in ("live", "record", "scan") or not cls._wait_tuner_free(adapter_id):
-            raise RuntimeError(BOTH_BUSY_MESSAGE)
+            raise RuntimeError(busy_message())
 
         program_title = cls._title_for(channel_number, program_title)
         file_path = cls._new_file(rec_dir, channel_number, station, program_title)

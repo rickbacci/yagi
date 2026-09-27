@@ -58,7 +58,8 @@ BarWidget {
   // Two tuners, one pool. A Guide update gives its tuner up, so it never counts.
   readonly property bool liveOn: root.activeChannelName !== "" && root.isLiveSession
   // A recording that copies the live dump rides live TV's tuner until it is kept.
-  readonly property int tunersFree: Math.max(0, 2 - (root.liveOn ? 1 : 0)
+  property int tunerCount: 2
+  readonly property int tunersFree: Math.max(0, root.tunerCount - (root.liveOn ? 1 : 0)
                                              - (root.activeRecordings || []).filter(function(r) {
                                                  return !(root.liveOn && r.source && r.source.dump_pid && !r.source.kept)
                                                }).length
@@ -1585,7 +1586,22 @@ BarWidget {
     onExited: recordingsFile.reload()
   }
 
+  onBinPathChanged: tunerCountProc.running = true
+
+  Process {
+    id: tunerCountProc
+    command: [root.binPath, "status", "--count"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var n = parseInt(text, 10)
+        if (!isNaN(n)) root.tunerCount = n
+      }
+    }
+  }
+
   Component.onCompleted: {
+    tunerCountProc.running = true
     Qt.callLater(function() {
       channelsFile.reload()
       guideFile.reload()

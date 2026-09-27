@@ -10,7 +10,8 @@ import time
 import tempfile
 import subprocess
 from typing import List, Dict, Generator, Any, Optional
-from engine.tuner import TunerManager, WORK_ADAPTER
+from engine import pool
+from engine.tuner import TunerManager
 from engine.paths import CHANNELS_JSON_PATH, MPV_CHANNELS_CONF, SCAN_STATUS_PATH
 
 
@@ -97,7 +98,7 @@ class AtscScanner:
             return self.adapter_id
         from engine import pool
         picked = pool.pick_work(wait_for_guide=False)
-        return WORK_ADAPTER if picked is None else picked
+        return -1 if picked is None else picked
 
     def _work_tuner_ready(self, adapter: int) -> bool:
         from engine import pool
@@ -119,7 +120,7 @@ class AtscScanner:
                 "status": "error",
                 "is_scanning": False,
                 "adapter_id": adapter,
-                "message": "Both tuners are busy.",
+                "message": pool.busy_text(),
                 "percent": 0,
             }
             write_scan_status(ev_busy)

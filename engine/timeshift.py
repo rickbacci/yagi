@@ -801,7 +801,7 @@ class Timeshift:
             from engine import pool
 
             owned = {int(s.source.get("adapter") or 0) for s in copies}
-            for adapter in pool.ADAPTERS:
+            for adapter in pool.adapters():
                 if adapter not in owned:
                     stop_unit(dump_unit(adapter))
             return
@@ -834,7 +834,9 @@ class Timeshift:
 
     @classmethod
     def _wait_frontend_free(cls, timeout: float = 0.6, adapter_id: Optional[int] = None) -> None:
-        adapters = (adapter_id,) if adapter_id is not None else (0, 1)
+        from engine import pool
+
+        adapters = (adapter_id,) if adapter_id is not None else pool.adapters()
         deadline = time.time() + timeout
         while time.time() < deadline:
             busy = False

@@ -1,20 +1,20 @@
-"""Two tuners, one pool. Live TV, recordings, scans, and the Guide take whichever is free.
+"""The tuners, one pool. Live TV, recordings, scans, and the Guide take whichever is free.
 
-Live TV prefers tuner 0 and work prefers tuner 1, so with nothing else going on
-the old split still holds. A Guide update is the only job that gives way: live
-TV takes its tuner at once, a recording between towers.
+Live TV prefers the lowest tuner and work the highest, so with two and nothing
+else going on the old split holds. One tuner does one job at a time. A Guide
+update is the only job that gives way: live TV takes its tuner at once, a
+recording between towers.
 """
 
+import glob
 import json
 import os
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from engine.paths import GUIDE_STATUS_PATH, SCAN_STATUS_PATH, get_runtime_socket
 
-ADAPTERS = (0, 1)
-LIVE_ORDER = (0, 1)
-WORK_ORDER = (1, 0)
+DVB_ROOT = "/dev/dvb"
 SCAN_HEARTBEAT_SECS = 15
 YIELD_PATH = get_runtime_socket("omarchy-tv-guide-yield")
 YIELD_FRESH_SECS = 30
@@ -30,6 +30,24 @@ def lock_key(adapter_id: int) -> str:
 
 class BothTunersBusy(RuntimeError):
     pass
+
+
+def detect_adapters(root: str = DVB_ROOT) -> Tuple[int, ...]:
+    """The tuners this machine has: each adapterN with a frontend."""
+    found = []
+    for path in glob.glob(os.path.join(root, "adapter*", "frontend0")):
+        name = os.path.basename(os.path.dirname(path))
+        if name[len("adapter"):].isdigit():
+            found.append(int(name[len("adapter"):]))
+    return tuple(sorted(found))
+
+
+def adapters() -> Tuple[int, ...]:
+    return detect_adapters()
+
+
+def busy_text() -> str:
+    return "The tuner is busy." if len(adapters()) == 1 else "Both tuners are busy."
 
 
 def _read_json(path: str) -> Dict:
@@ -83,16 +101,17 @@ def live_adapter() -> Optional[int]:
 def pick_live(held: Optional[Dict[int, str]] = None) -> int:
     """The tuner live TV should use. Raises BothTunersBusy when nothing can give way."""
     held = claims() if held is None else held
-    for adapter in LIVE_ORDER:
+    order = adapters()
+    for adapter in order:
         if held.get(adapter) == "live":
             return adapter
-    for adapter in LIVE_ORDER:
+    for adapter in order:
         if adapter not in held:
             return adapter
-    for adapter in LIVE_ORDER:
+    for adapter in order:
         if held.get(adapter) == "guide":
             return adapter
-    raise BothTunersBusy("Both tuners are recording. Stop one to watch.")
+    raise BothTunersBusy(f"{busy_text()} Stop a recording to watch.")
 
 
 def pick_work(held: Optional[Dict[int, str]] = None, wait_for_guide: bool = True) -> Optional[int]:
@@ -102,11 +121,12 @@ def pick_work(held: Optional[Dict[int, str]] = None, wait_for_guide: bool = True
     tower under lock_key.
     """
     held = claims() if held is None else held
-    for adapter in WORK_ORDER:
+    order = tuple(reversed(adapters()))
+    for adapter in order:
         if adapter not in held:
             return adapter
     if wait_for_guide:
-        for adapter in WORK_ORDER:
+        for adapter in order:
             if held.get(adapter) == "guide":
                 return adapter
     return None
@@ -114,7 +134,7 @@ def pick_work(held: Optional[Dict[int, str]] = None, wait_for_guide: bool = True
 
 def free_count(held: Optional[Dict[int, str]] = None) -> int:
     held = claims() if held is None else held
-    return sum(1 for a in ADAPTERS if a not in held)
+    return sum(1 for a in adapters() if a not in held)
 
 
 def ask_guide_to_yield(adapter_id: int) -> None:
@@ -142,4 +162,4 @@ def clear_yield() -> None:
 
 def describe(held: Optional[Dict[int, str]] = None) -> List[str]:
     held = claims() if held is None else held
-    return [f"Tuner {a}: {held.get(a, 'free')}" for a in ADAPTERS]
+    return [f"Tuner {a}: {held.get(a, 'free')}" for a in adapters()]

@@ -23,7 +23,8 @@ BorderSurface {
     Text {
       width: parent.width
       textFormat: Text.PlainText
-      text: "Both tuners are recording. Stop one to watch " + card.tv.getActiveDisplayNameFor(card.tv.pendingWatch) + "?"
+      text: (card.tv.tunerCount === 1 ? "The tuner is recording. Stop it to watch " : "Both tuners are recording. Stop one to watch ")
+        + card.tv.getActiveDisplayNameFor(card.tv.pendingWatch) + "?"
       color: card.tv.bar.foreground
       font.family: card.tv.bar.fontFamily
       font.pixelSize: Style.font.bodySmall
