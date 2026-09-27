@@ -754,6 +754,21 @@ def cmd_record(args):
             sys.exit(1)
         print("Kept. The size limit will not delete it." if action == "keep" else "The size limit may delete it again.")
 
+    elif action == "rules":
+        from engine.rules import load_rules
+        from engine.schedule import load_schedule
+        rules = load_rules()
+        if not rules:
+            print("No shows are set to record every airing.")
+            return
+        queued = sorted(load_schedule(), key=lambda row: int(row.get("start_unix") or 0))
+        for rule in rules:
+            keep = int(rule.get("keep_last") or 0)
+            nxt = next((row for row in queued if str(row.get("rule_id") or "") == rule.get("id")), None)
+            when = f"next {nxt.get('clock') or nxt.get('start_unix')}" if nxt else "next airing not listed yet"
+            print(f"{rule.get('id')}  {rule.get('title')}  {rule.get('channel') or rule.get('tune_name')}  "
+                  f"{'keep ' + str(keep) if keep else 'keep all'}  {when}")
+
     elif action == "unall":
         from engine.rules import remove_rule
         if not args.target or not remove_rule(args.target):
@@ -957,7 +972,7 @@ def main():
 
     # record / dvr
     p_rec = subparsers.add_parser("record", aliases=["dvr", "rec"], help="DVR recording control")
-    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "all", "unall", "finish", "limit", "keep", "unkeep"], default="list", help="Record action. all/unall: record every airing of a show. limit: keep the newest N of a show. keep/unkeep: shield a recording from the size limit. finish: split runs and mark ad breaks")
+    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "all", "unall", "rules", "finish", "limit", "keep", "unkeep"], default="list", help="Record action. all/unall: record every airing of a show. rules: list those shows. limit: keep the newest N of a show. keep/unkeep: shield a recording from the size limit. finish: split runs and mark ad breaks")
     p_rec.add_argument("target", nargs="?", help="Channel to record or file to delete")
     p_rec.add_argument("duration", nargs="?", help="Optional duration limit (e.g. 30m, 1h, 300s)")
     p_rec.add_argument("--title", default="", help="Program name for the file and the list")

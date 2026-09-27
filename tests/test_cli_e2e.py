@@ -167,6 +167,23 @@ class TestCliE2E(unittest.TestCase):
         self.assertEqual(res_status.returncode, 0)
         self.assertIn("No active background recordings", res_status.stdout)
 
+    def test_cli_record_rules_lists_each_show_and_its_next_airing(self):
+        from engine.shows import show_id
+
+        tv_dir = os.path.join(self.sandbox_config, "yagi")
+        os.makedirs(tv_dir, exist_ok=True)
+        with open(os.path.join(tv_dir, "record_rules.json"), "w", encoding="utf-8") as f:
+            json.dump({"rules": [
+                {"id": "old", "title": "M*A*S*H", "key": "mash", "channel": "19.2", "tune_name": "MeTV", "keep_last": 10},
+                {"id": "old2", "title": "Jeopardy!", "key": "jeopardy", "channel": "5.1", "tune_name": "WEWS"},
+            ]}, f)
+        with open(os.path.join(tv_dir, "schedule.json"), "w", encoding="utf-8") as f:
+            json.dump({"items": [{"rule_id": show_id("mash", "19.2"), "clock": "7:30 PM", "start_unix": 2000000000}]}, f)
+        res = subprocess.run([sys.executable, CLI_BIN, "record", "rules"], capture_output=True, text=True, env=self.env)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("M*A*S*H  19.2  keep 10  next 7:30 PM", res.stdout)
+        self.assertIn("Jeopardy!  5.1  keep all  next airing not listed yet", res.stdout)
+
     def test_cli_pref_library_max(self):
         res = subprocess.run(
             [sys.executable, CLI_BIN, "pref", "library-max", "20"],
