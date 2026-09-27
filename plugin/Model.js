@@ -200,15 +200,6 @@ function recordDurationArg(block, nowMin) {
   return ""
 }
 
-function _neighborShow(prog) {
-  if (!prog || !prog.title) return null
-  return {
-    title: prog.title || "",
-    start: prog.start || prog.start_time || "",
-    end: prog.end || prog.end_time || ""
-  }
-}
-
 function _hasWord(text, word) {
   var at = text.indexOf(word)
   while (at !== -1) {
@@ -258,75 +249,6 @@ function progMatch(prog, words) {
   if (inTitle || inAbout) return { by_title: inTitle }
   if (!about && isGameTitle(title) && _teamSport(words, folded)) return { by_title: false, maybe: true }
   return null
-}
-
-function searchGuide(guideData, query, nowMin) {
-  var words = queryWords(query)
-  if (!words.length || !guideData) return []
-  var now = (nowMin === undefined || nowMin === null || nowMin < 0) ? minutesNow() : nowMin
-  var nowUnix = Date.now() / 1000
-  var hits = []
-  for (var num in guideData) {
-    var row = guideData[num]
-    if (!row) continue
-    var programs = row.programs || []
-    var i
-    for (i = 0; i < programs.length; i++) {
-      var prog = programs[i]
-      var title = String((prog && prog.title) || "")
-      var began = programUnix(prog)
-      if (began > 0 && began + (Number(prog.duration_sec) || 1800) <= nowUnix) continue
-      var found = progMatch(prog, words)
-      if (!found) continue
-      var inTitle = found.by_title
-      var block = {
-        title: title,
-        start: prog.start || "",
-        end: prog.end || "",
-        synopsis: prog.synopsis || "",
-        usual: prog.usual || "",
-        also: prog.also || "",
-        duration_sec: Number(prog.duration_sec) || 0,
-        now: showIsOn(prog, now),
-        empty: false,
-        before: _neighborShow(i > 0 ? programs[i - 1] : null),
-        after: _neighborShow(i + 1 < programs.length ? programs[i + 1] : null)
-      }
-        hits.push({
-        channel_number: String(num),
-        callsign: row.callsign || row.station || "",
-        tune_name: row.tune_name || "",
-        station: row.station || row.callsign || "",
-        network: row.network || "",
-        display_name: row.display_name || "",
-        title: title,
-        synopsis: block.synopsis,
-        by_title: inTitle,
-        start: block.start,
-        end: block.end,
-        gps_start: Number(prog.gps_start) || 0,
-        duration_sec: block.duration_sec,
-        on_now: block.now,
-        usual: block.usual,
-        also: block.also,
-        before: block.before,
-        after: block.after,
-        block: block
-      })
-    }
-  }
-  hits.sort(function(a, b) {
-    var ua = programUnix(a)
-    var ub = programUnix(b)
-    if (ua && ub && ua !== ub) return ua - ub
-    if (!ua || !ub) {
-      var ta = parseMinutes(a.start)
-      var tb = parseMinutes(b.start)
-      if (ta !== tb) return ta - tb
-    }
-    return (parseFloat(a.channel_number) || 999) - (parseFloat(b.channel_number) || 999)
-  })
-  return hits
 }
 
 // Same cut as engine/shows.py bucket_for.
@@ -672,28 +594,6 @@ function blockAiring(b) {
     on_now: b.on_now,
     display_name: b.display_name
   }
-}
-
-function guideHourBlocks(channels, nowUnix) {
-  var now = Number(nowUnix) || (Date.now() / 1000)
-  var last = now
-  var list = channels || []
-  var i, j, programs, unix
-  for (i = 0; i < list.length; i++) {
-    programs = (list[i] && list[i].programs) || []
-    for (j = 0; j < programs.length; j++) {
-      unix = programUnix(programs[j])
-      if (unix > last) last = unix
-    }
-  }
-  var step = 3 * 3600
-  var start = now - (now % step)
-  var blocks = []
-  var end = Math.max(last, start + step)
-  var t
-  for (t = start; t < end; t += step) blocks.push(t)
-  if (!blocks.length) blocks.push(start)
-  return blocks
 }
 
 function fileUrlToPath(url) {

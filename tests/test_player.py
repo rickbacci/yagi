@@ -1332,8 +1332,7 @@ class TestPluginSessionCards(unittest.TestCase):
         cover = js[js.index("function coveringProgram"):js.index("function coveringProgram") + 600]
         self.assertIn("airingCoversNow", cover)
         self.assertIn("if (dated) return null", cover)
-        self.assertIn("function searchGuide", js)
-        self.assertIn("function guideHourBlocks", js)
+        self.assertIn("function progMatch", js)
         self.assertIn("function tvConfigDir", js)
         self.assertIn("function fileUrlToPath", js)
         self.assertNotIn("#F9E2AF", js)

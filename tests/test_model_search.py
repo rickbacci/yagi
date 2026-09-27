@@ -1,4 +1,4 @@
-"""Guide search runs the real Model.js: a game is found by the team in its description."""
+"""Guide search runs the real Model.js matcher: a game is found by the team in its description."""
 
 import json
 import os
@@ -16,7 +16,9 @@ const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
 const input = JSON.parse(process.argv[2]);
-const out = input.queries.map(q => ctx.searchGuide(input.guide, q, 600).map(h => [h.title, h.by_title]));
+const progs = Object.values(input.guide).flatMap(row => row.programs);
+const out = input.queries.map(q => progs.map(p => [p.title, ctx.progMatch(p, ctx.queryWords(q))])
+  .filter(([, hit]) => hit).map(([title, hit]) => [title, hit.by_title]));
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -49,7 +51,7 @@ class TestGuideSearch(unittest.TestCase):
 
     def test_team_name_finds_the_game_and_the_sitcom(self):
         browns, = self._search("browns")
-        self.assertEqual(browns, [["NFL Football", False], ["Meet the Browns", True]])
+        self.assertEqual(browns, [["NFL Football", False], ["Meet the Browns", True], ["Browns Classic", True]])
 
     def test_games_get_extra_time_and_pregame_does_not(self):
         runner = (
