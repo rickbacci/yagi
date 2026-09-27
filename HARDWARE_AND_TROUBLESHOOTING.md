@@ -24,6 +24,12 @@ While a tune is running, the flyout watch row shows SNR in dB. This demod report
 
 Height and line-of-sight matter. VHF-High (7–13) wants longer elements. UHF (14–36) is most modern stations. Inside about 15 miles, an amp can overload the LGDT3306A.
 
+A good average is not enough: artifacts are short bursts the demod could not repair. `yagi signal check 8.1` prints C/N and the packets the tuner flagged as damaged every 2 s, on live TV's tuner when you watch that tower, else on a free one. Use it while you move the antenna, the amp gain, or the stick. More gain helps until C/N stops rising; past that it overdrives.
+
+On this box a USB 3 port put noise on VHF-High: 4–5% of frames damaged on RF 8, 0% after moving the stick to a USB 2.0 port. Keep the stick off USB 3 ports and away from the PC.
+
+Close the TV before you unplug or move the stick. Pulled while streaming, em28xx can hang in its disconnect; the tuners do not come back and whatever had the stick's IR input open freezes until a reboot.
+
 ## Why other apps show scrambled
 
 OTA majors are unencrypted. Stations often leave PSIP `access_controlled` set. Kaffeine trusts that bit. We play the unencrypted elementary stream.
