@@ -3,6 +3,7 @@ Unit tests for Omarchy TV - MPV Player Controller & Channel Cycling
 """
 
 import os
+import re
 import json
 import socket
 import subprocess
@@ -1212,11 +1213,20 @@ class TestCliNextPrev(unittest.TestCase):
         self.assertIn("sync", res.stdout)
 
 
+def _plugin_qml() -> str:
+    """Every QML file in the plugin. A component's widget.tv.x reads as root.x, as it did in one file."""
+    folder = os.path.join(PROJECT_ROOT, "plugin")
+    parts = []
+    for name in sorted(os.listdir(folder)):
+        if name.endswith(".qml"):
+            with open(os.path.join(folder, name), encoding="utf-8") as f:
+                parts.append(re.sub(r"\b\w+\.tv\.", "root.", f.read()))
+    return "\n".join(parts)
+
+
 class TestPluginSessionCards(unittest.TestCase):
     def test_watch_and_record_are_separate_cards(self):
-        qml = os.path.join(PROJECT_ROOT, "plugin", "BarWidget.qml")
-        with open(qml, encoding="utf-8") as f:
-            src = f.read()
+        src = _plugin_qml()
         self.assertIn("model: root.activeRecordings", src)
         self.assertIn("text: \"Close\"", src)
         self.assertIn("text: \"Save\"", src)
@@ -1226,11 +1236,11 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertNotIn("text: \"Pause\"", src)
         self.assertIn("readonly property bool showChannelBrowser: !root.guideStripOpen", src)
         self.assertNotIn("Hide the channel list", src)
-        self.assertIn("id: guideUpdateCard", src)
-        self.assertIn("visible: root.guideRefreshing", src)
+        self.assertIn("StatusCard {", src)
+        self.assertIn("message: !root.guideRefreshing", src)
         self.assertIn("\"Updating the Guide\"", src)
         self.assertIn("property bool guideStripOpen", src)
-        self.assertIn("id: guideStripCol", src)
+        self.assertIn("GuidePage {", src)
         self.assertIn("guideShowRows", src)
         self.assertIn("Record all", src)
         self.assertIn('"guide", "shows"', src)
@@ -1300,20 +1310,18 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("color: Color.urgent", src)
 
     def test_guide_strip_uses_lineup_and_omarchy_tokens(self):
-        qml = os.path.join(PROJECT_ROOT, "plugin", "BarWidget.qml")
         model = os.path.join(PROJECT_ROOT, "plugin", "Model.js")
-        with open(qml, encoding="utf-8") as f:
-            src = f.read()
+        src = _plugin_qml()
         with open(model, encoding="utf-8") as f:
             js = f.read()
         self.assertIn("root.displayChannels", src)
-        self.assertIn("id: guideStripCol", src)
+        self.assertIn("GuidePage {", src)
         self.assertIn("guideShowRows", src)
         self.assertIn("Record all", src)
         self.assertIn('"guide", "shows"', src)
         self.assertNotIn("Nothing listed in these hours.", src)
         self.assertIn("placeholderText: \"Search shows and teams\"", src)
-        self.assertIn("blocked: guideStripSearch.activeFocus", src)
+        self.assertIn("blocked: guidePage.searchField.activeFocus", src)
         self.assertIn("Style.selectedFillFor", src)
         self.assertIn("function showIsOn", js)
         self.assertIn("function recordDurationArg", js)
