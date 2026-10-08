@@ -6,7 +6,7 @@ Item {
   id: header
   required property var tv
 
-  height: Math.max(Style.space(42), headerGuideBtn.implicitHeight)
+  height: Math.max(Style.space(48), headerGuideBtn.implicitHeight, headerTitles.implicitHeight)
 
   BorderSurface {
     id: headerIcon
@@ -35,6 +35,7 @@ Item {
       iconText: "󰑈"
       text: "Recordings"
       tooltipText: "Recorded videos"
+      fontSize: Style.font.heading
       foreground: header.tv.bar.foreground
       onClicked: header.tv.toggleLibrary()
     }
@@ -44,6 +45,7 @@ Item {
       iconText: "󰥔"
       text: "Guide"
       tooltipText: "Program guide"
+      fontSize: Style.font.heading
       selected: header.tv.guideStripOpen
       foreground: header.tv.bar.foreground
       onClicked: header.tv.toggleGuide()
@@ -51,6 +53,7 @@ Item {
   }
 
   Column {
+    id: headerTitles
     anchors.left: headerIcon.right
     anchors.right: headerNavRow.left
     anchors.leftMargin: Style.space(10)
@@ -63,7 +66,7 @@ Item {
       text: "Yagi"
       color: header.tv.bar.foreground
       font.family: header.tv.bar.fontFamily
-      font.pixelSize: Style.font.subtitle
+      font.pixelSize: Style.font.heading
       font.bold: true
       elide: Text.ElideRight
       width: parent.width
@@ -79,7 +82,7 @@ Item {
       }
       color: header.tv.isScanning ? Color.accent : Color.muted
       font.family: header.tv.bar.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Style.font.heading
       elide: Text.ElideRight
       width: parent.width
     }

@@ -40,7 +40,7 @@ BorderSurface {
       text: card.message
       color: Color.accent
       font.family: card.tv.bar.fontFamily
-      font.pixelSize: Style.font.bodySmall
+      font.pixelSize: Style.font.heading
       font.bold: true
       elide: Text.ElideRight
     }

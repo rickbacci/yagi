@@ -471,12 +471,14 @@ class TestDvrEngine(unittest.TestCase):
                 "status": "complete",
                 "start": 10,
                 "end": 20,
+                "synopsis": "  Klinger\ntries.  ",
             })
             records = DvrManager.list_recordings(recordings_dir=tmp_dir)
             self.assertEqual(records[0]["title"], "MASH")
             self.assertEqual(records[0]["station"], "METV")
             self.assertEqual(records[0]["channel_number"], "19.2")
             self.assertEqual(records[0]["service_id"], 4)
+            self.assertEqual(records[0]["synopsis"], "Klinger tries.")
             self.assertTrue(records[0]["playable"])
             DvrManager.delete_recording(rec_file, recordings_dir=tmp_dir)
             self.assertFalse(os.path.exists(rec_file))

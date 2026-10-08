@@ -8,9 +8,13 @@ CursorSurface {
   required property var tv
   property var rec: ({})
   property int recIndex: -1
+  property string titleText: ""
+  property string detailText: ""
+  property string blurb: ""
   readonly property bool live: Model.recordingLive(recRow.rec)
+  readonly property bool actions: !recRow.live
 
-  height: Math.max(Style.space(52), recInfo.implicitHeight + Style.space(14))
+  height: Math.max(Style.space(64), recInfo.implicitHeight + Style.space(16))
   foreground: recRow.tv.bar.foreground
   accent: Color.accent
   hasCursor: recRow.tv.libraryModalOpen && recRow.tv.cursorActive && recRow.tv.recCursorIndex === recRow.recIndex
@@ -23,8 +27,10 @@ CursorSurface {
   }
 
   MouseArea {
-    anchors.fill: parent
-    anchors.rightMargin: recRow.live ? 0 : Style.space(64)
+    anchors.left: parent.left
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    anchors.right: recRow.actions ? recKeepBtn.left : parent.right
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
     onEntered: {
@@ -37,68 +43,54 @@ CursorSurface {
   Column {
     id: recInfo
     anchors.left: parent.left
-    anchors.leftMargin: Style.space(6)
-    anchors.right: recRow.live ? parent.right : recKeepBtn.left
+    anchors.leftMargin: Style.space(8)
+    anchors.right: recRow.actions ? recKeepBtn.left : parent.right
     anchors.rightMargin: Style.space(8)
     anchors.verticalCenter: parent.verticalCenter
     spacing: Style.space(2)
 
-    Row {
+    Text {
       width: parent.width
-      spacing: Style.space(6)
-
-      Text {
-        id: recTitle
-        textFormat: Text.PlainText
-        text: recRow.rec.title || recRow.rec.name || ""
-        color: recRow.rec.playable === false && !recRow.live ? Color.muted : recRow.tv.bar.foreground
-        font.family: recRow.tv.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        font.bold: true
-        wrapMode: Text.Wrap
-        width: Math.min(implicitWidth, parent.width - (seriesTag.visible ? seriesTag.width + parent.spacing : 0))
-      }
-
-      Rectangle {
-        id: seriesTag
-        visible: !!recRow.rec.rule_id
-        y: Math.max(0, (recTitle.font.pixelSize * 1.3 - height) / 2)
-        width: seriesText.implicitWidth + Style.space(10)
-        height: seriesText.implicitHeight + Style.space(2)
-        radius: Style.spacing.xs
-        color: "transparent"
-        border.width: 1
-        border.color: Color.muted
-
-        Text {
-          id: seriesText
-          anchors.centerIn: parent
-          textFormat: Text.PlainText
-          text: "series"
-          color: Color.muted
-          font.family: recRow.tv.bar.fontFamily
-          font.pixelSize: Style.font.caption
-        }
-      }
+      textFormat: Text.PlainText
+      text: recRow.titleText
+      color: recRow.rec.playable === false && !recRow.live ? Color.muted : recRow.tv.bar.foreground
+      font.family: recRow.tv.bar.fontFamily
+      font.pixelSize: Style.font.heading
+      font.bold: true
+      elide: Text.ElideRight
     }
 
     Text {
+      width: parent.width
       textFormat: Text.PlainText
-      text: Model.recordingLine(recRow.rec, recRow.tv.gridNow)
+      text: recRow.detailText
       color: recRow.live ? Color.urgent : Color.muted
       font.family: recRow.tv.bar.fontFamily
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
+      font.pixelSize: Style.font.title
+      elide: Text.ElideRight
+    }
+
+    Text {
+      visible: recRow.blurb !== ""
       width: parent.width
+      textFormat: Text.PlainText
+      text: recRow.blurb
+      color: Color.muted
+      font.family: recRow.tv.bar.fontFamily
+      font.pixelSize: Style.font.title
+      wrapMode: Text.Wrap
+      maximumLineCount: 3
+      elide: Text.ElideRight
     }
   }
 
   PanelActionButton {
     id: recKeepBtn
-    visible: !recRow.live
+    visible: recRow.actions
     anchors.right: recDeleteBtn.left
     anchors.rightMargin: Style.space(2)
     anchors.verticalCenter: parent.verticalCenter
+    fontSize: Style.font.heading
     iconText: recRow.rec.keep ? "\uf023" : "\uf09c"
     tooltipText: recRow.rec.keep ? "Locked. The size limit won't delete it. Click to unlock" : "Lock it so the size limit never deletes it"
     foreground: recRow.rec.keep ? Color.accent : Color.muted
@@ -109,11 +101,12 @@ CursorSurface {
 
   PanelActionButton {
     id: recDeleteBtn
-    visible: !recRow.live
+    visible: recRow.actions
     anchors.right: parent.right
     anchors.rightMargin: Style.space(2)
     anchors.verticalCenter: parent.verticalCenter
     readonly property bool armed: recRow.tv.deleteArmed === (recRow.rec.path || recRow.rec.name)
+    fontSize: Style.font.heading
     iconText: "󰅙"
     tooltipText: armed ? "Click again to delete" : "Delete"
     foreground: armed ? Color.urgent : recRow.tv.bar.foreground

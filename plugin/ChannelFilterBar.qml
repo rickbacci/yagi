@@ -25,7 +25,7 @@ Row {
     text: "Rescan"
     tooltipText: "Look for channels again. Takes a free tuner for a few minutes"
     enabled: filters.tv.tunersFree > 0
-    fontSize: Style.font.caption
+    fontSize: Style.font.heading
     foreground: filters.tv.bar.foreground
     onClicked: filters.tv.startScan()
   }

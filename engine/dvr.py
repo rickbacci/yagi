@@ -952,6 +952,7 @@ class DvrManager:
                         "keep": bool(side.get("keep")),
                         "rule_id": str(side.get("rule_id") or ""),
                         "ads": len(side.get("ads") or []),
+                        "synopsis": " ".join(str(side.get("synopsis") or "").split()) if side else "",
                     })
                 except OSError:
                     continue

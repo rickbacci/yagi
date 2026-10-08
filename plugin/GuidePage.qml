@@ -29,7 +29,7 @@ Column {
         text: "Grid"
         tooltipText: "What is on each channel, by time"
         selected: guide.onGrid
-        fontSize: Style.font.caption
+        fontSize: Style.font.heading
         foreground: guide.tv.bar.foreground
         onClicked: guide.tv.showGuideTab("grid")
       }
@@ -38,7 +38,7 @@ Column {
         text: "Shows"
         tooltipText: "Shows the Guide has seen, by time of day"
         selected: !guide.onGrid
-        fontSize: Style.font.caption
+        fontSize: Style.font.heading
         foreground: guide.tv.bar.foreground
         onClicked: guide.tv.showGuideTab("shows")
       }
@@ -59,6 +59,7 @@ Column {
       Keys.onReturnPressed: guide.tv.leaveGuideSearch()
       Keys.onDownPressed: guide.tv.leaveGuideSearch()
       font.family: guide.tv.bar.fontFamily
+      font.pixelSize: Style.font.heading
       onTextChanged: guide.tv.guideSearchText = text
     }
 
@@ -71,7 +72,7 @@ Column {
       text: guide.tv.gridMatchCount === 1 ? "1 match" : guide.tv.gridMatchCount + " matches"
       color: Color.accent
       font.family: guide.tv.bar.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Style.font.heading
       font.bold: true
     }
   }
@@ -98,7 +99,7 @@ Column {
           : "No listings yet for these channels. Each Guide update adds what the stations send."
     color: Color.muted
     font.family: guide.tv.bar.fontFamily
-    font.pixelSize: Style.font.caption
+    font.pixelSize: Style.font.heading
     wrapMode: Text.Wrap
   }
 
@@ -118,7 +119,7 @@ Column {
         required property var modelData
         text: bucketBtn.modelData.label
         selected: guide.tv.showBucket === bucketBtn.modelData.key
-        fontSize: Style.font.caption
+        fontSize: Style.font.heading
         foreground: guide.tv.bar.foreground
         onClicked: guide.tv.showBucket = bucketBtn.modelData.key
       }
@@ -133,7 +134,7 @@ Column {
           : (guide.tv.guideSearchActive ? "No show here matches." : "Nothing listed for this time yet. Each Guide update adds what the stations send.")
     color: Color.muted
     font.family: guide.tv.bar.fontFamily
-    font.pixelSize: Style.font.caption
+    font.pixelSize: Style.font.heading
     wrapMode: Text.Wrap
   }
 

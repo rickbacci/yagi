@@ -10,8 +10,8 @@ Item {
   required property var tv
 
   readonly property real chanWidth: Style.space(150)
-  readonly property real headHeight: Style.space(26)
-  readonly property real rowHeight: Style.space(44)
+  readonly property real headHeight: Style.font.heading + Style.space(14)
+  readonly property real rowHeight: Style.font.heading * 2 + Style.space(18)
   readonly property int visibleSlots: 6
   readonly property real slotWidth: Math.max(Style.space(90), (width - chanWidth) / visibleSlots)
   readonly property real t0: grid.tv.gridStart
@@ -78,7 +78,7 @@ Item {
         text: Model.formatClock(grid.t0 + index * 1800)
         color: Color.muted
         font.family: grid.tv.bar.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.heading
       }
     }
 
@@ -99,7 +99,7 @@ Item {
         text: "now"
         color: Color.popups.background
         font.family: grid.tv.bar.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.heading
         font.bold: true
       }
     }
@@ -125,41 +125,50 @@ Item {
         width: grid.chanWidth
         height: grid.rowHeight
 
-        Row {
-          x: Style.space(6)
-          y: Style.space(6)
-          spacing: Style.space(6)
+        Column {
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.leftMargin: Style.space(8)
+          anchors.rightMargin: Style.space(8)
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(2)
 
-          Text {
-            textFormat: Text.PlainText
-            text: chanRow.modelData.channel.channel_number || ""
-            color: grid.fg
-            font.family: grid.tv.bar.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
+          Row {
+            width: parent.width
+            spacing: Style.space(6)
+
+            Text {
+              id: chanNum
+              textFormat: Text.PlainText
+              text: chanRow.modelData.channel.channel_number || ""
+              color: grid.fg
+              font.family: grid.tv.bar.fontFamily
+              font.pixelSize: Style.font.heading
+              font.bold: true
+            }
+
+            Text {
+              visible: chanRow.modelData.outside
+              width: Math.max(0, parent.width - chanNum.width - parent.spacing)
+              textFormat: Text.PlainText
+              text: grid.tv.channelFilter === "favorites" ? "not a favorite" : "not in this list"
+              color: Color.accent
+              font.family: grid.tv.bar.fontFamily
+              font.pixelSize: Style.font.heading
+              elide: Text.ElideRight
+              anchors.verticalCenter: parent.verticalCenter
+            }
           }
 
           Text {
-            visible: chanRow.modelData.outside
+            width: parent.width
             textFormat: Text.PlainText
-            text: grid.tv.channelFilter === "favorites" ? "not a favorite" : "not in this list"
-            color: Color.accent
+            text: Model.getDisplayTitle(chanRow.modelData.channel)
+            color: Color.muted
             font.family: grid.tv.bar.fontFamily
-            font.pixelSize: Style.font.caption
-            anchors.verticalCenter: parent.verticalCenter
+            font.pixelSize: Style.font.heading
+            elide: Text.ElideRight
           }
-        }
-
-        Text {
-          x: Style.space(6)
-          y: Style.space(24)
-          width: grid.chanWidth - Style.space(12)
-          textFormat: Text.PlainText
-          text: Model.getDisplayTitle(chanRow.modelData.channel)
-          color: Color.muted
-          font.family: grid.tv.bar.fontFamily
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
         }
       }
     }
@@ -241,7 +250,7 @@ Item {
       text: (cell.modelData.began_before ? "‹ " : "") + cell.modelData.title
       color: cell.modelData.on_now || cell.isCursor ? grid.fg : Color.muted
       font.family: grid.tv.bar.fontFamily
-      font.pixelSize: Style.font.bodySmall
+      font.pixelSize: Style.font.heading
       font.bold: cell.modelData.on_now || cell.isCursor
       elide: Text.ElideRight
     }
@@ -249,14 +258,14 @@ Item {
     Text {
       visible: parent.width > Style.space(70)
       x: Style.space(8)
-      y: Style.space(21)
+      y: Style.font.heading + Style.space(6)
       width: parent.width - Style.space(12)
       textFormat: Text.PlainText
       text: cell.searching && cell.modelData.maybe ? "no teams listed"
             : cell.modelData.on_now ? "until " + Model.formatClock(cell.modelData.end) : Model.formatClock(cell.modelData.start)
       color: Color.muted
       font.family: grid.tv.bar.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Style.font.heading
       elide: Text.ElideRight
     }
 
@@ -306,7 +315,7 @@ Item {
         text: card.block ? card.block.title : ""
         color: grid.fg
         font.family: grid.tv.bar.fontFamily
-        font.pixelSize: Style.font.subtitle
+        font.pixelSize: Style.font.heading
         font.bold: true
         elide: Text.ElideRight
       }
@@ -318,7 +327,7 @@ Item {
                             + " · " + card.block.channel_number + " " + card.block.display_name) : ""
         color: Color.muted
         font.family: grid.tv.bar.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.heading
         elide: Text.ElideRight
       }
 
@@ -329,9 +338,9 @@ Item {
         text: !card.block ? "" : (card.block.synopsis || "The station lists no teams for this game, so it might not be the one you searched for.")
         color: Color.muted
         font.family: grid.tv.bar.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.title
         wrapMode: Text.Wrap
-        maximumLineCount: 2
+        maximumLineCount: 3
         elide: Text.ElideRight
       }
 
@@ -343,7 +352,7 @@ Item {
           visible: !!(card.block && card.block.on_now)
           text: "Watch"
           tooltipText: "Watch this channel now"
-          fontSize: Style.font.caption
+          fontSize: Style.font.heading
           foreground: grid.fg
           onClicked: grid.tv.selectChannel(card.block.tune_name || card.block.channel_number)
         }
@@ -358,7 +367,7 @@ Item {
                 : (card.block && card.block.on_now ? "Record the rest of this one" : "Record this one when it airs"))
           selected: card.recState !== ""
           enabled: card.recState !== "" || !(card.block && card.block.on_now) || grid.tv.freeTunerForRecording()
-          fontSize: Style.font.caption
+          fontSize: Style.font.heading
           foreground: grid.fg
           onClicked: grid.tv.toggleHitRecord(card.airing)
         }
@@ -368,7 +377,7 @@ Item {
           tooltipText: card.series ? "Stop recording every airing" : "Record every airing on " + (card.block ? card.block.channel_number : "this channel") + ", any time of day"
           selected: card.series
           enabled: card.series || !!(card.block && card.block.tune_name)
-          fontSize: Style.font.caption
+          fontSize: Style.font.heading
           foreground: grid.fg
           onClicked: grid.tv.toggleHitRecordAll(card.airing)
         }

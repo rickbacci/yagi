@@ -9,7 +9,7 @@ CursorSurface {
   property int pickIndex: -1
   readonly property bool armed: schedRow.tv.deleteArmed === schedRow.row.key
 
-  height: Math.max(Style.space(52), schedInfo.implicitHeight + Style.space(14))
+  height: Math.max(Style.space(64), schedInfo.implicitHeight + Style.space(16))
   foreground: schedRow.tv.bar.foreground
   accent: Color.accent
   hasCursor: schedRow.tv.libraryModalOpen && schedRow.tv.cursorActive && schedRow.tv.schedCursorIndex === schedRow.pickIndex
@@ -26,34 +26,38 @@ CursorSurface {
   Column {
     id: schedInfo
     anchors.left: parent.left
-    anchors.leftMargin: Style.space(6)
+    anchors.leftMargin: Style.space(8)
     anchors.right: schedButtons.left
     anchors.rightMargin: Style.space(8)
     anchors.verticalCenter: parent.verticalCenter
     spacing: Style.space(2)
 
-    Row {
+    Item {
       width: parent.width
-      spacing: Style.space(6)
+      implicitHeight: Math.max(schedTitle.implicitHeight, seriesTag.implicitHeight)
+      height: implicitHeight
 
       Text {
         id: schedTitle
+        anchors.left: parent.left
+        anchors.right: seriesTag.visible ? seriesTag.left : parent.right
+        anchors.rightMargin: seriesTag.visible ? Style.space(6) : 0
         textFormat: Text.PlainText
         text: schedRow.row.title || ""
         color: schedRow.tv.bar.foreground
         font.family: schedRow.tv.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         font.bold: true
-        wrapMode: Text.Wrap
-        width: Math.min(implicitWidth, parent.width - (seriesTag.visible ? seriesTag.width + parent.spacing : 0))
+        elide: Text.ElideRight
       }
 
       Rectangle {
         id: seriesTag
         visible: !!schedRow.row.series
-        y: Math.max(0, (schedTitle.font.pixelSize * 1.3 - height) / 2)
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
         width: seriesText.implicitWidth + Style.space(10)
-        height: seriesText.implicitHeight + Style.space(2)
+        height: seriesText.implicitHeight + Style.space(4)
         radius: Style.spacing.xs
         color: "transparent"
         border.width: 1
@@ -66,7 +70,7 @@ CursorSurface {
           text: "series"
           color: Color.muted
           font.family: schedRow.tv.bar.fontFamily
-          font.pixelSize: Style.font.caption
+          font.pixelSize: Style.font.heading
         }
       }
     }
@@ -76,8 +80,8 @@ CursorSurface {
       text: schedRow.row.line || ""
       color: schedRow.row.live || schedRow.row.missed ? Color.urgent : Color.muted
       font.family: schedRow.tv.bar.fontFamily
-      font.pixelSize: Style.font.caption
-      wrapMode: Text.Wrap
+      font.pixelSize: Style.font.heading
+      elide: Text.ElideRight
       width: parent.width
     }
   }
@@ -93,7 +97,7 @@ CursorSurface {
       visible: schedRow.row.kind === "series"
       text: schedRow.tv.showLimitText({ id: schedRow.row.item ? schedRow.row.item.id : "" })
       tooltipText: "How many episodes to keep. Older ones are deleted as new ones record. Click to change"
-      fontSize: Style.font.caption
+      fontSize: Style.font.heading
       foreground: schedRow.tv.bar.foreground
       onClicked: schedRow.tv.cycleShowLimit({ id: schedRow.row.item.id })
     }
@@ -103,7 +107,7 @@ CursorSurface {
       tooltipText: schedRow.row.kind === "active" ? "Stop this recording. What is recorded so far stays"
                    : schedRow.row.kind === "series" ? "Stop recording this series. Its recordings stay"
                    : "Don't record this"
-      fontSize: Style.font.caption
+      fontSize: Style.font.heading
       foreground: schedRow.armed ? Color.urgent : schedRow.tv.bar.foreground
       onClicked: {
         schedRow.tv.deleteArmed = schedRow.row.key

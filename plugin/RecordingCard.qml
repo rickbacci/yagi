@@ -28,7 +28,7 @@ BorderSurface {
       text: "Stop"
       tooltipText: "Stop this recording"
       foreground: Color.urgent
-      fontSize: Style.font.caption
+      fontSize: Style.font.heading
       onClicked: card.tv.toggleRecord(card.tv.recordingIdent(card.modelData))
     }
 
@@ -46,7 +46,7 @@ BorderSurface {
         text: card.tv.recordingTitle(card.modelData)
         color: card.tv.bar.foreground
         font.family: card.tv.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         font.bold: true
         anchors.verticalCenter: parent.verticalCenter
       }
@@ -58,7 +58,7 @@ BorderSurface {
         text: "·"
         color: Color.accent
         font.family: card.tv.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         anchors.verticalCenter: parent.verticalCenter
       }
 
@@ -69,7 +69,7 @@ BorderSurface {
         text: card.modelData && card.modelData.program_title ? card.modelData.program_title : ""
         color: Color.urgent
         font.family: card.tv.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         elide: Text.ElideRight
         anchors.verticalCenter: parent.verticalCenter
       }

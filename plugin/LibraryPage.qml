@@ -9,7 +9,8 @@ Column {
   property alias flick: recFlick
   property alias rows: recRepeater
   readonly property bool onRecorded: library.tv.libraryTab === "recorded"
-  readonly property int shownCount: library.onRecorded ? library.tv.librarySorted.length : library.tv.scheduledPicks.length
+  readonly property bool inShow: library.onRecorded && library.tv.libraryShow !== ""
+  readonly property int shownCount: library.onRecorded ? library.tv.recordedPicks.length : library.tv.scheduledPicks.length
 
   visible: library.tv.libraryModalOpen
   spacing: Style.space(10)
@@ -18,7 +19,7 @@ Column {
     id: libraryHeader
     width: parent.width
     implicitHeight: height
-    height: Math.max(Style.space(36), libraryBackBtn.implicitHeight)
+    height: Math.max(Style.space(44), libraryBackBtn.implicitHeight, libraryTitles.implicitHeight)
 
     BorderSurface {
       width: Style.space(36)
@@ -34,7 +35,7 @@ Column {
         text: "󰑈"
         color: Color.accent
         font.family: library.tv.bar.fontFamily
-        font.pixelSize: Style.font.subtitle
+        font.pixelSize: Style.font.heading
       }
     }
 
@@ -44,9 +45,10 @@ Column {
       anchors.verticalCenter: parent.verticalCenter
       iconText: "\udb80\udc4d"
       text: "Back"
-      tooltipText: "Back to channels"
+      tooltipText: library.inShow ? "Back to recordings" : "Back to channels"
+      fontSize: Style.font.heading
       foreground: library.tv.bar.foreground
-      onClicked: library.tv.toggleLibrary()
+      onClicked: library.tv.libraryBack()
     }
 
     Button {
@@ -54,16 +56,18 @@ Column {
       anchors.right: libraryBackBtn.left
       anchors.rightMargin: Style.space(6)
       anchors.verticalCenter: parent.verticalCenter
+      visible: !library.inShow
       text: library.tv.libraryCapButtonText()
       tooltipText: "Over the limit, the oldest recordings are deleted, series episodes first. Locked ones never are. Click to change"
-      fontSize: Style.font.caption
+      fontSize: Style.font.heading
       foreground: library.tv.bar.foreground
       onClicked: library.tv.cycleLibraryCap()
     }
 
     Column {
+      id: libraryTitles
       anchors.left: parent.left
-      anchors.right: libraryCapBtn.left
+      anchors.right: library.inShow ? libraryBackBtn.left : libraryCapBtn.left
       anchors.leftMargin: Style.space(44)
       anchors.rightMargin: Style.space(8)
       anchors.verticalCenter: parent.verticalCenter
@@ -71,10 +75,10 @@ Column {
 
       Text {
         textFormat: Text.PlainText
-        text: "Recordings"
+        text: library.inShow ? (library.tv.libraryShowTitle || "Recordings") : "Recordings"
         color: library.tv.bar.foreground
         font.family: library.tv.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         font.bold: true
         elide: Text.ElideRight
         width: parent.width
@@ -82,13 +86,15 @@ Column {
 
       Text {
         textFormat: Text.PlainText
-        text: (library.tv.recordingsData.length > 0)
-          ? (library.tv.recordingsData.length + (library.tv.recordingsData.length === 1 ? " recording · " : " recordings · ")
-             + library.tv.libraryBytesLabel + (library.tv.libraryBudgetLabel && library.tv.libraryBudgetLabel !== "Unlimited" ? " of " + library.tv.libraryBudgetLabel : ""))
-          : "Nothing recorded yet"
+        text: library.inShow
+          ? library.tv.libraryShowSubtitle
+          : ((library.tv.recordingsData.length > 0)
+            ? (library.tv.recordingsData.length + (library.tv.recordingsData.length === 1 ? " recording · " : " recordings · ")
+               + library.tv.libraryBytesLabel + (library.tv.libraryBudgetLabel && library.tv.libraryBudgetLabel !== "Unlimited" ? " of " + library.tv.libraryBudgetLabel : ""))
+            : "Nothing recorded yet")
         color: Color.muted
         font.family: library.tv.bar.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.heading
         elide: Text.ElideRight
         width: parent.width
       }
@@ -101,7 +107,7 @@ Column {
     Button {
       text: "Recorded"
       selected: library.onRecorded
-      fontSize: Style.font.caption
+      fontSize: Style.font.heading
       foreground: library.tv.bar.foreground
       onClicked: library.tv.showLibraryTab("recorded")
     }
@@ -110,7 +116,7 @@ Column {
       text: library.tv.scheduledPicks.length ? "Scheduled (" + library.tv.scheduledPicks.length + ")" : "Scheduled"
       tooltipText: "What will record, and each series"
       selected: !library.onRecorded
-      fontSize: Style.font.caption
+      fontSize: Style.font.heading
       foreground: library.tv.bar.foreground
       onClicked: library.tv.showLibraryTab("scheduled")
     }
@@ -131,7 +137,7 @@ Column {
                                : "Nothing scheduled. In the Guide, Record takes one airing and Record series takes every one."
       color: Color.muted
       font.family: library.tv.bar.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Style.font.heading
     }
   }
 
@@ -142,7 +148,7 @@ Column {
     height: {
       if (!visible) return 0
       var content = recCol.implicitHeight
-      var room = library.tv.roomFor(libraryHeader.height + library.outerSpacing + Style.space(60))
+      var room = library.tv.roomFor(libraryHeader.height + library.outerSpacing + Style.space(80))
       if (content > 0) return Math.min(content, room)
       return Math.min(Style.space(120), room)
     }
@@ -160,19 +166,20 @@ Column {
       Column {
         id: recCol
         width: parent.width
-        spacing: Style.space(6)
+        spacing: Style.space(8)
 
         Repeater {
           id: recRepeater
-          model: library.onRecorded ? library.tv.recordedRows : library.tv.scheduledRows
+          model: library.onRecorded ? library.tv.recordedPicks : library.tv.scheduledRows
           delegate: Item {
             id: entry
             required property var modelData
-            readonly property bool isHeader: library.onRecorded ? !!entry.modelData.header : entry.modelData.kind === "header"
-            readonly property int pick: library.onRecorded ? entry.modelData.index : entry.modelData.pick
+            readonly property bool isHeader: entry.modelData.kind === "header"
+            readonly property bool isShow: library.onRecorded && entry.modelData.kind === "show"
+            readonly property int pick: entry.modelData.pick
             width: recCol.width
-            height: entry.isHeader ? headText.implicitHeight + Style.space(6)
-                    : (library.onRecorded ? recItem.height : schedItem.height)
+            height: entry.isHeader ? headText.implicitHeight + Style.space(8)
+                    : (entry.isShow ? showItem.height : (library.onRecorded ? recItem.height : schedItem.height))
 
             Text {
               id: headText
@@ -180,20 +187,33 @@ Column {
               anchors.bottom: parent.bottom
               anchors.bottomMargin: Style.space(2)
               textFormat: Text.PlainText
-              text: (library.onRecorded ? entry.modelData.header : entry.modelData.title) || ""
+              text: entry.modelData.title || ""
               color: Color.muted
               font.family: library.tv.bar.fontFamily
-              font.pixelSize: Style.font.caption
+              font.pixelSize: library.onRecorded ? Style.font.title : Style.font.heading
               font.bold: true
+            }
+
+            LibraryShowRow {
+              id: showItem
+              visible: entry.isShow
+              tv: library.tv
+              width: parent.width
+              show: entry.modelData.show || ({})
+              line: entry.modelData.line || ""
+              recIndex: entry.pick
             }
 
             RecordingRow {
               id: recItem
-              visible: library.onRecorded && !entry.isHeader
+              visible: library.onRecorded && !entry.isHeader && !entry.isShow
               tv: library.tv
               width: parent.width
               rec: entry.modelData.rec || ({})
               recIndex: entry.pick
+              titleText: entry.modelData.title || ""
+              detailText: entry.modelData.detail || ""
+              blurb: entry.modelData.blurb || ""
             }
 
             ScheduledRow {

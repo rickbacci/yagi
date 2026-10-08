@@ -29,7 +29,7 @@ BorderSurface {
         text: "Scanning for channels"
         color: Color.accent
         font.family: card.tv.bar.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.heading
         font.bold: true
       }
 
@@ -40,7 +40,7 @@ BorderSurface {
         text: card.tv.scanTotalFound + " found"
         color: Color.accent
         font.family: card.tv.bar.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.heading
         font.bold: true
       }
     }
@@ -66,7 +66,7 @@ BorderSurface {
             text: "Ch " + (card.tv.scanChannel > 0 ? card.tv.scanChannel : "--")
             color: card.tv.bar.foreground
             font.family: card.tv.bar.fontFamily
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: Style.font.heading
             font.bold: true
           }
         }
@@ -80,7 +80,7 @@ BorderSurface {
             text: card.tv.scanBand !== "" ? card.tv.scanBand : "Broadcast"
             color: card.tv.bar.foreground
             font.family: card.tv.bar.fontFamily
-            font.pixelSize: Style.font.caption
+            font.pixelSize: Style.font.heading
             font.bold: true
           }
 
@@ -89,7 +89,7 @@ BorderSurface {
             text: Model.formatFreq(card.tv.scanFreq)
             color: Color.muted
             font.family: card.tv.bar.fontFamily
-            font.pixelSize: Style.font.caption
+            font.pixelSize: Style.font.heading
           }
         }
       }
@@ -105,7 +105,7 @@ BorderSurface {
           text: card.tv.scanSignal === null ? "Listening…" : (card.tv.scanSignal > -55 ? "Strong signal" : "Signal found")
           color: card.tv.scanSignal !== null && card.tv.scanSignal > -55 ? Color.accent : (card.tv.scanSignal !== null ? card.tv.bar.foreground : Color.muted)
           font.family: card.tv.bar.fontFamily
-          font.pixelSize: Style.font.caption
+          font.pixelSize: Style.font.heading
           font.bold: true
         }
 
@@ -115,7 +115,7 @@ BorderSurface {
           text: card.tv.scanSignal !== null ? (card.tv.scanSignal.toFixed(1) + " dBm") : ""
           color: Color.muted
           font.family: card.tv.bar.fontFamily
-          font.pixelSize: Style.font.caption
+          font.pixelSize: Style.font.heading
         }
       }
     }
@@ -135,7 +135,7 @@ BorderSurface {
           text: "Progress"
           color: Color.muted
           font.family: card.tv.bar.fontFamily
-          font.pixelSize: Style.font.caption
+          font.pixelSize: Style.font.heading
         }
 
         Text {
@@ -145,7 +145,7 @@ BorderSurface {
           text: card.tv.scanPercent + "%"
           color: Color.accent
           font.family: card.tv.bar.fontFamily
-          font.pixelSize: Style.font.caption
+          font.pixelSize: Style.font.heading
           font.bold: true
         }
       }

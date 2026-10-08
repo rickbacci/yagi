@@ -145,7 +145,7 @@ yagi hidden list | hidden hide 19.1 | hidden show 19.1
 | Everywhere | j/k or ↑/↓ move · Enter picks · Esc closes · `g` Guide · `v` Recordings · `f` Favorites · `a` All · Shift+S scan |
 | Channels | Enter watches (the TV window takes focus) · `r` records the station |
 | Guide | arrows move in the grid · Enter opens the card, again watches if on now, else records · `/` search (Enter or ↓ to the first match, then ↑/↓ step) · `s` Grid or Shows · `r` Record · `a` Record series |
-| Recordings | ←/→ Recorded or Scheduled · Enter plays · `x` twice deletes, or on Scheduled stops or removes · Shift+K locks |
+| Recordings | ←/→ Recorded or Scheduled · Enter opens a show, then plays · Esc backs out of the show · `x` twice deletes an episode, or on Scheduled stops or removes · Shift+K locks |
 
 ## HUD (the TV window has focus — not the plugin, not Super+K)
 

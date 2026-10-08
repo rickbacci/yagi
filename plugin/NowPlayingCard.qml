@@ -61,7 +61,7 @@ BorderSurface {
         text: "Save"
         tooltipText: "Save what you paused to Recordings"
         foreground: card.tv.bar.foreground
-        fontSize: Style.font.caption
+        fontSize: Style.font.heading
         onClicked: card.tv.keepPause()
       }
 
@@ -70,7 +70,7 @@ BorderSurface {
         text: "Close"
         tooltipText: "Close TV and drop the pause"
         foreground: card.tv.bar.foreground
-        fontSize: Style.font.caption
+        fontSize: Style.font.heading
         onClicked: card.tv.stopPlayer()
       }
     }
@@ -89,7 +89,7 @@ BorderSurface {
         text: card.tv.getActiveDisplayName()
         color: card.tv.bar.foreground
         font.family: card.tv.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         font.bold: true
         anchors.verticalCenter: parent.verticalCenter
       }
@@ -101,7 +101,7 @@ BorderSurface {
         text: "·"
         color: Color.accent
         font.family: card.tv.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         anchors.verticalCenter: parent.verticalCenter
       }
 
@@ -112,7 +112,7 @@ BorderSurface {
         text: card.showLine
         color: (!card.tv.tuning && card.tv.tunePhase === "failed" && card.showLine === card.tv.tuneMessage) ? Color.urgent : Color.accent
         font.family: card.tv.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         elide: Text.ElideRight
         anchors.verticalCenter: parent.verticalCenter
       }

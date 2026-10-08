@@ -27,7 +27,7 @@ BorderSurface {
         + card.tv.getActiveDisplayNameFor(card.tv.pendingWatch) + "?"
       color: card.tv.bar.foreground
       font.family: card.tv.bar.fontFamily
-      font.pixelSize: Style.font.bodySmall
+      font.pixelSize: Style.font.heading
       font.bold: true
       wrapMode: Text.Wrap
     }
@@ -43,7 +43,7 @@ BorderSurface {
           required property var modelData
           text: "Stop " + (stopBtn.modelData.program_title || card.tv.recordingTitle(stopBtn.modelData))
           tooltipText: "Stop this recording and watch. What it recorded so far is kept"
-          fontSize: Style.font.caption
+          fontSize: Style.font.heading
           foreground: Color.urgent
           onClicked: card.tv.stopToWatch(stopBtn.modelData)
         }
@@ -52,7 +52,7 @@ BorderSurface {
       Button {
         text: "Keep recording"
         tooltipText: "Don't watch right now"
-        fontSize: Style.font.caption
+        fontSize: Style.font.heading
         foreground: card.tv.bar.foreground
         onClicked: card.tv.pendingWatch = ""
       }

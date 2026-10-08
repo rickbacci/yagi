@@ -48,7 +48,7 @@ Item {
       text: showRow.modelData.title || ""
       color: showRow.modelData.pattern || showRow.onNow || showRow.willRecord ? showRow.tv.bar.foreground : Color.muted
       font.family: showRow.tv.bar.fontFamily
-      font.pixelSize: Style.font.bodySmall
+      font.pixelSize: Style.font.heading
       font.bold: showRow.onNow || showRow.willRecord
       elide: Text.ElideRight
     }
@@ -59,7 +59,7 @@ Item {
       text: Model.showSubLine(showRow.modelData, showRow.tv.stationFor(showRow.modelData.channel))
       color: Color.muted
       font.family: showRow.tv.bar.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Style.font.heading
       elide: Text.ElideRight
     }
   }
@@ -74,7 +74,7 @@ Item {
       visible: !!(showRow.airing && showRow.airing.on_now)
       text: "Watch"
       tooltipText: "Watch this channel now"
-      fontSize: Style.font.caption
+      fontSize: Style.font.heading
       foreground: showRow.tv.bar.foreground
       onClicked: showRow.tv.selectChannel(showRow.modelData.tune_name)
     }
@@ -92,7 +92,7 @@ Item {
             : "Record the next one, " + ((showRow.modelData.next && showRow.modelData.next.day) || "") + " " + ((showRow.airing && showRow.airing.start) || "")))
       selected: showRow.oneState !== ""
       enabled: showRow.oneState !== "" || !(showRow.airing && showRow.airing.on_now) || showRow.tv.freeTunerForRecording()
-      fontSize: Style.font.caption
+      fontSize: Style.font.heading
       foreground: showRow.tv.bar.foreground
       onClicked: showRow.tv.toggleHitRecord(showRow.airing)
     }
@@ -101,7 +101,7 @@ Item {
       visible: showRow.ruled
       text: showRow.tv.showLimitText(showRow.modelData)
       tooltipText: "How many episodes to keep. Older ones are deleted"
-      fontSize: Style.font.caption
+      fontSize: Style.font.heading
       foreground: showRow.tv.bar.foreground
       onClicked: showRow.tv.cycleShowLimit(showRow.modelData)
     }
@@ -111,7 +111,7 @@ Item {
       tooltipText: showRow.ruled ? "Stop recording every airing" : "Record every airing on " + (showRow.modelData.channel || "this channel") + ", any time of day"
       selected: showRow.ruled
       enabled: showRow.ruled || !!showRow.modelData.tune_name
-      fontSize: Style.font.caption
+      fontSize: Style.font.heading
       foreground: showRow.tv.bar.foreground
       onClicked: showRow.tv.toggleRecordAll(showRow.modelData)
     }

@@ -34,7 +34,7 @@ Live TV is always the whole tower. A recording is one station; one with no video
 
 ## Keys
 
-Panel (Super+Shift+T): j/k move, Enter picks, Esc closes, `g` Guide, `v` Recordings. Guide: arrows move, Enter opens the card, `/` search, `s` Grid or Shows, `r` Record, `a` Record series. Recordings: ←/→ Recorded or Scheduled, `x` twice deletes, Shift+K locks. Picking a channel or recording focuses the TV window (`yagi focus`).
+Panel (Super+Shift+T): j/k move, Enter picks, Esc closes, `g` Guide, `v` Recordings. Guide: arrows move, Enter opens the card, `/` search, `s` Grid or Shows, `r` Record, `a` Record series. Recordings: ←/→ Recorded or Scheduled. Enter opens a show, then plays. Esc backs out of the show, then closes. `x` twice deletes an episode. Shift+K locks. Picking a channel or recording focuses the TV window (`yagi focus`).
 
 TV window:
 

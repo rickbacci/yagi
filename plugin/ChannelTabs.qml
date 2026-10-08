@@ -13,7 +13,7 @@ Row {
     text: "Favorites (" + tabs.tv.favoriteVisibleCount + ")"
     tooltipText: "Channels you starred"
     selected: tabs.tv.channelFilter === "favorites"
-    fontSize: Style.font.caption
+    fontSize: Style.font.heading
     foreground: tabs.tv.bar.foreground
     onClicked: tabs.tv.setChannelFilter("favorites")
   }
@@ -22,7 +22,7 @@ Row {
     text: "All (" + (tabs.tv.watchableChannels ? tabs.tv.watchableChannels.length : 0) + ")"
     tooltipText: "Every channel you haven't hidden"
     selected: tabs.tv.channelFilter === "all"
-    fontSize: Style.font.caption
+    fontSize: Style.font.heading
     foreground: tabs.tv.bar.foreground
     onClicked: tabs.tv.setChannelFilter("all")
   }
@@ -32,7 +32,7 @@ Row {
     text: "Hidden (" + tabs.tv.hiddenData.length + ")"
     tooltipText: "Channels you hid"
     selected: tabs.tv.channelFilter === "hidden"
-    fontSize: Style.font.caption
+    fontSize: Style.font.heading
     foreground: tabs.tv.bar.foreground
     onClicked: tabs.tv.setChannelFilter("hidden")
   }

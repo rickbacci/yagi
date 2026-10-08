@@ -414,33 +414,181 @@ function sortRecordings(recs) {
   return (recs || []).slice().sort(function(a, b) { return recordingStart(b) - recordingStart(a) })
 }
 
-// Day headers between recordings; index points into the sorted list.
-function recordedRows(sorted, nowUnix) {
+function channelLabel(rec) {
+  return (String((rec && rec.channel_number) || "") + " " + String((rec && rec.station) || "")).trim()
+}
+
+// "Today", "Yesterday", a weekday inside the last week, else "Mon Oct 5".
+function recentDay(unix, nowUnix) {
+  var days = Math.round((_midnight(nowUnix) - _midnight(unix)) / 86400)
+  if (days <= 0) return "Today"
+  if (days === 1) return "Yesterday"
+  if (days < 7) return DAY_NAMES[new Date(Number(unix) * 1000).getDay()]
+  return formatDay(unix)
+}
+
+// Episode title inside a show: "7:28–7:59 PM". The day is the header above it.
+function recordingClock(rec, nowUnix) {
+  var start = recordingStart(rec)
+  if (!start) return ""
+  if (recordingLive(rec)) return formatClock(start)
+  var end = Number(rec.end || rec.mtime) || start
+  return formatSpan(start, end)
+}
+
+// "Today 7:28–7:59 PM". A recording still in progress has a start only.
+function recordingWhen(rec, nowUnix) {
+  var start = recordingStart(rec)
+  if (!start) return ""
+  var clock = recordingClock(rec, nowUnix)
+  return clock ? recentDay(start, nowUnix) + " " + clock : ""
+}
+
+function recordingStamp(rec, nowUnix) {
+  var start = recordingStart(rec)
+  if (!start) return ""
+  return recentDay(start, nowUnix) + " " + formatClock(start)
+}
+
+function recordingBlurb(rec) {
+  return String(rec && rec.synopsis || "").replace(/\s+/g, " ").trim()
+}
+
+// Length and the ad breaks playback skips. The live pin also names the channel.
+function recordingDetail(rec, nowUnix, kind) {
+  if (!rec) return ""
+  var start = recordingStart(rec)
+  var live = recordingLive(rec)
+  var end = live ? nowUnix : (Number(rec.end || rec.mtime) || start)
+  var parts = []
+  if (live) parts.push("● Recording")
+  parts.push(formatLength(end - start))
+  if (rec.playable === false && !live) parts.push("nothing recorded")
+  if (kind === "live") {
+    var ch = channelLabel(rec)
+    if (ch) parts.push(ch)
+  }
+  var ads = Number(rec.ads) || 0
+  if (ads > 0) parts.push(ads === 1 ? "skips 1 ad break" : "skips " + ads + " ad breaks")
+  return parts.join(" · ")
+}
+
+// One show is a folded title on one channel. Episodes stay newest first.
+function groupRecordings(sorted) {
   var out = []
-  var last = ""
-  for (var i = 0; i < (sorted || []).length; i++) {
-    var label = dayLabel(recordingStart(sorted[i]), nowUnix)
-    if (label !== last) {
-      out.push({ header: label, index: -1 })
-      last = label
+  var at = {}
+  var list = sorted || []
+  for (var i = 0; i < list.length; i++) {
+    var rec = list[i]
+    if (!rec) continue
+    var key = showKey(rec.title, rec.channel_number)
+    var show = at[key]
+    if (!show) {
+      show = {
+        key: key,
+        title: rec.title || rec.name || "Recording",
+        channel: String(rec.channel_number || ""),
+        station: String(rec.station || ""),
+        episodes: []
+      }
+      at[key] = show
+      out.push(show)
     }
-    out.push({ header: "", index: i, rec: sorted[i] })
+    show.episodes.push(rec)
   }
   return out
 }
 
-// How much is recorded, its size, and the ad breaks playback skips.
-function recordingLine(rec, nowUnix) {
-  if (!rec) return ""
-  var start = recordingStart(rec)
-  var live = recordingLive(rec)
+// A blurb every episode shares is the series, not the episode.
+function episodeBlurb(show, rec) {
+  var text = recordingBlurb(rec)
+  var eps = (show && show.episodes) || []
+  if (!text || eps.length < 2) return text
+  for (var i = 0; i < eps.length; i++) {
+    if (recordingBlurb(eps[i]) !== text) return text
+  }
+  return ""
+}
+
+function showLine(show, nowUnix) {
+  if (!show) return ""
   var parts = []
-  if (live) parts.push("● Recording")
-  parts.push(formatLength((live ? nowUnix : (Number(rec.end || rec.mtime) || start)) - start))
-  if (rec.playable === false && !live) parts.push("nothing recorded")
-  else if (rec.size_formatted) parts.push(rec.size_formatted)
-  if (rec.ads > 0) parts.push(rec.ads === 1 ? "skips 1 ad break" : "skips " + rec.ads + " ad breaks")
+  var eps = show.episodes || []
+  var ch = (String(show.channel || "") + " " + String(show.station || "")).trim()
+  if (ch) parts.push(ch)
+  if (eps.length > 1) parts.push(String(eps.length))
+  if (eps.length) {
+    var stamp = recordingStamp(eps[0], nowUnix)
+    if (stamp) parts.push(stamp)
+  }
   return parts.join(" · ")
+}
+
+function showSubtitle(show) {
+  if (!show) return ""
+  var parts = []
+  var ch = (String(show.channel || "") + " " + String(show.station || "")).trim()
+  if (ch) parts.push(ch)
+  var n = (show.episodes || []).length
+  parts.push(n === 1 ? "1 episode" : (n + " episodes"))
+  return parts.join(" · ")
+}
+
+function showByKey(sorted, key) {
+  if (!key) return null
+  var shows = groupRecordings(sorted)
+  for (var i = 0; i < shows.length; i++) {
+    if (shows[i].key === key) return shows[i]
+  }
+  return null
+}
+
+// Show list, or one show's episodes. A recording in progress is pinned above the shows.
+function recordedPicks(sorted, nowUnix, openKey) {
+  var shows = groupRecordings(sorted)
+  var out = []
+  var i
+  if (openKey) {
+    var show = null
+    for (i = 0; i < shows.length; i++) if (shows[i].key === openKey) show = shows[i]
+    if (!show) return out
+    var lastDay = ""
+    var pick = 0
+    for (i = 0; i < show.episodes.length; i++) {
+      var ep = show.episodes[i]
+      var day = recentDay(recordingStart(ep), nowUnix)
+      if (day !== lastDay) {
+        out.push({ kind: "header", title: day, pick: -1 })
+        lastDay = day
+      }
+      out.push({
+        kind: "episode",
+        rec: ep,
+        title: recordingClock(ep, nowUnix),
+        detail: recordingDetail(ep, nowUnix, "episode"),
+        blurb: episodeBlurb(show, ep),
+        pick: pick++
+      })
+    }
+    return out
+  } else {
+    var list = sorted || []
+    for (i = 0; i < list.length; i++) {
+      if (!recordingLive(list[i])) continue
+      out.push({
+        kind: "live",
+        rec: list[i],
+        title: list[i].title || list[i].name || "",
+        detail: recordingDetail(list[i], nowUnix, "live"),
+        blurb: ""
+      })
+    }
+    for (i = 0; i < shows.length; i++) {
+      out.push({ kind: "show", show: shows[i], line: showLine(shows[i], nowUnix), blurb: "" })
+    }
+    for (i = 0; i < out.length; i++) out[i].pick = i
+  }
+  return out
 }
 
 // Scheduled tab: what is recording, what waits, then each series.

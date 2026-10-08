@@ -55,7 +55,7 @@ CursorSurface {
     anchors.verticalCenter: parent.verticalCenter
     text: chItem.hiddenView ? "Show" : "Hide"
     tooltipText: chItem.hiddenView ? "Put this station back" : "Set this station aside"
-    fontSize: Style.font.caption
+    fontSize: Style.font.heading
     foreground: chItem.tv.bar.foreground
     onClicked: {
       if (chItem.hiddenView) chItem.tv.showListed(chItem.modelData)
@@ -68,8 +68,7 @@ CursorSurface {
     anchors.right: hideBtn.visible ? hideBtn.left : parent.right
     anchors.rightMargin: hideBtn.visible ? Style.space(4) : Style.space(6)
     anchors.verticalCenter: parent.verticalCenter
-    size: Style.space(20)
-    fontSize: Style.font.bodySmall
+    fontSize: Style.font.heading
     iconText: chItem.isFav ? "★" : "☆"
     tooltipText: chItem.isFav ? "Remove favorite" : "Add favorite"
     foreground: chItem.isFav ? Color.accent : Color.muted
@@ -97,7 +96,7 @@ CursorSurface {
         text: chItem.channelBadge
         color: chItem.isCurrent ? Color.accent : chItem.tv.bar.foreground
         font.family: chItem.tv.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         font.bold: true
         width: Math.max(implicitWidth, Style.space(40))
       }
@@ -108,7 +107,7 @@ CursorSurface {
         text: chItem.onNow && chItem.onNow.title ? chItem.onNow.title : chItem.stationName
         color: chItem.isCurrent ? Color.accent : chItem.tv.bar.foreground
         font.family: chItem.tv.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         font.bold: chItem.isCurrent
         elide: Text.ElideRight
       }
@@ -138,7 +137,7 @@ CursorSurface {
       text: Model.channelSubLine(chItem.stationName, chItem.onNext)
       color: Color.muted
       font.family: chItem.tv.bar.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Style.font.heading
       elide: Text.ElideRight
     }
   }

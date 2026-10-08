@@ -22,7 +22,7 @@ Item {
       text: empty.title
       color: Color.muted
       font.family: empty.tv.bar.fontFamily
-      font.pixelSize: Style.font.bodySmall
+      font.pixelSize: Style.font.heading
       font.bold: empty.titleBold
     }
 
@@ -31,7 +31,7 @@ Item {
       text: empty.detail
       color: Color.muted
       font.family: empty.tv.bar.fontFamily
-      font.pixelSize: Style.font.caption
+      font.pixelSize: Style.font.heading
     }
 
     Button {

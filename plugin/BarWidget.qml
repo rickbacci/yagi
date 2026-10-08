@@ -90,11 +90,16 @@ BarWidget {
   property var ruleByShow: ({})
   property var ruleList: []
 
-  // Recordings page: two tabs, each with its own cursor.
+  // Recordings page: two tabs, each with its own cursor. Recorded drills into one show.
   property string libraryTab: "recorded"
+  property string libraryShow: ""
+  property int libraryShowCursor: 0
   property int schedCursorIndex: 0
   readonly property var librarySorted: Model.sortRecordings(root.recordingsData)
-  readonly property var recordedRows: Model.recordedRows(root.librarySorted, root.gridNow)
+  readonly property var recordedPicks: Model.recordedPicks(root.librarySorted, root.gridNow, root.libraryShow)
+  readonly property var libraryOpenShow: Model.showByKey(root.librarySorted, root.libraryShow)
+  readonly property string libraryShowTitle: root.libraryOpenShow ? (root.libraryOpenShow.title || "") : ""
+  readonly property string libraryShowSubtitle: Model.showSubtitle(root.libraryOpenShow)
   readonly property var scheduledRows: Model.scheduledRows(root.activeRecordings, root.scheduleItems, root.ruleList,
                                                            root.gridNow, root.stationFor)
   readonly property var scheduledPicks: root.scheduledRows.filter(function(r) { return r.kind !== "header" })
@@ -173,14 +178,9 @@ BarWidget {
 
   function flyoutContentWidth() {
     var avail = popup.availableCardWidth
-    if (root.guideStripOpen) {
-      if (!(avail > 0)) return popup.fittedContentWidth(Style.space(840))
-      var wide = Math.round(avail * 0.55)
-      return popup.fittedContentWidth(Math.max(Style.space(720), Math.min(Style.space(960), wide)))
-    }
-    if (!(avail > 0)) return popup.fittedContentWidth(Style.space(440))
-    var share = Math.round(avail * 0.30)
-    return popup.fittedContentWidth(Math.max(Style.space(340), Math.min(Style.space(460), share)))
+    var share = root.guideStripOpen ? 0.58 : 0.40
+    if (!(avail > 0)) return popup.fittedContentWidth(Style.space(root.guideStripOpen ? 1200 : 900))
+    return popup.fittedContentWidth(Math.max(Style.space(720), Math.round(avail * share)))
   }
 
   function refreshGuide() {
@@ -467,6 +467,7 @@ BarWidget {
       return
     }
     root.guideStripOpen = false
+    root.libraryShow = ""
     root.recCursorIndex = 0
     root.schedCursorIndex = 0
     root.libraryTab = "recorded"
@@ -481,6 +482,61 @@ BarWidget {
     root.libraryTab = tab
     root.cursorActive = false
     root.deleteArmed = ""
+  }
+
+  function recordedCount() {
+    var rows = root.recordedPicks || []
+    var n = 0
+    for (var i = 0; i < rows.length; i++) if (rows[i] && rows[i].pick >= 0) n++
+    return n
+  }
+
+  function recordedPick() {
+    var rows = root.recordedPicks || []
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i] && rows[i].pick === root.recCursorIndex) return rows[i]
+    }
+    return null
+  }
+
+  function openLibraryShow(key) {
+    if (!key) return
+    root.libraryShowCursor = root.recCursorIndex
+    root.libraryShow = key
+    root.recCursorIndex = 0
+    root.cursorActive = true
+    root.deleteArmed = ""
+    Qt.callLater(root.revealCursor)
+  }
+
+  function closeLibraryShow() {
+    if (!root.libraryShow) return false
+    var back = root.libraryShowCursor
+    root.libraryShow = ""
+    root.recCursorIndex = back
+    root.deleteArmed = ""
+    root.cursorActive = true
+    Qt.callLater(function() {
+      root.clampRecCursor()
+      root.revealCursor()
+    })
+    return true
+  }
+
+  function libraryBack() {
+    if (root.libraryTab === "recorded" && root.closeLibraryShow()) return
+    root.toggleLibrary()
+  }
+
+  function syncLibraryShow() {
+    if (root.libraryShow && !Model.showByKey(root.librarySorted, root.libraryShow))
+      root.libraryShow = ""
+    Qt.callLater(root.clampRecCursor)
+  }
+
+  function clampRecCursor() {
+    var n = root.recordedCount()
+    if (root.recCursorIndex >= n) root.recCursorIndex = Math.max(0, n - 1)
   }
 
   function openScheduled() {
@@ -534,7 +590,7 @@ BarWidget {
   }
 
   function listLen() {
-    if (root.libraryModalOpen) return root.libraryTab === "recorded" ? root.librarySorted.length : root.scheduledPicks.length
+    if (root.libraryModalOpen) return root.libraryTab === "recorded" ? root.recordedCount() : root.scheduledPicks.length
     if (root.guideStripOpen) return root.guideItems().length
     return root.displayChannels ? root.displayChannels.length : 0
   }
@@ -574,8 +630,11 @@ BarWidget {
   function activateCursor() {
     if (!root.cursorActive) return
     if (root.libraryModalOpen) {
-      var rec = root.libraryTab === "recorded" ? root.librarySorted[root.recCursorIndex] : null
-      if (rec) root.playRecording(rec.path || rec.name, rec.playable)
+      if (root.libraryTab !== "recorded") return
+      var pick = root.recordedPick()
+      if (!pick) return
+      if (pick.kind === "show") root.openLibraryShow(pick.show && pick.show.key)
+      else if (pick.rec) root.playRecording(pick.rec.path || pick.rec.name, pick.rec.playable)
       return
     }
     if (root.guideStripOpen) {
@@ -1092,6 +1151,7 @@ BarWidget {
     } catch (e) {
       root.recordingsData = []
     }
+    Qt.callLater(root.syncLibraryShow)
   }
 
   function getProgram(ch) {
@@ -1228,7 +1288,7 @@ BarWidget {
         text: root.barWatchLabel()
         color: root.bar.barForeground
         font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         font.bold: true
         anchors.verticalCenter: parent.verticalCenter
       }
@@ -1239,7 +1299,7 @@ BarWidget {
         text: "·"
         color: Color.accent
         font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         font.bold: true
         anchors.verticalCenter: parent.verticalCenter
       }
@@ -1250,7 +1310,7 @@ BarWidget {
         text: root.barRecLabel()
         color: Color.urgent
         font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         font.bold: true
         anchors.verticalCenter: parent.verticalCenter
       }
@@ -1261,7 +1321,7 @@ BarWidget {
         text: root.barStatusText()
         color: Color.accent
         font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.bodySmall
+        font.pixelSize: Style.font.heading
         font.bold: true
         anchors.verticalCenter: parent.verticalCenter
       }
@@ -1801,6 +1861,7 @@ BarWidget {
       onCloseRequested: {
         if (root.gridCardOpen) root.gridCardOpen = false
         else if (root.guideStripOpen) root.guideStripOpen = false
+        else if (root.libraryModalOpen && root.libraryTab === "recorded" && root.libraryShow) root.closeLibraryShow()
         else if (root.libraryModalOpen) root.libraryModalOpen = false
         else root.close()
       }
@@ -1814,7 +1875,10 @@ BarWidget {
       onDeleteRequested: {
         if (!root.libraryModalOpen || !root.cursorActive) return
         if (root.libraryTab === "scheduled") root.dropScheduled(root.scheduledPicks[root.schedCursorIndex])
-        else root.deleteWithConfirm(root.librarySorted[root.recCursorIndex])
+        else {
+          var pick = root.recordedPick()
+          if (pick && pick.kind === "episode") root.deleteWithConfirm(pick.rec)
+        }
       }
       onTabRequested: function(direction) {
         if (root.bar && typeof root.bar.switchPanelFrom === "function")
@@ -1835,8 +1899,8 @@ BarWidget {
           return
         }
         if (root.libraryModalOpen && t === "K") {
-          var rec = root.libraryTab === "recorded" ? root.librarySorted[root.recCursorIndex] : null
-          if (root.cursorActive && rec) root.setRecordingKept(rec, !rec.keep)
+          var kept = root.recordedPick()
+          if (root.cursorActive && kept && kept.kind === "episode") root.setRecordingKept(kept.rec, !kept.rec.keep)
           return
         }
         if (t === "g" || t === "G") root.toggleGuide()
