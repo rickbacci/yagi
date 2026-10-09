@@ -1,0 +1,906 @@
+{
+  "market": "Cleveland",
+  "stations": [
+    {
+      "frequency": 177028615,
+      "service_id": 1,
+      "major": 53,
+      "minor": 1,
+      "network": "Daystar",
+      "callsign": "Daystar",
+      "name": "Daystar TV"
+    },
+    {
+      "frequency": 177028615,
+      "service_id": 2,
+      "major": 53,
+      "minor": 2,
+      "network": "Daystar",
+      "callsign": "WCDN-2",
+      "name": "Daystar Espa\u00f1ol"
+    },
+    {
+      "frequency": 177028615,
+      "service_id": 3,
+      "major": 53,
+      "minor": 3,
+      "network": "Daystar",
+      "callsign": "WCDN-3",
+      "name": "WCDN-LD3"
+    },
+    {
+      "frequency": 183028615,
+      "service_id": 3,
+      "major": 8,
+      "minor": 1,
+      "network": "FOX",
+      "callsign": "WJW",
+      "name": "FOX 8 (WJW)"
+    },
+    {
+      "frequency": 183028615,
+      "service_id": 4,
+      "major": 8,
+      "minor": 2,
+      "network": "Antenna TV",
+      "callsign": "WJW-2",
+      "name": "Antenna TV"
+    },
+    {
+      "frequency": 183028615,
+      "service_id": 5,
+      "major": 8,
+      "minor": 3,
+      "network": "Comet",
+      "callsign": "WJW-3",
+      "name": "Comet TV"
+    },
+    {
+      "frequency": 183028615,
+      "service_id": 6,
+      "major": 8,
+      "minor": 4,
+      "network": "Charge!",
+      "callsign": "WJW-4",
+      "name": "Charge!"
+    },
+    {
+      "frequency": 183028615,
+      "service_id": 7,
+      "major": 55,
+      "minor": 1,
+      "network": "CW",
+      "callsign": "WBNX",
+      "name": "CW 55 (WBNX)"
+    },
+    {
+      "frequency": 195028615,
+      "service_id": 2,
+      "major": 19,
+      "minor": 1,
+      "network": "CBS",
+      "callsign": "WOIO",
+      "name": "CBS 19 (WOIO)"
+    },
+    {
+      "frequency": 195028615,
+      "service_id": 3,
+      "major": 19,
+      "minor": 2,
+      "network": "MeTV",
+      "callsign": "WOIO-2",
+      "name": "MeTV"
+    },
+    {
+      "frequency": 195028615,
+      "service_id": 4,
+      "major": 43,
+      "minor": 1,
+      "network": "CW",
+      "callsign": "WUAB",
+      "name": "The 43 (WUAB)"
+    },
+    {
+      "frequency": 195028615,
+      "service_id": 5,
+      "major": 19,
+      "minor": 3,
+      "network": "Outlaw",
+      "callsign": "WOIO-3",
+      "name": "Outlaw"
+    },
+    {
+      "frequency": 195028615,
+      "service_id": 6,
+      "major": 43,
+      "minor": 2,
+      "network": "Defy",
+      "callsign": "WUAB-2",
+      "name": "Defy"
+    },
+    {
+      "frequency": 195028615,
+      "service_id": 7,
+      "major": 19,
+      "minor": 4,
+      "network": "Oxygen",
+      "callsign": "WOIO-4",
+      "name": "Oxygen True Crime"
+    },
+    {
+      "frequency": 195028615,
+      "service_id": 8,
+      "major": 43,
+      "minor": 3,
+      "network": "The 365",
+      "callsign": "WUAB-3",
+      "name": "The 365"
+    },
+    {
+      "frequency": 479028615,
+      "service_id": 3,
+      "major": 5,
+      "minor": 1,
+      "network": "ABC",
+      "callsign": "WEWS",
+      "name": "ABC News 5 (WEWS)"
+    },
+    {
+      "frequency": 479028615,
+      "service_id": 4,
+      "major": 5,
+      "minor": 2,
+      "network": "Grit",
+      "callsign": "WEWS-2",
+      "name": "Grit"
+    },
+    {
+      "frequency": 479028615,
+      "service_id": 5,
+      "major": 5,
+      "minor": 3,
+      "network": "Laff",
+      "callsign": "WEWS-3",
+      "name": "Laff"
+    },
+    {
+      "frequency": 479028615,
+      "service_id": 6,
+      "major": 5,
+      "minor": 4,
+      "network": "Ion Plus",
+      "callsign": "WEWS-4",
+      "name": "Ion Plus"
+    },
+    {
+      "frequency": 479028615,
+      "service_id": 7,
+      "major": 5,
+      "minor": 5,
+      "network": "HSN",
+      "callsign": "WEWS-5",
+      "name": "HSN"
+    },
+    {
+      "frequency": 479028615,
+      "service_id": 8,
+      "major": 5,
+      "minor": 6,
+      "network": "QVC",
+      "callsign": "WEWS-6",
+      "name": "QVC"
+    },
+    {
+      "frequency": 479028615,
+      "service_id": 9,
+      "major": 5,
+      "minor": 7,
+      "network": "Rewind",
+      "callsign": "WEWS-7",
+      "name": "Rewind TV"
+    },
+    {
+      "frequency": 479028615,
+      "service_id": 10,
+      "major": 5,
+      "minor": 8,
+      "network": "Heroes",
+      "callsign": "WEWS-8",
+      "name": "Heroes & Icons"
+    },
+    {
+      "frequency": 485028615,
+      "service_id": 1,
+      "major": 32,
+      "minor": 1,
+      "network": "WRAP",
+      "callsign": "WRAP",
+      "name": "WRAP D1"
+    },
+    {
+      "frequency": 485028615,
+      "service_id": 2,
+      "major": 32,
+      "minor": 2,
+      "network": "WRAP",
+      "callsign": "WRAP-2",
+      "name": "WRAP D2"
+    },
+    {
+      "frequency": 485028615,
+      "service_id": 3,
+      "major": 32,
+      "minor": 3,
+      "network": "WRAP",
+      "callsign": "WRAP-3",
+      "name": "WRAP D3"
+    },
+    {
+      "frequency": 485028615,
+      "service_id": 4,
+      "major": 32,
+      "minor": 4,
+      "network": "WRAP",
+      "callsign": "WRAP-4",
+      "name": "WRAP D4"
+    },
+    {
+      "frequency": 503028615,
+      "service_id": 1,
+      "major": 3,
+      "minor": 1,
+      "network": "NBC",
+      "callsign": "WKYC",
+      "name": "NBC 3 (WKYC)"
+    },
+    {
+      "frequency": 503028615,
+      "service_id": 2,
+      "major": 3,
+      "minor": 2,
+      "network": "Crime",
+      "callsign": "WKYC-2",
+      "name": "True Crime Network"
+    },
+    {
+      "frequency": 503028615,
+      "service_id": 3,
+      "major": 3,
+      "minor": 3,
+      "network": "Cozi",
+      "callsign": "WKYC-3",
+      "name": "Cozi TV"
+    },
+    {
+      "frequency": 503028615,
+      "service_id": 4,
+      "major": 3,
+      "minor": 4,
+      "network": "Quest",
+      "callsign": "WKYC-4",
+      "name": "Quest"
+    },
+    {
+      "frequency": 503028615,
+      "service_id": 5,
+      "major": 3,
+      "minor": 5,
+      "network": "Nest",
+      "callsign": "WKYC-5",
+      "name": "The Nest"
+    },
+    {
+      "frequency": 503028615,
+      "service_id": 6,
+      "major": 3,
+      "minor": 6,
+      "network": "ShopLC",
+      "callsign": "WKYC-6",
+      "name": "Shop LC"
+    },
+    {
+      "frequency": 503028615,
+      "service_id": 7,
+      "major": 3,
+      "minor": 7,
+      "network": "QVC2",
+      "callsign": "WKYC-7",
+      "name": "QVC2"
+    },
+    {
+      "frequency": 503028615,
+      "service_id": 8,
+      "major": 3,
+      "minor": 8,
+      "network": "StartTV",
+      "callsign": "WKYC-8",
+      "name": "Start TV"
+    },
+    {
+      "frequency": 509028615,
+      "service_id": 3,
+      "major": 19,
+      "minor": 5,
+      "network": "Telemundo",
+      "callsign": "WTCL",
+      "name": "Telemundo 19"
+    },
+    {
+      "frequency": 509028615,
+      "service_id": 4,
+      "major": 19,
+      "minor": 10,
+      "network": "CBS",
+      "callsign": "WOIO-DRT",
+      "name": "CBS 19 (DRT)",
+      "translator": true
+    },
+    {
+      "frequency": 509028615,
+      "service_id": 5,
+      "major": 19,
+      "minor": 6,
+      "network": "Rewind",
+      "callsign": "WOIO-6",
+      "name": "Rewind TV"
+    },
+    {
+      "frequency": 515028615,
+      "service_id": 1001,
+      "major": 33,
+      "minor": 1,
+      "network": "WQDI",
+      "callsign": "WQDI",
+      "name": "WQDI-LD 1"
+    },
+    {
+      "frequency": 515028615,
+      "service_id": 1002,
+      "major": 33,
+      "minor": 2,
+      "network": "WQDI",
+      "callsign": "WQDI-2",
+      "name": "WQDI-LD 2"
+    },
+    {
+      "frequency": 515028615,
+      "service_id": 1003,
+      "major": 33,
+      "minor": 3,
+      "network": "WQDI",
+      "callsign": "WQDI-3",
+      "name": "WQDI-LD 3"
+    },
+    {
+      "frequency": 515028615,
+      "service_id": 1004,
+      "major": 33,
+      "minor": 4,
+      "network": "WQDI",
+      "callsign": "WQDI-4",
+      "name": "WQDI-LD 4"
+    },
+    {
+      "frequency": 515028615,
+      "service_id": 1005,
+      "major": 33,
+      "minor": 5,
+      "network": "WQDI",
+      "callsign": "WQDI-5",
+      "name": "WQDI-LD 5"
+    },
+    {
+      "frequency": 515028615,
+      "service_id": 1006,
+      "major": 33,
+      "minor": 6,
+      "network": "WQDI",
+      "callsign": "WQDI-6",
+      "name": "WQDI-LD 6"
+    },
+    {
+      "frequency": 515028615,
+      "service_id": 1007,
+      "major": 33,
+      "minor": 7,
+      "network": "WQDI",
+      "callsign": "WQDI-7",
+      "name": "WQDI-LD 7"
+    },
+    {
+      "frequency": 521028615,
+      "service_id": 3,
+      "major": 23,
+      "minor": 1,
+      "network": "ION",
+      "callsign": "WVPX",
+      "name": "ION (WVPX)"
+    },
+    {
+      "frequency": 521028615,
+      "service_id": 4,
+      "major": 23,
+      "minor": 2,
+      "network": "Court TV",
+      "callsign": "WVPX-2",
+      "name": "Court TV"
+    },
+    {
+      "frequency": 521028615,
+      "service_id": 5,
+      "major": 23,
+      "minor": 3,
+      "network": "Busted",
+      "callsign": "WVPX-3",
+      "name": "Busted"
+    },
+    {
+      "frequency": 521028615,
+      "service_id": 6,
+      "major": 23,
+      "minor": 4,
+      "network": "Mystery",
+      "callsign": "WVPX-4",
+      "name": "Ion Mystery"
+    },
+    {
+      "frequency": 521028615,
+      "service_id": 8,
+      "major": 23,
+      "minor": 5,
+      "network": "QVC",
+      "callsign": "WVPX-5",
+      "name": "QVC"
+    },
+    {
+      "frequency": 521028615,
+      "service_id": 9,
+      "major": 23,
+      "minor": 6,
+      "network": "Bounce",
+      "callsign": "WVPX-6",
+      "name": "Bounce TV"
+    },
+    {
+      "frequency": 521028615,
+      "service_id": 10,
+      "major": 23,
+      "minor": 7,
+      "network": "HSN",
+      "callsign": "WVPX-7",
+      "name": "HSN"
+    },
+    {
+      "frequency": 521028615,
+      "service_id": 11,
+      "major": 23,
+      "minor": 8,
+      "network": "BUZZR",
+      "callsign": "WVPX-8",
+      "name": "BUZZR"
+    },
+    {
+      "frequency": 527028615,
+      "service_id": 1001,
+      "major": 28,
+      "minor": 1,
+      "network": "KONV",
+      "callsign": "KONV",
+      "name": "KONV-LD 1"
+    },
+    {
+      "frequency": 527028615,
+      "service_id": 1002,
+      "major": 28,
+      "minor": 2,
+      "network": "KONV",
+      "callsign": "KONV-2",
+      "name": "KONV-LD 2"
+    },
+    {
+      "frequency": 527028615,
+      "service_id": 1003,
+      "major": 28,
+      "minor": 3,
+      "network": "KONV",
+      "callsign": "KONV-3",
+      "name": "KONV-LD 3"
+    },
+    {
+      "frequency": 527028615,
+      "service_id": 1004,
+      "major": 28,
+      "minor": 4,
+      "network": "KONV",
+      "callsign": "KONV-4",
+      "name": "KONV-LD 4"
+    },
+    {
+      "frequency": 527028615,
+      "service_id": 1005,
+      "major": 28,
+      "minor": 5,
+      "network": "KONV",
+      "callsign": "KONV-5",
+      "name": "KONV-LD 5"
+    },
+    {
+      "frequency": 527028615,
+      "service_id": 1006,
+      "major": 28,
+      "minor": 6,
+      "network": "KONV",
+      "callsign": "KONV-6",
+      "name": "KONV-LD 6"
+    },
+    {
+      "frequency": 527028615,
+      "service_id": 1007,
+      "major": 28,
+      "minor": 7,
+      "network": "KONV",
+      "callsign": "KONV-7",
+      "name": "KONV-LD 7"
+    },
+    {
+      "frequency": 533028615,
+      "service_id": 3,
+      "major": 49,
+      "minor": 1,
+      "network": "PBS",
+      "callsign": "WEAO",
+      "name": "PBS Western Reserve (WEAO)"
+    },
+    {
+      "frequency": 533028615,
+      "service_id": 4,
+      "major": 49,
+      "minor": 2,
+      "network": "PBS",
+      "callsign": "WEAO-2",
+      "name": "Fusion"
+    },
+    {
+      "frequency": 533028615,
+      "service_id": 5,
+      "major": 49,
+      "minor": 3,
+      "network": "PBS",
+      "callsign": "WEAO-3",
+      "name": "First Nations Experience"
+    },
+    {
+      "frequency": 533028615,
+      "service_id": 6,
+      "major": 47,
+      "minor": 1,
+      "network": "TCT",
+      "callsign": "WRLM",
+      "name": "TCT (WRLM)"
+    },
+    {
+      "frequency": 539028615,
+      "service_id": 1001,
+      "major": 26,
+      "minor": 1,
+      "network": "WUEK",
+      "callsign": "WUEK",
+      "name": "WUEK-LD 1"
+    },
+    {
+      "frequency": 539028615,
+      "service_id": 1002,
+      "major": 26,
+      "minor": 2,
+      "network": "WUEK",
+      "callsign": "WUEK-2",
+      "name": "WUEK-LD 2"
+    },
+    {
+      "frequency": 539028615,
+      "service_id": 1003,
+      "major": 26,
+      "minor": 3,
+      "network": "WUEK",
+      "callsign": "WUEK-3",
+      "name": "WUEK-LD 3"
+    },
+    {
+      "frequency": 539028615,
+      "service_id": 1004,
+      "major": 26,
+      "minor": 4,
+      "network": "WUEK",
+      "callsign": "WUEK-4",
+      "name": "WUEK-LD 4"
+    },
+    {
+      "frequency": 539028615,
+      "service_id": 1005,
+      "major": 26,
+      "minor": 5,
+      "network": "WUEK",
+      "callsign": "WUEK-5",
+      "name": "WUEK-LD 5"
+    },
+    {
+      "frequency": 539028615,
+      "service_id": 1006,
+      "major": 26,
+      "minor": 6,
+      "network": "WUEK",
+      "callsign": "WUEK-6",
+      "name": "WUEK-LD 6"
+    },
+    {
+      "frequency": 539028615,
+      "service_id": 1007,
+      "major": 26,
+      "minor": 7,
+      "network": "WUEK",
+      "callsign": "WUEK-7",
+      "name": "WUEK-LD 7"
+    },
+    {
+      "frequency": 545028615,
+      "service_id": 1001,
+      "major": 41,
+      "minor": 1,
+      "network": "WEKA",
+      "callsign": "WEKA",
+      "name": "WEKA-LD 1"
+    },
+    {
+      "frequency": 545028615,
+      "service_id": 1002,
+      "major": 41,
+      "minor": 2,
+      "network": "WEKA",
+      "callsign": "WEKA-2",
+      "name": "WEKA-LD 2"
+    },
+    {
+      "frequency": 545028615,
+      "service_id": 1003,
+      "major": 41,
+      "minor": 3,
+      "network": "WEKA",
+      "callsign": "WEKA-3",
+      "name": "WEKA-LD 3"
+    },
+    {
+      "frequency": 545028615,
+      "service_id": 1004,
+      "major": 41,
+      "minor": 4,
+      "network": "WEKA",
+      "callsign": "WEKA-4",
+      "name": "WEKA-LD 4"
+    },
+    {
+      "frequency": 545028615,
+      "service_id": 1005,
+      "major": 41,
+      "minor": 5,
+      "network": "WEKA",
+      "callsign": "WEKA-5",
+      "name": "WEKA-LD 5"
+    },
+    {
+      "frequency": 545028615,
+      "service_id": 1006,
+      "major": 41,
+      "minor": 6,
+      "network": "WEKA",
+      "callsign": "WEKA-6",
+      "name": "WEKA-LD 6"
+    },
+    {
+      "frequency": 545028615,
+      "service_id": 1007,
+      "major": 41,
+      "minor": 7,
+      "network": "WEKA",
+      "callsign": "WEKA-7",
+      "name": "WEKA-LD 7"
+    },
+    {
+      "frequency": 551028615,
+      "service_id": 3,
+      "major": 65,
+      "minor": 1,
+      "network": "Catchy",
+      "callsign": "WAXN-1",
+      "name": "Catchy Comedy"
+    },
+    {
+      "frequency": 551028615,
+      "service_id": 4,
+      "major": 65,
+      "minor": 2,
+      "network": "Story",
+      "callsign": "WAXN-2",
+      "name": "Story Television"
+    },
+    {
+      "frequency": 551028615,
+      "service_id": 5,
+      "major": 65,
+      "minor": 3,
+      "network": "Toons",
+      "callsign": "WAXN-3",
+      "name": "MeTV Toons"
+    },
+    {
+      "frequency": 551028615,
+      "service_id": 6,
+      "major": 65,
+      "minor": 4,
+      "network": "Movies!",
+      "callsign": "WAXN-4",
+      "name": "Movies!"
+    },
+    {
+      "frequency": 551028615,
+      "service_id": 7,
+      "major": 65,
+      "minor": 5,
+      "network": "Dabl",
+      "callsign": "WAXN-5",
+      "name": "Dabl"
+    },
+    {
+      "frequency": 551028615,
+      "service_id": 8,
+      "major": 65,
+      "minor": 6,
+      "network": "West",
+      "callsign": "WAXN-6",
+      "name": "Catchy Westerns"
+    },
+    {
+      "frequency": 551028615,
+      "service_id": 14,
+      "major": 65,
+      "minor": 7,
+      "network": "EMLW",
+      "callsign": "WAXN-7",
+      "name": "EMLW"
+    },
+    {
+      "frequency": 599028615,
+      "service_id": 3,
+      "major": 25,
+      "minor": 1,
+      "network": "PBS",
+      "callsign": "WVIZ",
+      "name": "PBS Ideastream (WVIZ)"
+    },
+    {
+      "frequency": 599028615,
+      "service_id": 4,
+      "major": 25,
+      "minor": 2,
+      "network": "Ohio Ch",
+      "callsign": "WVIZ-2",
+      "name": "The Ohio Channel"
+    },
+    {
+      "frequency": 599028615,
+      "service_id": 6,
+      "major": 25,
+      "minor": 3,
+      "network": "Create",
+      "callsign": "WVIZ-3",
+      "name": "Create TV"
+    },
+    {
+      "frequency": 599028615,
+      "service_id": 7,
+      "major": 25,
+      "minor": 4,
+      "network": "PBS Kids",
+      "callsign": "WVIZ-4",
+      "name": "PBS KIDS"
+    },
+    {
+      "frequency": 599028615,
+      "service_id": 9,
+      "major": 25,
+      "minor": 5,
+      "network": "NPR",
+      "callsign": "WKSU",
+      "name": "WKSU 89.7 FM"
+    },
+    {
+      "frequency": 599028615,
+      "service_id": 10,
+      "major": 25,
+      "minor": 6,
+      "network": "Classical",
+      "callsign": "WCLV",
+      "name": "WCLV 90.3 Classical"
+    },
+    {
+      "frequency": 599028615,
+      "service_id": 11,
+      "major": 25,
+      "minor": 7,
+      "network": "CSCN",
+      "callsign": "CSCN",
+      "name": "Cleveland Sight Center"
+    },
+    {
+      "frequency": 605028615,
+      "service_id": 1,
+      "major": 61,
+      "minor": 1,
+      "network": "Univision",
+      "callsign": "WQHS",
+      "name": "Univision 61 (WQHS)"
+    },
+    {
+      "frequency": 605028615,
+      "service_id": 2,
+      "major": 61,
+      "minor": 2,
+      "network": "UniM\u00e1s",
+      "callsign": "WQHS-2",
+      "name": "UniM\u00e1s"
+    },
+    {
+      "frequency": 605028615,
+      "service_id": 3,
+      "major": 61,
+      "minor": 3,
+      "network": "GAC",
+      "callsign": "WQHS-3",
+      "name": "Great American Family"
+    },
+    {
+      "frequency": 605028615,
+      "service_id": 4,
+      "major": 61,
+      "minor": 4,
+      "network": "Nosey",
+      "callsign": "WQHS-4",
+      "name": "Nosey"
+    },
+    {
+      "frequency": 605028615,
+      "service_id": 5,
+      "major": 61,
+      "minor": 5,
+      "network": "HSN2",
+      "callsign": "WQHS-5",
+      "name": "HSN2"
+    },
+    {
+      "frequency": 605028615,
+      "service_id": 6,
+      "major": 61,
+      "minor": 6,
+      "network": "ShopLC",
+      "callsign": "WQHS-6",
+      "name": "Shop LC"
+    },
+    {
+      "frequency": 605028615,
+      "service_id": 7,
+      "major": 61,
+      "minor": 7,
+      "network": "BT2",
+      "callsign": "WQHS-7",
+      "name": "BT2"
+    },
+    {
+      "frequency": 605028615,
+      "service_id": 8,
+      "major": 61,
+      "minor": 8,
+      "network": "Movies Gold",
+      "callsign": "WQHS-8",
+      "name": "Movies Gold"
+    }
+  ]
+}

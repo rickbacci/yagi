@@ -1,0 +1,3 @@
+#!/bin/sh
+# An amend or rebase moved HEAD. The record timer follows it.
+exec "$(git rev-parse --show-toplevel)/githooks/post-commit"

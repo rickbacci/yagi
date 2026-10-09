@@ -1,0 +1,70 @@
+"""Stations set aside from Watchable and Favorites. All is every station not on this list."""
+
+import json
+import os
+from typing import Any, Dict, List, Optional
+
+from engine.paths import HIDDEN_JSON_PATH
+
+
+def channel_number(ch: Optional[Dict[str, Any]]) -> str:
+    if not ch:
+        return ""
+    return str(ch.get("channel_number") or "").strip()
+
+
+def load_hidden(path: Optional[str] = None) -> List[str]:
+    target = path or HIDDEN_JSON_PATH
+    if not os.path.exists(target):
+        return []
+    try:
+        with open(target, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    items = data.get("channels") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        return []
+    out = []
+    for item in items:
+        num = str(item or "").strip()
+        if num and num not in out:
+            out.append(num)
+    return out
+
+
+def save_hidden(numbers: List[str], path: Optional[str] = None) -> None:
+    target = path or HIDDEN_JSON_PATH
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    cleaned = []
+    for item in numbers:
+        num = str(item or "").strip()
+        if num and num not in cleaned:
+            cleaned.append(num)
+    tmp = f"{target}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cleaned, f, indent=2)
+    os.replace(tmp, target)
+
+
+def hide_channel(number: str, path: Optional[str] = None) -> List[str]:
+    num = str(number or "").strip()
+    items = load_hidden(path)
+    if num and num not in items:
+        items.append(num)
+        save_hidden(items, path)
+    return items
+
+
+def show_channel(number: str, path: Optional[str] = None) -> List[str]:
+    num = str(number or "").strip()
+    items = [row for row in load_hidden(path) if row != num]
+    save_hidden(items, path)
+    return items
+
+
+def is_hidden_channel(ch: Optional[Dict[str, Any]], hidden: Optional[List[Any]]) -> bool:
+    num = channel_number(ch)
+    if not num:
+        return False
+    return num in {str(item or "").strip() for item in (hidden or [])}

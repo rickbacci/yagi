@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Yagi recordings every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+# The default slack stretched each minute to seventy seconds, past a show's early pad.
+AccuracySec=1s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

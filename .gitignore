@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.log
+*.tmp
+.coverage
+htmlcov/
+mockups/
+.t/
+MEMORY.md
+WHATS_LEFT.md
+.cursor/
+

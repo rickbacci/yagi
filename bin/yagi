@@ -1,0 +1,1010 @@
+#!/usr/bin/env python3
+"""
+Yagi - Command Line Interface
+"""
+
+import os
+import sys
+import argparse
+import json
+import subprocess
+import time
+
+# Ensure project root is in sys.path (resolving symlinks)
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from engine.tuner import TunerManager
+from engine.scanner import AtscScanner, write_scan_status
+from engine.paths import CHANNELS_JSON_PATH, FAVORITES_JSON_PATH, UI_PREFS_PATH, RECORDINGS_DIR
+from player.controller import MpvController
+
+
+def cmd_status(args):
+    if getattr(args, "count", False):
+        from engine import pool
+        print(len(pool.adapters()))
+        return
+    tuners = TunerManager.list_tuners()
+    print(f"Discovered {len(tuners)} tuner adapters:")
+    for t in tuners:
+        status = "BUSY" if t.is_busy else "FREE"
+        print(f"  [{t.adapter_id}] {t.name} ({status}) - Systems: {t.delivery_systems}")
+    from engine.release import TIMER, current_sha
+    try:
+        on = subprocess.run(["systemctl", "--user", "is-active", "--quiet", TIMER]).returncode == 0
+    except OSError:
+        on = False
+    sha = current_sha()
+    print(f"Record timer: on, runs {sha}" if on and sha else "Record timer: off. Run `yagi install` to record.")
+
+
+def cmd_install(args):
+    from engine.release import install
+    try:
+        sha = install(PROJECT_ROOT)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"Install failed: {exc}")
+        sys.exit(1)
+    print(f"Record timer on. It runs {sha} and picks up each plugin update on its next tick.")
+
+
+def cmd_uninstall(args):
+    from engine.release import uninstall
+    uninstall()
+    print("Record timer off and its copies removed. Recordings and settings stay.")
+
+
+def _print_signal(adapter_id: int) -> None:
+    reading = TunerManager.read_signal(adapter_id)
+    if reading is None:
+        print(f"Tuner {adapter_id} has no reading")
+        return
+    if not reading["locked"] or reading["snr_db"] is None:
+        print(f"Tuner {adapter_id}  no lock")
+        return
+    print(f"Tuner {adapter_id}  {reading['snr_db']:.1f} dB  strength {reading['strength_pct']:.0f}%")
+
+
+def _print_signal_plain(adapter_id: int) -> None:
+    reading = TunerManager.read_signal(adapter_id)
+    if reading is None or not reading["locked"] or reading["snr_db"] is None:
+        print("none")
+        return
+    print(f"{reading['snr_db']:.1f}")
+
+
+def cmd_signal(args):
+    if args.action == "check":
+        from engine.signal_check import check
+        query = args.channel
+        if not query:
+            from engine.timeshift import Timeshift
+            query = str(Timeshift.load_state().get("channel") or "")
+        if not query:
+            print("Name a channel. Example: yagi signal check 8.1")
+            sys.exit(1)
+        try:
+            check(query, seconds=args.seconds, adapter=args.adapter)
+        except (ValueError, RuntimeError) as exc:
+            print(exc)
+            sys.exit(1)
+        return
+    adapter_id = args.adapter
+    if adapter_id is None:
+        from engine import pool
+        live = pool.live_adapter()
+        adapter_id = 0 if live is None else live
+    if args.plain:
+        _print_signal_plain(adapter_id)
+        return
+    if args.action != "watch":
+        _print_signal(adapter_id)
+        return
+    try:
+        while True:
+            _print_signal(adapter_id)
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print()
+
+
+def cmd_scan(args):
+    print("=" * 60)
+    mode = "Fast Scan (VHF-High + UHF: 30 frequencies)" if args.quick else "Full Scan (All 68 frequencies)"
+    print(f"🛰️  Starting ATSC Over-The-Air Scan ({mode})")
+    print("=" * 60)
+
+    scanner = AtscScanner(adapter_id=args.adapter)
+    found_count = 0
+
+    try:
+        for event in scanner.scan(quick_mode=args.quick, timeout_multiplier=args.timeout):
+            status = event.get("status")
+            if status == "scanning":
+                pct = event.get("percent", 0)
+                ch = event.get("channel", 0)
+                band = event.get("band", "")
+                sig = event.get("signal_dbm")
+                sig_str = f"{sig:5.1f} dBm" if sig is not None else "Searching..."
+                print(f"[{pct:3d}%] Ch {ch:2d} ({band:12s}) | Signal: {sig_str} | Found: {event.get('total_found', 0)}", end="\r")
+            elif status == "channel_found":
+                found_count += 1
+                ch_info = event.get("channel", {})
+                print(f"\n  ✨ [FOUND] {ch_info.get('name')} on Physical Ch {ch_info.get('physical_channel')} ({ch_info.get('band')})")
+            elif status == "complete":
+                print("\n" + "=" * 60)
+                print(f"✅ Scan Complete! Discovered {event.get('total_found', 0)} Over-The-Air channels.")
+                print(f"Saved to: {CHANNELS_JSON_PATH}")
+                print("=" * 60)
+    except KeyboardInterrupt:
+        write_scan_status({"status": "aborted", "is_scanning": False, "percent": 0})
+        print("\n\n⚠️ Scan interrupted by user.")
+
+
+def cmd_list(args):
+    if not os.path.exists(CHANNELS_JSON_PATH):
+        print("No channels found. Run `yagi scan` first!")
+        return
+
+    with open(CHANNELS_JSON_PATH, "r") as f:
+        data = json.load(f)
+
+    channels = data.get("channels", [])
+    print(f"📋 Saved Over-The-Air Channels ({len(channels)} total):")
+    print("=" * 75)
+    print(f"{'CH':<7} {'NET':<8} {'NAME / CALLSIGN':<32} {'FREQ (MHz)':<12} {'SYS'}")
+    print("-" * 75)
+    for ch in channels:
+        ch_num = ch.get("channel_number") or f"#{ch.get('service_id', '')}"
+        net = ch.get("network") or ""
+        display = ch.get("display_name") or ch.get("name", "Unknown")
+        freq_mhz = f"{ch.get('frequency', 0) / 1000000:.2f}"
+        print(f"{ch_num:<7} {net:<8} {display[:32]:<32} {freq_mhz:<12} {ch.get('modulation', '8VSB')}")
+
+
+def cmd_guide(args):
+    from engine.guide import (
+        _WEEKDAY_NAMES,
+        _load_history,
+        add_slot,
+        delete_airing,
+        delete_slot,
+        format_guide_updated,
+        listed_slots,
+        load_guide,
+        refresh_guide,
+        rename_slot,
+        search_guide,
+        set_slot_aliases,
+        set_slot_clock,
+        set_slot_length,
+        set_slot_record,
+    )
+    from engine.psip import collect_guide_events
+    action = getattr(args, "action", None)
+    if action == "update":
+        from engine.guide import run_guide_update
+        done = run_guide_update(grabber=collect_guide_events)
+        print({"done": "Guide refreshed.", "skipped": "Guide left alone — no free tuner.",
+               "running": "Guide update already running."}[done])
+        return
+    if action == "shows":
+        from engine.shows import load_shows
+        print(json.dumps({"shows": load_shows()}))
+        return
+    if action == "slots":
+        rows = listed_slots(_load_history())
+        if not rows:
+            print("No repeated shows yet.")
+            return
+        for slot in rows:
+            day = _WEEKDAY_NAMES[int(slot.get("weekday") or 0)]
+            minutes = max(1, int(slot.get("duration_sec") or 0) // 60)
+            mark = "record" if slot.get("record") else "watch"
+            aliases = slot.get("aliases") or []
+            extra = f"  also {', '.join(aliases)}" if aliases else ""
+            print(
+                f"{slot.get('id')}  {mark}  {day} {slot.get('clock')}  "
+                f"{slot.get('title')}  {minutes}m  {slot.get('tune_name') or slot.get('channel')}{extra}"
+            )
+        return
+    if action == "forget":
+        query = getattr(args, "query", None) or []
+        if len(query) < 2 or not delete_airing(query[0], int(query[1])):
+            print("Name the channel and the start time. Example: yagi guide forget 5.1 1726964100")
+            sys.exit(1)
+        print("Removed that airing.")
+        return
+    if action == "slot":
+        query = getattr(args, "query", None) or []
+        verb = query[0] if query else ""
+        ident = getattr(args, "id", "") or ""
+        try:
+            if verb == "add":
+                slot = add_slot(
+                    getattr(args, "channel", "") or "",
+                    getattr(args, "title", "") or "",
+                    int(getattr(args, "weekday", -1)),
+                    getattr(args, "clock", "") or "",
+                    parse_duration_str(getattr(args, "length", "") or "") or 0,
+                    tune_name=getattr(args, "tune", "") or "",
+                )
+                print(f"Added {slot['title']} ({slot['id']}).")
+                return
+            if verb == "rename":
+                if not rename_slot(ident, getattr(args, "title", "") or ""):
+                    raise ValueError("That slot is not in the list.")
+                print("Renamed.")
+                return
+            if verb == "clock":
+                if not set_slot_clock(ident, getattr(args, "clock", "") or ""):
+                    raise ValueError("That slot is not in the list.")
+                print("Clock moved.")
+                return
+            if verb == "length":
+                length = parse_duration_str(getattr(args, "length", "") or "") or 0
+                if not set_slot_length(ident, length):
+                    raise ValueError("That slot is not in the list.")
+                print("Length set.")
+                return
+            if verb == "delete":
+                if not delete_slot(ident):
+                    raise ValueError("That slot is not in the list.")
+                print("Removed from the list.")
+                return
+            if verb == "alias":
+                alias = getattr(args, "alias", "") or ""
+                from engine.guide import _load_history as load_hist
+                current = next((row for row in load_hist()["usual"] if str(row.get("id") or "") == ident), None)
+                if current is None:
+                    raise ValueError("That slot is not in the list.")
+                names = list(current.get("aliases") or [])
+                if alias and alias not in names:
+                    names.append(alias)
+                if not set_slot_aliases(ident, names):
+                    raise ValueError("That slot is not in the list.")
+                print("Alias kept.")
+                return
+            if verb == "record":
+                if not set_slot_record(ident, True):
+                    raise ValueError("That slot is not in the list.")
+                print("That show will record each week.")
+                return
+            if verb == "unrecord":
+                if not set_slot_record(ident, False):
+                    raise ValueError("That slot is not in the list.")
+                print("Weekly record cleared. The slot stays.")
+                return
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
+        print("Use add, rename, clock, length, delete, alias, record, or unrecord.")
+        sys.exit(1)
+    if action == "search":
+        guide = load_guide()
+        query = " ".join(getattr(args, "query", None) or [])
+        print(format_guide_updated(guide.get("updated_at")))
+        hits = search_guide(guide.get("channels") or {}, query)
+        if not hits:
+            print("No shows match.")
+            return
+        for hit in hits:
+            when = f"{hit.get('start') or ''} – {hit.get('end') or ''}".strip(" –")
+            who = hit.get("callsign") or hit.get("tune_name") or ""
+            print(f"{hit.get('channel_number')}  {who}  {hit.get('title')}  {when}".rstrip())
+            before = (hit.get("before") or {}).get("title")
+            after = (hit.get("after") or {}).get("title")
+            if before:
+                print(f"    Before: {before}")
+            if after:
+                print(f"    After: {after}")
+        return
+    if getattr(args, "action", None) == "refresh":
+        result = refresh_guide(grabber=collect_guide_events)
+        if result.get("skipped"):
+            print("Guide left alone — Tuner 1 is recording.")
+        else:
+            print("Guide refreshed from Tuner 1 PSIP.")
+        guide = {"channels": result.get("channels") or {}}
+    else:
+        refresh_guide(grabber=None)
+        guide = load_guide()
+    channels = guide.get("channels", {})
+    print("📺 Electronic Program Guide (EPG) — Current Broadcast Schedules:")
+    print("=" * 82)
+    print(f"{'CH':<6} {'NET':<8} {'CURRENT PROGRAM':<34} {'SCHEDULE':<16} {'NEXT'}")
+    print("-" * 82)
+    for ch_num, prog in sorted(channels.items(), key=lambda x: float(x[0]) if x[0].replace('.', '', 1).isdigit() else 999):
+        net = prog.get("network", "")
+        title = prog.get("title", "")[:32]
+        times = f"{prog.get('start_time', '')} - {prog.get('end_time', '')}"
+        nxt = prog.get("next_title", "")[:20]
+        print(f"{ch_num:<6} {net:<8} {title:<34} {times:<16} {nxt}")
+    print("=" * 82)
+
+
+def load_favorites() -> list:
+    from engine.favorites import load_favorites as load
+    return load(FAVORITES_JSON_PATH, CHANNELS_JSON_PATH)
+
+
+def save_favorites(favorites: list) -> None:
+    from engine.favorites import save_favorites as save
+    save(favorites, FAVORITES_JSON_PATH)
+
+
+def load_ui_prefs() -> dict:
+    if os.path.exists(UI_PREFS_PATH):
+        try:
+            with open(UI_PREFS_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {}
+
+
+def save_ui_prefs(prefs: dict) -> None:
+    os.makedirs(os.path.dirname(UI_PREFS_PATH), exist_ok=True)
+    tmp = f"{UI_PREFS_PATH}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(prefs, f, indent=2)
+    os.replace(tmp, UI_PREFS_PATH)
+
+
+def cmd_pref(args):
+    prefs = load_ui_prefs()
+    key = args.key
+    value = (args.value or "").lower()
+
+    if key == "filter":
+        if value in ("favorites", "favs", "fav"):
+            prefs["channel_filter"] = "favorites"
+        elif value in ("all",):
+            prefs["channel_filter"] = "all"
+        elif value in ("watchable", "watch"):
+            prefs["channel_filter"] = "all"
+        elif value in ("hidden",):
+            prefs["channel_filter"] = "hidden"
+        else:
+            print("Use: yagi pref filter favorites|all|hidden")
+            return
+        save_ui_prefs(prefs)
+        print(f"Channel list filter is {prefs['channel_filter']}.")
+        return
+
+    if key in ("library-max", "library_max", "library-max-gb"):
+        if value in ("auto", "default", ""):
+            prefs["library_max_gb"] = "auto"
+        elif value in ("off", "none", "unlimited", "0"):
+            prefs["library_max_gb"] = 0
+        else:
+            try:
+                gb = float(value)
+            except ValueError:
+                print("Use: yagi pref library-max auto|50|100|250|off")
+                return
+            if gb < 0:
+                print("Library cap must be auto, off, or a size in GB.")
+                return
+            prefs["library_max_gb"] = int(gb) if gb == int(gb) else gb
+        save_ui_prefs(prefs)
+        from engine.dvr import DvrManager, resolve_library_budget_bytes, format_bytes
+        DvrManager.refresh_library_index()
+        budget = resolve_library_budget_bytes()
+        if budget is None:
+            print("Recording library cap is off.")
+        elif prefs.get("library_max_gb") == "auto":
+            print(f"Recording library cap is automatic ({format_bytes(budget)}).")
+        else:
+            print(f"Recording library cap is {format_bytes(budget)}.")
+        return
+
+    print("Unknown pref. Use: yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off")
+
+
+def cmd_favorite(args):
+    from engine.favorites import favorite_key, favorite_label
+    favs = load_favorites()
+    action = args.action or "list"
+    target = favorite_key(args.channel, CHANNELS_JSON_PATH) if args.channel else args.channel
+
+    if action == "list" or not target:
+        if not favs:
+            print("No favorite channels saved yet.")
+            print("Add one with: yagi favorite toggle <channel>")
+            return
+        print(f"⭐ Favorite Channels ({len(favs)} total):")
+        for f in favs:
+            print(f"  ★ {favorite_label(f, CHANNELS_JSON_PATH)}")
+        return
+
+    label = favorite_label(target, CHANNELS_JSON_PATH)
+    if action == "toggle":
+        action = "remove" if target in favs else "add"
+    if action == "add":
+        if target not in favs:
+            favs.append(target)
+            save_favorites(favs)
+            print(f"★ Added {label} to favorites.")
+        else:
+            print(f"{label} is already in favorites.")
+    elif action == "remove":
+        if target in favs:
+            favs.remove(target)
+            save_favorites(favs)
+            print(f"☆ Removed {label} from favorites.")
+        else:
+            print(f"{label} was not in favorites.")
+
+
+def cmd_hidden(args):
+    from engine.hidden import hide_channel, load_hidden, show_channel
+
+    action = args.action or "list"
+    if action == "hide":
+        if not args.channel:
+            print("Name the channel number. Example: yagi hidden hide 19.1")
+            sys.exit(1)
+        items = hide_channel(args.channel)
+        print(f"Hid {args.channel}. {len(items)} hidden.")
+        return
+    if action == "show":
+        if not args.channel:
+            print("Name the channel number. Example: yagi hidden show 19.10")
+            sys.exit(1)
+        items = show_channel(args.channel)
+        print(f"Showing {args.channel}. {len(items)} hidden.")
+        return
+    items = load_hidden()
+    if not items:
+        print("Nothing is hidden.")
+        return
+    print(f"Hidden channels ({len(items)}):")
+    for num in items:
+        print(f"  {num}")
+
+
+def cmd_play(args):
+    player = MpvController()
+    print(f"📺 Tuning to: {args.channel}...")
+    success = player.tune(args.channel)
+    if not success:
+        from engine.timeshift import Timeshift
+        status = Timeshift.load_tune_status()
+        reason = status.get("message") if status.get("phase") == "failed" else ""
+        print(reason or "That channel did not come up.")
+        sys.exit(1)
+
+
+def cmd_pip_relaunch(args):
+    """Internal: remap the PiP after a live dump is already filling."""
+    player = MpvController()
+    if not player.relaunch_pip(args.channel, args.station or ""):
+        sys.exit(1)
+
+
+def cmd_live(args):
+    player = MpvController()
+    target = getattr(args, "channel", None)
+    print("📺 Returning to live TV...")
+    if not player.return_to_live(target):
+        player.send_command(["script-message", "tv-live-failed"])
+        print("Failed to return to live TV. Tune a channel first, then try again.")
+        sys.exit(1)
+
+
+def cmd_pause(args):
+    MpvController().toggle_pause()
+
+
+def cmd_fullscreen(args):
+    MpvController().toggle_fullscreen(target_tv=bool(getattr(args, "player", False)))
+
+
+def cmd_focus(args):
+    from player.controller import focus_tv_window
+    if not focus_tv_window():
+        print("The TV window is not open.")
+        sys.exit(1)
+
+
+def cmd_seek(args):
+    if not MpvController().seek(args.seconds):
+        print("Failed to seek.")
+        sys.exit(1)
+
+
+def cmd_next(args):
+    player = MpvController()
+    player.channel_up()
+    print("Channel Up")
+
+
+def cmd_prev(args):
+    player = MpvController()
+    player.channel_down()
+    print("Channel Down")
+
+
+def cmd_keep(args):
+    from engine.dvr import DvrManager
+    try:
+        path = DvrManager.keep_pause(getattr(args, "station", "") or "")
+    except Exception as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
+    print(f"Saved {os.path.basename(path)} to Recordings")
+
+
+def cmd_stop(args):
+    player = MpvController()
+    player.stop()
+    print("Player stopped")
+
+
+def cmd_sync(args):
+    pid = int(getattr(args, "reap", 0) or 0)
+    if pid > 1:
+        from player.controller import spawn_reap
+        spawn_reap(pid)
+        return
+    MpvController().reconcile()
+
+
+def parse_duration_str(d_str):
+    if not d_str:
+        return None
+    d = str(d_str).strip().lower()
+    if d.endswith("h"):
+        return int(float(d[:-1]) * 3600)
+    elif d.endswith("m"):
+        return int(float(d[:-1]) * 60)
+    elif d.endswith("s"):
+        return int(float(d[:-1]))
+    else:
+        return int(float(d))
+
+
+def _grab_guide_if_due():
+    """A few times a day on a free tuner. The update takes minutes, so it runs on
+    its own and the next tick can still start or stop a recording."""
+    try:
+        from engine import pool
+        from engine.guide import guide_grab_due, guide_tuner_free, load_guide
+        from engine.psip import clear_stale_guide_status, guide_update_running
+        clear_stale_guide_status()
+        if guide_update_running():
+            return
+        from engine.schedule import next_window
+        guide = load_guide()
+        # With both tuners free a coming recording takes the other one.
+        soon = next_window() if pool.free_count() < len(pool.adapters()) else None
+        if not guide_grab_due(time.time(), guide.get("updated_at"), not guide_tuner_free(), next_record_at=soon):
+            return
+        from engine.paths import own_scope
+        subprocess.Popen(
+            own_scope([sys.executable, os.path.abspath(__file__), "guide", "update"]),
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as exc:
+        print(f"Guide left alone. {exc}")
+        return
+    print("Guide update started.")
+
+
+def cmd_record(args):
+    from engine.dvr import DvrManager, MIN_PLAYABLE_BYTES
+    action = args.action or "list"
+
+    if action == "start":
+        if not args.target:
+            print("Error: Specify a channel to record. Example: yagi record start 8.1 [duration]")
+            sys.exit(1)
+        duration_sec = parse_duration_str(args.duration)
+        dur_msg = f" for {args.duration}" if args.duration else ""
+        print(f"󰑈 Starting ATSC broadcast recording on {args.target}{dur_msg}...")
+        try:
+            session = DvrManager.start_recording(
+                args.target,
+                duration=duration_sec,
+                program_title=(getattr(args, "title", None) or None),
+            )
+            print("✅ Recording active:")
+            print(f"   Station:  {session.station} ({session.channel_number})")
+            print(f"   Program:  {session.program_title}")
+            print(f"   Tuner:    adapter{session.adapter_id}")
+            print(f"   File:     {session.file_path}")
+            print(f"   PID:      {session.pid}")
+        except Exception as e:
+            print(f"❌ Recording failed: {e}")
+            sys.exit(1)
+
+    elif action == "stop":
+        stopped = DvrManager.stop_recording(args.target)
+        if not stopped:
+            if args.target:
+                print(f"No active recording found matching '{args.target}'.")
+            else:
+                print("No active recordings to stop.")
+        else:
+            for s in stopped:
+                print(f"⏹️  Stopped recording {s.station} ({s.channel_number}) - PID {s.pid}")
+                print(f"   File: {s.file_path} ({s.to_dict().get('file_size_formatted', '0 B')})")
+
+    elif action in ("status", "active"):
+        active = DvrManager.load_active_sessions()
+        if not active:
+            print("No active background recordings.")
+            return
+        print(f"󰑈 Active Recordings ({len(active)} total):")
+        print("=" * 80)
+        print(f"{'CH':<6} {'STATION':<10} {'PROGRAM':<28} {'TUNER':<8} {'ELAPSED':<10} {'SIZE'}")
+        print("-" * 80)
+        for s in active:
+            d = s.to_dict()
+            elapsed_m = f"{d['elapsed_seconds'] // 60}m {d['elapsed_seconds'] % 60}s"
+            prog = (d['program_title'] or 'Live')[:26]
+            print(f"{d['channel_number']:<6} {d['station']:<10} {prog:<28} adapter{d['adapter_id']:<1} {elapsed_m:<10} {d['file_size_formatted']}")
+        print("=" * 80)
+
+    elif action == "delete":
+        if not args.target:
+            print("Error: Specify recording filename to delete.")
+            sys.exit(1)
+        rec_dir = RECORDINGS_DIR
+        file_path = os.path.join(rec_dir, args.target) if not os.path.isabs(args.target) else args.target
+        try:
+            deleted = DvrManager.delete_recording(file_path)
+            if deleted:
+                print(f"🗑️  Deleted {args.target}")
+            else:
+                print(f"File not found: {args.target}")
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+    elif action == "play":
+        if not args.target:
+            print("Error: Specify a recording file to play.")
+            sys.exit(1)
+        rec_dir = RECORDINGS_DIR
+        file_path = os.path.join(rec_dir, args.target) if not os.path.isabs(args.target) else args.target
+        if not os.path.isfile(file_path):
+            print(f"File not found: {args.target}")
+            sys.exit(1)
+        if os.path.getsize(file_path) < MIN_PLAYABLE_BYTES:
+            print("Recording is empty or incomplete — nothing to play.")
+            sys.exit(1)
+        player = MpvController()
+        if not player.play_file(file_path):
+            print(f"Failed to play recording: {args.target}")
+            sys.exit(1)
+        print(f"󰑈 Playing {os.path.basename(file_path)}")
+
+    elif action == "later":
+        from engine.schedule import add_later
+        if not args.target:
+            print("Error: Name the station. Example: yagi record later WEWSHD 3600s --title \"News 5\" --gps 1 --clock \"11:00 PM\"")
+            sys.exit(1)
+        try:
+            extra = parse_duration_str(getattr(args, "extra", "") or "") or 0
+            item = add_later(
+                args.target,
+                getattr(args, "title", "") or "",
+                getattr(args, "gps", 0),
+                parse_duration_str(args.duration) or 0,
+                clock=getattr(args, "clock", "") or "",
+                end_clock=getattr(args, "end_clock", "") or "",
+                display_name=getattr(args, "display_name", "") or "",
+                extra_end_sec=extra,
+                extra={"channel": args.channel} if getattr(args, "channel", "") else None,
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
+        print(f"Scheduled {item['title']} on {item['display_name']} at {item['clock'] or item['start_unix']}.")
+
+    elif action == "unlater":
+        from engine.schedule import remove_later
+        if not args.target or not remove_later(args.target):
+            print("That show is not waiting to record.")
+            sys.exit(1)
+        print("Removed from the waiting list.")
+
+    elif action in ("keep", "unkeep"):
+        if not args.target:
+            print("Error: Name the recording.")
+            sys.exit(1)
+        file_path = args.target if os.path.isabs(args.target) else os.path.join(RECORDINGS_DIR, args.target)
+        if not DvrManager.set_keep(file_path, action == "keep"):
+            print(f"File not found: {args.target}")
+            sys.exit(1)
+        print("Kept. The size limit will not delete it." if action == "keep" else "The size limit may delete it again.")
+
+    elif action == "due":
+        # Due is the timer. When it exits, systemd kills children still in its
+        # scope. Recorders, finish, and Guide run through own_scope.
+        from engine.release import refresh
+        try:
+            moved = refresh()
+        except Exception as exc:
+            moved = None
+            print(f"Record timer kept its copy. {exc}")
+        if moved:
+            print(f"Record timer now runs {moved}.")
+        from engine.dvr import DvrManager
+        from engine.guide import load_guide
+        from engine.rules import arm_rules, note_recorded
+        from engine.dvr import patch_sidecar
+        from engine.episodes import chain_from, episode_of, finish_waiting, grow_runs, run_stop
+        from engine.schedule import drop_item, due_items, load_schedule
+        for item in arm_rules(load_guide().get("channels") or {}):
+            print(f"Queued {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
+        for item in grow_runs():
+            print(f"Kept recording into {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
+        for session in DvrManager.sweep_active():
+            print(f"Stopped {session.station} ({session.channel_number}).")
+        if finish_waiting(RECORDINGS_DIR, MIN_PLAYABLE_BYTES):
+            from engine.paths import own_scope
+            subprocess.Popen(
+                own_scope([sys.executable, os.path.abspath(__file__), "record", "finish"]),
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        from engine import pool
+        ready = due_items()
+        taken = set()
+        for chosen in ready:
+            if chosen.get("id") in taken:
+                continue
+            from engine.timeshift import Timeshift
+            query = chosen.get("channel") or chosen.get("tune_name") or ""
+            tune = DvrManager._resolve_channel(query, CHANNELS_JSON_PATH)[2]
+            if pool.pick_work() is None and not Timeshift.live_source(tune):
+                print(f"Waiting. {chosen.get('title') or 'That show'} stays listed. {pool.busy_text()}")
+                continue
+            run = chain_from(load_schedule(), chosen)
+            taken.update(row.get("id") for row in run)
+            remaining = max(60, int(run_stop(run) - time.time()))
+            try:
+                session = DvrManager.start_recording(
+                    query,
+                    duration=remaining,
+                    program_title=chosen.get("title") or "",
+                )
+            except Exception as exc:
+                print(f"Waiting. {chosen.get('title') or 'That show'} did not start: {exc}")
+            else:
+                rule_ids = {str(row.get("rule_id") or "") for row in run}
+                patch_sidecar(
+                    session.file_path,
+                    episodes=[episode_of(row) for row in run],
+                    queue_tune=chosen.get("tune_name") or "",
+                    rule_id=rule_ids.pop() if len(rule_ids) == 1 else "",
+                )
+                for row in run:
+                    drop_item(str(row.get("id") or ""))
+                    note_recorded(str(row.get("rule_id") or ""), row.get("synopsis"))
+                extra = f", {len(run)} episodes in one run" if len(run) > 1 else ""
+                print(f"Recording {chosen.get('title')} ({remaining // 60}m{extra}).")
+        _grab_guide_if_due()
+
+    elif action == "finish":
+        from engine.episodes import finish_recordings
+        os.nice(10)
+        touched = finish_recordings(RECORDINGS_DIR, MIN_PLAYABLE_BYTES)
+        for path in touched:
+            print(f"Finished {os.path.basename(path)}")
+        if touched:
+            DvrManager.refresh_library_index()
+
+    elif action == "list":
+        recordings = DvrManager.refresh_library_index()
+        if not recordings:
+            print(f"No recordings found in {RECORDINGS_DIR}.")
+            print("Start a recording with: yagi record start <channel> [duration]")
+            return
+        print(f"📼 Recorded Broadcasts ({len(recordings)} total in {RECORDINGS_DIR}):")
+        print("=" * 85)
+        print(f"{'DATE':<17} {'CH':<6} {'STATION':<10} {'PROGRAM TITLE':<32} {'SIZE'}")
+        print("-" * 85)
+        for r in recordings:
+            prog = r["title"][:30]
+            print(f"{r['date_formatted']:<17} {r['channel_number']:<6} {r['station']:<10} {prog:<32} {r['size_formatted']}")
+        print("=" * 85)
+
+
+def cmd_series(args):
+    """Record every airing of a show: list, add, remove, keep."""
+    from engine.rules import add_rule, arm_rules, load_rules, remove_rule, set_keep_last
+    action = args.action or "list"
+
+    if action == "list":
+        from engine.schedule import load_schedule
+        rules = load_rules()
+        if not rules:
+            print("No series are recording.")
+            print('Add one with: yagi series add <station> --title "M*A*S*H" --channel 19.2')
+            return
+        queued = sorted(load_schedule(), key=lambda row: int(row.get("start_unix") or 0))
+        for rule in rules:
+            keep = int(rule.get("keep_last") or 0)
+            nxt = next((row for row in queued if str(row.get("rule_id") or "") == rule.get("id")), None)
+            when = f"next {nxt.get('clock') or nxt.get('start_unix')}" if nxt else "next airing not listed yet"
+            print(f"{rule.get('id')}  {rule.get('title')}  {rule.get('channel') or rule.get('tune_name')}  "
+                  f"{'keep ' + str(keep) if keep else 'keep all'}  {when}")
+
+    elif action == "add":
+        from engine.guide import load_guide
+        try:
+            rule = add_rule(args.title or "", args.channel or "", args.target or "")
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            sys.exit(1)
+        print(f"Recording every {rule['title']} on {rule['channel'] or rule['tune_name']}.")
+        # Queue what is already listed. The timer starts each one.
+        for item in arm_rules(load_guide().get("channels") or {}):
+            print(f"Queued {item.get('title')} at {item.get('clock') or item.get('start_unix')}.")
+
+    elif action == "remove":
+        if not args.target or not remove_rule(args.target):
+            print("No series has that id. See: yagi series")
+            sys.exit(1)
+        print("Stopped recording that series. Its recordings stay.")
+
+    elif action == "keep":
+        from engine.dvr import DvrManager
+        try:
+            keep = int(args.count or 0)
+        except ValueError:
+            keep = -1
+        if not args.target or keep < 0 or not set_keep_last(args.target, keep):
+            print("Use: yagi series keep <id> <how many to keep, 0 for all>")
+            sys.exit(1)
+        DvrManager.refresh_library_index()
+        print(f"Keeping the newest {keep} episodes." if keep else "Keeping every episode.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Yagi - Modern Linux Over-The-Air Television")
+    subparsers = parser.add_subparsers(dest="subcommand", required=True)
+
+    # status
+    p_status = subparsers.add_parser("status", help="Show tuner and playback status")
+    p_status.add_argument("--count", action="store_true", help=argparse.SUPPRESS)
+    p_status.set_defaults(func=cmd_status)
+
+    subparsers.add_parser("install", help="Start the record timer (after plugin add)").set_defaults(func=cmd_install)
+    subparsers.add_parser("uninstall", help="Stop the record timer (before plugin remove)").set_defaults(func=cmd_uninstall)
+
+    p_signal = subparsers.add_parser("signal", help="Show SNR and strength for the picture tuner")
+    p_signal.add_argument("action", nargs="?", choices=["watch", "check"],
+                          help="watch: a reading each second. check <channel>: signal and damaged packets, on live TV's tuner or a free one")
+    p_signal.add_argument("channel", nargs="?", help="For check: the channel. Default: what live TV is on")
+    p_signal.add_argument("--seconds", type=int, default=30, help="For check: how long, up to 600")
+    p_signal.add_argument("--plain", action="store_true", help=argparse.SUPPRESS)
+    p_signal.add_argument("--adapter", type=int, default=None, help="Tuner to read. Default: the one live TV is on")
+    p_signal.set_defaults(func=cmd_signal)
+
+    # scan
+    p_scan = subparsers.add_parser("scan", help="Scan for ATSC broadcast channels")
+    p_scan.add_argument("--full", action="store_false", dest="quick", help="Perform full 68-channel scan (default is fast scan)")
+    p_scan.add_argument("--adapter", type=int, default=None, help="Specific adapter ID to use")
+    p_scan.add_argument("--timeout", type=float, default=1.0, help="Timeout multiplier for signal lock")
+    p_scan.set_defaults(func=cmd_scan)
+
+    # list / channels
+    p_list = subparsers.add_parser("list", aliases=["channels"], help="List discovered channels")
+    p_list.set_defaults(func=cmd_list)
+
+    # guide / epg
+    p_guide = subparsers.add_parser("guide", aliases=["epg"], help="Show electronic program guide schedules")
+    p_guide.add_argument("action", nargs="?", choices=["refresh", "update", "search", "shows", "slots", "forget", "slot"], help="Refresh, update quietly (the timer), search, list shows (JSON), or edit the repeated-show list")
+    p_guide.add_argument("query", nargs="*", help="Search words, or a slot command")
+    p_guide.add_argument("--title", default="", help="Show title")
+    p_guide.add_argument("--clock", default="", help="Start clock, e.g. 8:15 PM")
+    p_guide.add_argument("--length", default="", help="Show length, e.g. 30m")
+    p_guide.add_argument("--weekday", type=int, default=-1, help="0 is Monday")
+    p_guide.add_argument("--channel", default="", help="Channel number")
+    p_guide.add_argument("--tune", default="", help="Tune name")
+    p_guide.add_argument("--alias", default="", help="Another title for this slot")
+    p_guide.add_argument("--id", default="", help="Slot id")
+    p_guide.set_defaults(func=cmd_guide)
+
+    # favorite
+    p_fav = subparsers.add_parser("favorite", aliases=["fav", "favorites"], help="Manage favorite channels")
+    p_fav.add_argument("action", nargs="?", choices=["list", "add", "remove", "toggle"], default="list", help="Action to perform")
+    p_fav.add_argument("channel", nargs="?", help="Channel name to favorite")
+    p_fav.set_defaults(func=cmd_favorite)
+
+    p_hid = subparsers.add_parser("hidden", help="Stations set aside from Watchable and Favorites")
+    p_hid.add_argument("action", nargs="?", choices=["list", "hide", "show"], default="list")
+    p_hid.add_argument("channel", nargs="?", help="Channel number, such as 19.1")
+    p_hid.set_defaults(func=cmd_hidden)
+
+    p_pref = subparsers.add_parser("pref", help="UI preferences")
+    p_pref.add_argument("key", help="Preference key (filter, library-max)")
+    p_pref.add_argument("value", nargs="?", default="", help="favorites, all, hidden, or a library cap")
+    p_pref.set_defaults(func=cmd_pref)
+
+    # play
+    p_play = subparsers.add_parser("play", help="Play a channel")
+    p_play.add_argument("channel", help="Channel name or callsign to tune")
+    p_play.set_defaults(func=cmd_play)
+
+    p_relaunch = subparsers.add_parser("pip-relaunch", help=argparse.SUPPRESS)
+    p_relaunch.add_argument("channel")
+    p_relaunch.add_argument("--station", default="")
+    p_relaunch.set_defaults(func=cmd_pip_relaunch)
+
+    p_live = subparsers.add_parser("live", help="Seek live dump write head, or retune after a recording")
+    p_live.add_argument("channel", nargs="?", help="Optional channel; defaults to last live station")
+    p_live.set_defaults(func=cmd_live)
+
+    p_pause = subparsers.add_parser("pause", help="Pause or resume (live dump keeps filling)")
+    p_pause.set_defaults(func=cmd_pause)
+
+    p_fs = subparsers.add_parser(
+        "fullscreen",
+        help="Omarchy fullscreen on the focused window; unpin the TV PiP first if it is focused",
+    )
+    p_fs.add_argument(
+        "--player",
+        action="store_true",
+        help="Target the yagi window even if it is not focused",
+    )
+    p_fs.set_defaults(func=cmd_fullscreen)
+
+    p_focus = subparsers.add_parser("focus", help="Give the TV window keyboard focus")
+    p_focus.set_defaults(func=cmd_focus)
+
+    p_seek = subparsers.add_parser("seek", help="Seek the live dump or a recording by seconds")
+    p_seek.add_argument("seconds", type=float, help="Relative seconds, e.g. 10 or -10")
+    p_seek.set_defaults(func=cmd_seek)
+
+    # next / prev / stop
+    subparsers.add_parser("next", help="Tune next channel").set_defaults(func=cmd_next)
+    subparsers.add_parser("prev", help="Tune previous channel").set_defaults(func=cmd_prev)
+    p_keep = subparsers.add_parser("keep", help="Copy the current pause into the library")
+    p_keep.add_argument("station", nargs="?", default="", help="Only if this station is still the pause file")
+    p_keep.set_defaults(func=cmd_keep)
+    subparsers.add_parser("stop", help="Close TV player").set_defaults(func=cmd_stop)
+    p_sync = subparsers.add_parser("sync", help="Clear now-playing if the TV window is already gone")
+    p_sync.add_argument("--reap", type=int, default=0, help=argparse.SUPPRESS)
+    p_sync.set_defaults(func=cmd_sync)
+
+    # record / dvr
+    p_rec = subparsers.add_parser("record", aliases=["dvr", "rec"], help="DVR recording control")
+    p_rec.add_argument("action", nargs="?", choices=["start", "stop", "list", "status", "active", "delete", "play", "later", "unlater", "due", "finish", "keep", "unkeep"], default="list", help="Record action. later/unlater: one airing from the Guide. keep/unkeep: shield a recording from the size limit. finish: split runs and mark ad breaks. For every airing of a show, see: yagi series")
+    p_rec.add_argument("target", nargs="?", help="Channel to record or file to delete")
+    p_rec.add_argument("duration", nargs="?", help="Optional duration limit (e.g. 30m, 1h, 300s)")
+    p_rec.add_argument("--title", default="", help="Program name for the file and the list")
+    p_rec.add_argument("--gps", type=int, default=0, help="Broadcast start time")
+    p_rec.add_argument("--clock", default="", help="Start clock label")
+    p_rec.add_argument("--end-clock", dest="end_clock", default="", help="End clock label")
+    p_rec.add_argument("--display-name", dest="display_name", default="", help="Station line")
+    p_rec.add_argument("--extra", default="", help="Extra time after the show, e.g. 30m")
+    p_rec.add_argument("--channel", default="", help="For later: the channel number, when two channels share a station name")
+    p_rec.set_defaults(func=cmd_record)
+
+    p_series = subparsers.add_parser("series", help="Record every airing of a show")
+    p_series.add_argument("action", nargs="?", choices=["list", "add", "remove", "keep"], default="list",
+                          help="list (default), add <station> --title T --channel N, remove <id>, keep <id> <N, 0 for all>")
+    p_series.add_argument("target", nargs="?", help="Station to add, or the series id")
+    p_series.add_argument("count", nargs="?", help="For keep: how many episodes, 0 for all")
+    p_series.add_argument("--title", default="", help="Show title")
+    p_series.add_argument("--channel", default="", help="Channel number")
+    p_series.set_defaults(func=cmd_series)
+
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
