@@ -5,6 +5,15 @@
 
 Watch, pause, and record free over-the-air TV from your Omarchy bar with a USB ATSC tuner.
 
+![Yagi guide grid](assets/yagi-guide.png)
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="assets/yagi-channels.png" alt="Yagi channel list"></td>
+    <td width="50%" valign="top"><img src="assets/yagi-recordings.png" alt="Yagi recordings"></td>
+  </tr>
+</table>
+
 ## What you need
 
 - [Omarchy](https://omarchy.org/) (Hyprland and Quickshell on Arch Linux)
