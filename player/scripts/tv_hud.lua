@@ -1052,6 +1052,7 @@ local function render_hud()
 end
 
 local function hide_hud()
+    -- Bars stay up until the first frame.
     if not picture_ready() then
         return
     end
@@ -1578,6 +1579,8 @@ end
 mp.add_periodic_timer(1, poll_signal)
 poll_signal()
 
+-- Detached sync --reap. Super+W quits from inside mpv. live.ts goes once
+-- this window and the tune lock are gone.
 mp.register_event("shutdown", function()
     pcall(write_player_state, false, "", "")
     local cli = tv_cli()
@@ -1655,6 +1658,7 @@ local function change_channel(direction)
     end)
 end
 
+-- Save (y) copies the paused stretch into Recordings.
 mp.add_forced_key_binding("y", "tv_keep_pause", function()
     if is_library_playback() then return end
     local cli = tv_cli()

@@ -1,12 +1,12 @@
 # Yagi — Hardware
 
-ATSC 1.0 / Clear QAM on Linux `DVBv5`. This box: Hauppauge WinTV-dualHD.
+ATSC 1.0 on Linux `DVBv5`. Tested on a Hauppauge WinTV-dualHD.
 
 ## DualHD (`2040:826d`, 955D / 1595)
 
-LGDT3306A demod, Si2157 tuner, 8VSB + QAM64/256. Two adapters, `/dev/dvb/adapter0` and `/dev/dvb/adapter1`, shared by live TV, recordings, scans, and the Guide (`engine/pool.py`). Live prefers 0, the rest prefer 1. The PiP does not open `/dev/dvb`. Close `frontend0` before a new dump or Linux returns `EBUSY`.
+LGDT3306A demod, Si2157 tuner. The chip does 8VSB and QAM64/256; Yagi tunes ATSC 8VSB. Two adapters, `/dev/dvb/adapter0` and `/dev/dvb/adapter1`, shared by live TV, recordings, scans, and the Guide (`engine/pool.py`). Live prefers 0, the rest prefer 1. The PiP does not open `/dev/dvb`. Close `frontend0` before a new dump or Linux returns `EBUSY`.
 
-Live TV holds its frontend open (`engine/tower_dump.py`) and reads the whole tower from `dvr0` with one all-PID filter, about 2.4 MB/s. On this box a lock to another tower takes 2.8–2.9 s, every time. The first tune after the frontend opens adds about 1 s while it wakes. A frontend that is closed and reopened, as mpv's `dvbin` does on every station change, pays that second each time, plus about 0.6 s in mpv's lock wait. Recordings still use mpv `dvbin`.
+Live TV holds its frontend open (`engine/tower_dump.py`) and reads the whole tower from `dvr0` with one all-PID filter, about 2.4 MB/s. On the tested dualHD a lock to another tower takes 2.8–2.9 s, every time. The first tune after the frontend opens adds about 1 s while it wakes. A frontend that is closed and reopened, as mpv's `dvbin` does on every station change, pays that second each time, plus about 0.6 s in mpv's lock wait. Recordings still use mpv `dvbin`.
 
 Seat ACLs, not `video` group, not root:
 
@@ -16,7 +16,7 @@ getfacl /dev/dvb/adapter1/frontend0
 loginctl show-session $(loginctl | awk '/seat0/{print $1}') -p Active
 ```
 
-`femon` is optional. This box may not have it. SNR while a tune runs is on the flyout watch row. The live dump logs lock times and `SNR:` lines to `~/.cache/yagi/timeshift/dump.log`.
+`femon` is optional and may not be installed. SNR while a tune runs is on the flyout watch row. The live dump logs lock times and `SNR:` lines to `~/.cache/yagi/timeshift/dump.log`.
 
 ## Signal
 
@@ -26,7 +26,7 @@ Height and line-of-sight matter. VHF-High (7–13) wants longer elements. UHF (1
 
 A good average is not enough: artifacts are short bursts the demod could not repair. `yagi signal check 8.1` prints C/N and the packets the tuner flagged as damaged every 2 s, on live TV's tuner when you watch that tower, else on a free one. Use it while you move the antenna, the amp gain, or the stick. More gain helps until C/N stops rising; past that it overdrives.
 
-On this box a USB 3 port put noise on VHF-High: 4–5% of frames damaged on RF 8, 0% after moving the stick to a USB 2.0 port. Keep the stick off USB 3 ports and away from the PC.
+A USB 3 port can put noise on VHF-High. On the tested dualHD that was 4–5% of frames damaged on RF 8, and 0% after moving the stick to a USB 2.0 port. Keep the stick off USB 3 ports and away from the PC.
 
 Close the TV before you unplug or move the stick. Pulled while streaming, em28xx can hang in its disconnect; the tuners do not come back and whatever had the stick's IR input open freezes until a reboot.
 
@@ -43,7 +43,7 @@ ATSC A/53: DTV pilot is 310 kHz above the lower band edge, i.e. nominal center *
 | What | Where |
 | --- | --- |
 | Channels, guide, now-playing, DVR index | `~/.config/yagi/` |
-| Optional RF names | `~/.config/yagi/station_map.json` (copy `markets/cleveland.json`) |
+| Optional RF names | `~/.config/yagi/station_map.json` (copy an example such as `markets/cleveland.json`) |
 | MPV channel table | `~/.config/mpv/channels.conf` |
 | Library recordings | `~/Videos/TV` |
 | Pause dump (whole tower) | `~/.cache/yagi/timeshift/live.ts` |

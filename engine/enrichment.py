@@ -4,8 +4,8 @@ Maps raw ATSC RF scan entries to user-friendly Major.Minor channel numbers,
 network affiliations (NBC, ABC, CBS, FOX, PBS, CW), and human callsigns.
 
 A local `station_map.json` is optional. Without it, names come from PSIP
-and a small network heuristic. Cleveland lives in markets/cleveland.json —
-copy that file to the config dir if this box should use it.
+and a small network heuristic. Network names are not in the broadcast.
+markets/cleveland.json is an example map; copy one into the config dir.
 """
 
 import json

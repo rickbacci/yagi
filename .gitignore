@@ -6,4 +6,7 @@ __pycache__/
 htmlcov/
 mockups/
 .t/
+MEMORY.md
+WHATS_LEFT.md
+.cursor/
 

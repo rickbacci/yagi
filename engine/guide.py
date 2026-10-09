@@ -1,7 +1,9 @@
 """
 Yagi - Electronic Program Guide (EPG) Engine
 Manages schedule data, program synopses, and airings in guide.json.
-Provides current and upcoming show information for major broadcast stations.
+The schedule is broadcast EIT and ETT only. A grab runs about every three
+hours on a free tuner and yields to live TV at once. Listings usually
+reach about five hours.
 """
 
 import os

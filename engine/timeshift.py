@@ -254,8 +254,9 @@ class Timeshift:
             return False
         from engine.dvr import disk_below_floor
         reason = "disk" if disk_below_floor(TIMESHIFT_DIR) else ""
-        # Live playback reads the write head. playhead_byte stays put, so the
-        # file size alone is not "an hour ahead."
+        # Ordinary live watching does not stop the writer: it reads the write
+        # head, so playhead_byte stays put and file size alone is not "an hour
+        # ahead." `l` still jumps to the write head that remains.
         watching_live = str(state.get("view") or "live") == "live" and not bool(state.get("paused"))
         if not reason and not watching_live and cls.dump_bytes() - cls.playhead_now() >= cls.pause_cap_bytes():
             reason = "hour" if pid not in cls._copied_dumps() else ""
@@ -796,7 +797,8 @@ class Timeshift:
 
         Under systemd each tuner's dump is one unit; a tuner whose dump a
         recording copies keeps it. Otherwise only the dump's own marks, writing
-        into this TIMESHIFT_DIR. The window's args name the timeshift file too.
+        into this TIMESHIFT_DIR. Matching the timeshift path in process args
+        would also match the PiP and kill it. Match the dump program, not the path.
         """
         copies = cls._live_copies()
         if not keep_pid and systemd_user():

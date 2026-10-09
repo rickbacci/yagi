@@ -3,24 +3,46 @@
 [![Platform](https://img.shields.io/badge/platform-Omarchy%20%7C%20Arch%20Linux-blue)](https://omarchy.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-OTA ATSC 1.0 for Omarchy: bar plugin, pinned PiP, dual-tuner record. Not MythTV, not Kaffeine.
+Watch, pause, and record free over-the-air TV from your Omarchy bar with a USB ATSC tuner.
 
-Click the antenna, scan, watch 16:9 PiP. The Guide schedule is only what each station broadcasts; the record timer reads it on a free tuner every few hours. Search looks at titles and descriptions. Record into `~/Videos/TV` on whichever tuner is free, one airing (Record) or every airing (Record series). A channel on the tower you are watching is copied out of the live dump instead: no second tuner, and it starts at the top of the show when the pause reaches back that far; back-to-back episodes split into one file each and ad breaks are skipped on playback. Pause-live is the live dump, the whole tower, read once through a fifo. Skip seeks inside the same window. A channel on the same tower comes up in about a second; another tower takes about 3 s of tuner lock first. Close TV wipes the pause dump; it is not a library recording. Runs as `$USER`.
+![Yagi panel before a scan](assets/popout-card-initial.png)
 
-Why not Myth/Kaffeine: Omarchy chrome, tuner leases, `+28615` Hz pilots, ignore false PSIP `access_controlled`, Hyprland PiP class `yagi`.
+![The bar widget while a scan is running](assets/bar-widget-scanning.png)
 
-Architecture: `DESIGN.md`. Tuner/RF: `HARDWARE_AND_TROUBLESHOOTING.md`. Leftover work: `WHATS_LEFT.md`.
+## What you need
+
+- [Omarchy](https://omarchy.org/) (Hyprland and Quickshell on Arch Linux)
+- A Linux-supported ATSC 1.0 USB tuner, such as a Hauppauge WinTV-dualHD
+- An antenna
+
+## Features
+
+- Scan local stations from the bar, then watch in a pinned 16:9 picture.
+- Pause live TV and skip inside that window. Close TV deletes the pause file. It is not a library recording.
+- A Guide built only from what each station broadcasts. Search looks at titles and descriptions.
+- Record one airing, or every airing of a show, into `~/Videos/TV`.
+- Recording the channel you are watching copies the live dump, so it does not take a second tuner. It can start at the top of the show when the pause reaches back that far.
+- A channel on the same tower comes up in about a second. Another tower takes about 3 seconds of tuner lock first.
+- Runs as your user. No root for the app.
+
+## Why not MythTV or Kaffeine
+
+Those are full TV apps. Yagi is the Omarchy bar. It leases tuners so live TV, a recording, and a scan do not grab the same stick. It tunes the ATSC pilot at `+28615` Hz. OTA stations are unencrypted, but many set the PSIP `access_controlled` bit; Kaffeine treats that as scrambled, and Yagi plays the stream. The picture is a Hyprland window of class `yagi`.
+
+Architecture: `DESIGN.md`. Tuners and RF: `HARDWARE_AND_TROUBLESHOOTING.md`.
 
 ```
 yagi/
 ├── manifest.json
 ├── bin/yagi
 ├── engine/  player/  plugin/  tests/  markets/
-├── AGENTS.md  DESIGN.md  HARDWARE_AND_TROUBLESHOOTING.md  WHATS_LEFT.md
+├── AGENTS.md  DESIGN.md  HARDWARE_AND_TROUBLESHOOTING.md
 └── skills/yagi/SKILL.md
 ```
 
-State: `~/.config/yagi/`. Library: `~/Videos/TV`. Optional `station_map.json` (copy `markets/cleveland.json` there for that RF map); without it, names come from the scan.
+State lives in `~/.config/yagi/`. The library is `~/Videos/TV`.
+
+`markets/cleveland.json` is an example station map: callsigns and network names for one market, typed by hand, because the broadcast does not carry them. Copy it, or a file in the same shape for your market, to `~/.config/yagi/station_map.json`. Without that file, names come from the scan.
 
 ## Honesty
 
@@ -28,8 +50,8 @@ Built and tested on one Hauppauge WinTV-dualHD. See Tuners below.
 
 - Two ATSC adapters, shared: live TV, recordings, scans, and Guide updates each take a free one. Recording what you watch shares live TV's tuner; changing to another tower then moves live TV to the free one, or asks you to stop a recording. A one-tuner box can watch, or record, not both. Nothing takes a tuner that is live, recording, or scanning; a Guide update gives way.
 - Ad skipping uses Comskip if installed (`omarchy-pkg-aur-add comskip`), otherwise ffmpeg's black-frame and silence detection, which misses more.
-- First run: no stations until you scan, no Hidden list until you hide one, no Guide titles until `guide refresh` (what the stations send in PSIP). There is no canned Cleveland lineup in the engine.
-- Super+K is Omarchy’s keybindings overlay. It does not open this flyout. Use the antenna, or bind `omarchy-shell -q shell toggle richardb.yagi` (this box: Super+Shift+T in `~/.config/hypr/bindings.lua`).
+- First run: no stations until you scan, no Hidden list until you hide one, no Guide titles until `guide refresh` (what the stations send in PSIP). The engine does not ship a canned lineup. `markets/cleveland.json` is only an example you can copy in.
+- Super+K is Omarchy’s keybindings overlay. It does not open this flyout. Use the antenna, or bind `omarchy-shell -q shell toggle richardb.yagi` in your Hyprland config.
 - State JSON is not all `0600`.
 - Version in `manifest.json` is `0.1.0`. Not a published 1.0.
 
@@ -39,13 +61,35 @@ Yagi needs an ATSC 1.0 tuner that Linux drives itself: one that shows up as `/de
 
 | Tuner | Status |
 | --- | --- |
-| Hauppauge WinTV-dualHD, ATSC model (`2040:826d`, LGDT3306A + Si2157) | Tested. Two tuners. |
+| Hauppauge WinTV-dualHD, ATSC model (`2040:826d`, LGDT3306A + Si2157) | Tested. Two tuners. `lsusb` may name this ID `Hauppauge 955D`. |
 | Other LGDT3306A + Si2157 USB sticks (Hauppauge WinTV-HVR-955Q, WinTV-quadHD ATSC) | Same chips and kernel driver; untested. |
 | Other ATSC tuners with a Linux DVB driver | Should work; untested. |
 | HDHomeRun and other network tuners | No. They have no `/dev/dvb` device. |
 | ATSC 3.0 / NextGen TV | No. Linux has no drivers, and many stations encrypt it. |
 
 One tuner watches or records, not both at once, except that recording the channel you watch copies it from live TV. Two is what this is built and tested on. More should work, but that is untested.
+
+### Check your tuner
+
+```bash
+lsusb
+dvb-fe-tool -a 0
+dvb-fe-tool -a 1
+```
+
+A tuner Yagi can use lists `ATSC` in its delivery systems and appears as `/dev/dvb/adapterN/frontend0`.
+
+`lsusb` may print `Hauppauge 955D` for ID `2040:826d`. That string is the vendor ID database label. The stick is the WinTV-dualHD ATSC model.
+
+On the tested dualHD, `dvb-fe-tool -a 0` and `-a 1` both report:
+
+- Device: `LG Electronics LGDT3306A VSB/QAM Frontend`
+- Delivery systems: `ATSC` and `DVBC/ANNEX_B` (US cable QAM)
+- Capabilities: `CAN_8VSB`, `QAM_64`, `QAM_256`
+- Frequency range: 54.0 MHz to 858 MHz
+- DVB API: 5.12
+
+The chip can do US cable QAM. Yagi tunes ATSC 8VSB only.
 
 ## Install
 
@@ -68,7 +112,7 @@ If those frontends are `---` for your user, log out and in on seat0. Do not chmo
 A plugin is a git repo with `manifest.json` at the git root (`entryPoints.barWidget` is `plugin/BarWidget.qml`).
 
 ```bash
-omarchy plugin add https://example.com/yagi.git
+omarchy plugin add https://github.com/rickbacci/yagi.git
 omarchy plugin enable richardb.yagi
 omarchy bar put richardb.yagi --section right
 omarchy restart shell
@@ -115,7 +159,7 @@ hyprctl reload && hyprctl configerrors
 
 Scan from the bar (or `yagi scan`), pick a station. Then `yagi guide refresh`, or let the record timer do it.
 
-Optional, this RF map only:
+Optional, for the Cleveland example map (or your own file in the same shape):
 
 ```bash
 mkdir -p ~/.config/yagi

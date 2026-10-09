@@ -473,7 +473,7 @@ function recordingDetail(rec, nowUnix, kind) {
   return parts.join(" · ")
 }
 
-// One show is a folded title on one channel. Episodes stay newest first.
+// One show is a folded title on one channel, any hour. Enter opens it; Esc backs out. Episodes stay newest first.
 function groupRecordings(sorted) {
   var out = []
   var at = {}

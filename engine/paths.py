@@ -72,6 +72,9 @@ def touch_private_file(path: str) -> None:
     chmod_private_file(path)
 
 
+# Window and follower live in yagi-live.slice; Close TV stops that slice.
+# Each dump is yagi-dump<N>.scope inside yagi-tuner.slice. A dump a recording
+# copied outlives Close. Recorders are yagi-rec.slice.
 LIVE_SLICE = "yagi-live.slice"
 REC_SLICE = "yagi-rec.slice"
 TUNER_SLICE = "yagi-tuner.slice"

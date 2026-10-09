@@ -373,7 +373,7 @@ class AtscScanner:
 
     @classmethod
     def save_channels(cls, channels: List[Dict[str, Any]], json_path: Optional[str] = None, mpv_path: Optional[str] = None) -> None:
-        """Saves channels to JSON and MPV format with virtual channel enrichment and sorting."""
+        """Replace the lineup in JSON and channels.conf. A rescan rewrites both."""
         from engine.enrichment import enrich_and_sort_channels
         enriched_channels = enrich_and_sort_channels(channels)
 

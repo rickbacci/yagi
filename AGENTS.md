@@ -1,25 +1,44 @@
 # AGENTS.md — Yagi
 
-Plugin `richardb.yagi`, `bar-widget`, QML `plugin/BarWidget.qml`. Hyprland + Quickshell + Python + MPV.
+Omarchy bar plugin for over-the-air ATSC 1.0. Plugin id `richardb.yagi`, entry `plugin/BarWidget.qml`. Hyprland, Quickshell, Python, and mpv.
 
-**Must** breaks hardware, security, or data. **For now** is a choice: change it with a reason, said first. Richard's "idea" = For now; "rule" = Must.
+## Layout
+
+- `bin/yagi` — CLI
+- `engine/` — tuners, scan, guide, DVR, timeshift, tower dump
+- `player/` — mpv controller and `scripts/tv_hud.lua`
+- `plugin/` — Quickshell bar widget
+- `markets/` — example station maps (`cleveland.json`)
+- `tests/` — unittest suite
+- `DESIGN.md` — why the play path works this way
+- `HARDWARE_AND_TROUBLESHOOTING.md` — tuners and RF
 
 ## Commands
-`python3 -m unittest` (repo root) before commit. `bin/yagi status`. After QML: `omarchy restart shell`.
 
-## Must
-1. `$USER` only. No `sudo` / `pkexec`.
-2. IPC via `get_runtime_socket()` in `$XDG_RUNTIME_DIR`. Never `/tmp/`.
-3. ATSC keeps `+28615` Hz.
-4. Never take a tuner that is live, recording, or scanning (`engine/pool.py`). Free the frontend before a dump. Scan dwell ≥ 1.2 s.
-5. State JSON: `.tmp`, then `os.replace`.
-6. Library `$XDG_VIDEOS_DIR/TV`. Close TV wipes the pause dump. Long-lived children start via `own_scope`.
+From the repo root, before a commit:
 
-## For now
-- Recording the live tower copies its dump, no second tuner; leaving that tower hands the dump to the recording and live takes the free tuner. Else live prefers tuner 0, work tuner 1.
-- PiP plays the pause dump, not `dvb://`, so pause can seek.
-- QML uses `Color.*` / `Style.*` / `root.bar.*`; the HUD reads the theme's `colors.toml`.
-- Window `yagi`: float, pin, 16:9, bottom-right, `monitor/3`. Super+F unpins, then fullscreen.
+```bash
+python3 -m unittest
+bin/yagi status
+```
 
-## Working style
-Talk, then plan, then code. Choices after talking, as plain text. Commit when asked; "do all" = one commit per item. No panels or shell restarts while Richard uses the machine. Done means he saw it.
+Tests sandbox XDG (`tests/__init__.py`) and never put sockets in `/tmp`. After a QML change, `omarchy restart shell`.
+
+## Do
+
+- Run as `$USER`. No `sudo` or `pkexec`.
+- Open IPC with `get_runtime_socket()` under `$XDG_RUNTIME_DIR`.
+- Keep the ATSC `+28615` Hz pilot. Do not round frequencies to `000000`.
+- Leave a tuner that is live, recording, or scanning (`engine/pool.py`). Free the frontend before a dump. Scan dwell is at least 1.2 s.
+- Write state JSON to a `.tmp` file, then `os.replace`.
+- Put the library in `$XDG_VIDEOS_DIR/TV`. Close TV wipes the pause dump. Start long-lived children with `own_scope`.
+- In QML use `Color.*`, `Style.*`, and `root.bar.*`. The HUD reads the theme `colors.toml`.
+
+## Don't
+
+- Do not match the timeshift path in process args. The picture names that file too, and a match kills it.
+- Do not open `dvb://` for the picture. The PiP plays the pause dump so pause can seek.
+- Recording the tower you are watching copies its dump. Leaving that tower hands the dump to the recording. Otherwise live prefers tuner 0 and other work prefers tuner 1.
+- Window class `yagi` is float, pin, 16:9, bottom-right, height `monitor/3`. Super+F unpins, then fullscreen.
+
+Hardware and data rules above stay. Other choices can change when the reason is said first. See `DESIGN.md`.

@@ -9,7 +9,7 @@ description: >
 
 # Yagi
 
-Project `~/Projects/personal/yagi`. CLI `yagi` (`PATH` or `bin/`). Rules: `AGENTS.md`. Facts: `MEMORY.md`.
+CLI `yagi` (`PATH` or `bin/`). Rules: `AGENTS.md`. Design: `DESIGN.md`.
 
 **Tuners** are one pool (`engine/pool.py`): live prefers 0, work prefers 1, a Guide update gives way. `yagi status` shows both.
 
@@ -34,7 +34,7 @@ Live TV is always the whole tower. A recording is one station; one with no video
 
 ## Keys
 
-Panel (Super+Shift+T): j/k move, Enter picks, Esc closes, `g` Guide, `v` Recordings. Guide: arrows move, Enter opens the card, `/` search, `s` Grid or Shows, `r` Record, `a` Record series. Recordings: ←/→ Recorded or Scheduled. Enter opens a show, then plays. Esc backs out of the show, then closes. `x` twice deletes an episode. Shift+K locks. Picking a channel or recording focuses the TV window (`yagi focus`).
+Panel: j/k move, Enter picks, Esc closes, `g` Guide, `v` Recordings. Guide: arrows move, Enter opens the card, `/` search, `s` Grid or Shows, `r` Record, `a` Record series. Recordings: ←/→ Recorded or Scheduled. Enter opens a show, then plays. Esc backs out of the show, then closes. `x` twice deletes an episode. Shift+K locks. Picking a channel or recording focuses the TV window (`yagi focus`).
 
 TV window:
 
@@ -42,12 +42,12 @@ Space pause / play still behind · `l` live · ←/→ skip 10s · ↑/↓ 1 min
 
 ## Paths
 
-`~/.config/yagi/` channels, guide, state, optional `station_map.json` · `~/.config/mpv/channels.conf` · plugin `~/.config/omarchy/plugins/richardb.yagi` · IPC `$XDG_RUNTIME_DIR/yagi-mpv.sock`. First run is empty. Cleveland RF names: `markets/cleveland.json`.
+`~/.config/yagi/` channels, guide, state, optional `station_map.json` · `~/.config/mpv/channels.conf` · plugin `~/.config/omarchy/plugins/richardb.yagi` · IPC `$XDG_RUNTIME_DIR/yagi-mpv.sock`. First run is empty. Example RF names: `markets/cleveland.json`.
 
 ## If pause / skip / HUD is wrong
 
-1. This machine’s `mpv --version` / manpage — not a wiki.
+1. The installed `mpv --version` and its manpage — not a wiki.
 2. Probe the socket **before** editing lua: live `path` is `fd://0`; never `dvb://`. Then `pause`, video width, and `current-tracks/video/program-id` against the state's `service_id`. Skip and read the path again. A new path means the window reopened.
 3. Slow zap: `hud.log` has the key press, `tv-program` or `tv-blank`, `loadfile`, and "first video frame after restart shown"; `dump.log` has each lock time.
-4. lua loads at mpv start. Not fixed until they see it.
+4. lua loads at mpv start. Not fixed until the picture shows it.
 5. Do not ship another overlay for a demuxer or path bug. Probe the socket first.

@@ -1,4 +1,4 @@
-"""Stations set aside from Watchable and Favorites. Keyed by channel number."""
+"""Stations set aside from Watchable and Favorites. All is every station not on this list."""
 
 import json
 import os

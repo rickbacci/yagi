@@ -728,6 +728,8 @@ def cmd_record(args):
         print("Kept. The size limit will not delete it." if action == "keep" else "The size limit may delete it again.")
 
     elif action == "due":
+        # Due is the timer. When it exits, systemd kills children still in its
+        # scope. Recorders, finish, and Guide run through own_scope.
         from engine.release import refresh
         try:
             moved = refresh()

@@ -57,7 +57,7 @@ MIN_PLAYABLE_BYTES = 256 * 1024
 GIB = 1024 ** 3
 DEFAULT_LIBRARY_BUDGET_GIB = 100
 MIN_LIBRARY_BUDGET_GIB = 2
-KEEP_FREE_GIB = 8
+KEEP_FREE_GIB = 8  # recordings and the pause writer stop under 8 GB free
 # A locked ATSC dump passes this quickly. PAT/PMT alone does not.
 GROW_BYTES = 32 * 1024
 GROW_WAIT_SECS = 20.0
@@ -421,7 +421,7 @@ class DvrManager:
 
     @classmethod
     def wait_until_growing(cls, proc: subprocess.Popen, path: str, timeout: float = GROW_WAIT_SECS) -> bool:
-        """True once the dump has written a real chunk and the process is still up."""
+        """True once the file is growing and the process is still up. Active only after that."""
         deadline = time.time() + timeout
         while time.time() < deadline:
             if isinstance(proc.poll(), int):

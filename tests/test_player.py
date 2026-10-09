@@ -151,7 +151,7 @@ class TestPathAndIndexHelpers(unittest.TestCase):
         self.assertIsNone(parse_dvb_path(""))
         self.assertIsNone(parse_dvb_path(None))
         self.assertTrue(is_dvb_path("dvb://WKYC-HD"))
-        self.assertFalse(is_dvb_path("/home/richardb/Videos/TV/show.ts"))
+        self.assertFalse(is_dvb_path("/home/user/Videos/TV/show.ts"))
         self.assertTrue(is_follow_path("-"))
         self.assertTrue(is_follow_path("fd://0"))
         self.assertTrue(is_follow_path(FOLLOW_FIFO_PATH))

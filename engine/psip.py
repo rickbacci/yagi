@@ -583,6 +583,7 @@ def collect_guide_events(
     """Read every tower's listings on whichever tuner is free, one tower per hold.
 
     A recording that wants the tuner gets it between towers. Live TV gets it mid-tower.
+    Each read corrects video and audio PIDs from that tower's PMT.
     """
     from engine import pool
     if dump_fn is not None and adapter_id is None:
