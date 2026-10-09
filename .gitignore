@@ -4,4 +4,6 @@ __pycache__/
 *.tmp
 .coverage
 htmlcov/
+mockups/
+.t/
 
