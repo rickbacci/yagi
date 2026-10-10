@@ -293,6 +293,8 @@ class DvrSession:
                 os.unlink(self.socket_path)
             except OSError:
                 pass
+        from engine.argv_safe import release_pid
+        release_pid(self.pid)
 
         return True
 
@@ -612,15 +614,25 @@ class DvrManager:
         start_byte, started = Timeshift.byte_at(cls._show_start(channel_number, now), now)
         service_id = int(Timeshift.service_id(tune_name) or 0)
         file_path = cls._new_file(rec_dir, channel_number, station, program_title)
-        proc = subprocess.Popen(
-            own_scope(
-                [sys.executable, LIVE_COPY_PY, str(live["file"]), file_path, str(start_byte), str(service_id)],
-                slice_name=REC_SLICE,
-            ),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        from engine.argv_safe import HeldLinks, remember
+        shield = HeldLinks()
+        try:
+            cmd = shield.rewrite(
+                own_scope(
+                    [sys.executable, LIVE_COPY_PY, str(live["file"]), file_path, str(start_byte), str(service_id)],
+                    slice_name=REC_SLICE,
+                ),
+                titles=[program_title],
+            )
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            shield.release()
+            raise
         chmod_private_file(file_path)
         side = {
             "title": program_title,
@@ -643,8 +655,10 @@ class DvrManager:
                     pass
             side["status"] = "failed"
             write_sidecar(file_path, side)
+            shield.release()
             raise RuntimeError("Could not copy the live picture. The partial file was kept.")
         write_sidecar(file_path, side)
+        remember(proc.pid, shield)
         session = DvrSession(
             session_id=f"dvr-{sanitize_filename(channel_number)}-{int(now)}",
             channel_number=channel_number,
@@ -807,12 +821,18 @@ class DvrManager:
             cmd.append("--dvbin-full-transponder=yes")
         cmd.append(f"dvb://{tune_name}")
 
-        proc = subprocess.Popen(
-            own_scope(cmd, slice_name=REC_SLICE),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        from engine.argv_safe import HeldLinks, remember
+        shield = HeldLinks()
+        try:
+            proc = subprocess.Popen(
+                shield.rewrite(own_scope(cmd, slice_name=REC_SLICE), titles=[program_title]),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception:
+            shield.release()
+            raise
         chmod_private_file(file_path)
         if not cls.wait_until_growing(proc, file_path):
             if proc.poll() is None:
@@ -822,9 +842,11 @@ class DvrManager:
                     pass
             side["status"] = "failed"
             write_sidecar(file_path, side)
+            shield.release()
             raise RuntimeError(
                 "Recorder did not start writing. The partial file was kept."
             )
+        remember(proc.pid, shield)
 
         write_sidecar(file_path, side)
         session = DvrSession(
@@ -907,6 +929,8 @@ class DvrManager:
 
         results = []
         for entry in os.scandir(rec_dir):
+            if entry.name.startswith(".yagi-"):
+                continue
             if entry.is_file(follow_symlinks=False) and entry.name.lower().endswith((".ts", ".mkv", ".mp4")):
                 try:
                     stat = entry.stat()

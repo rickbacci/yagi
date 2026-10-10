@@ -97,14 +97,20 @@ def _maps(side: Dict[str, Any]) -> List[str]:
 
 
 def ffmpeg_ads(path: str, side: Dict[str, Any]) -> List[List[float]]:
-    cmd = [
-        "nice", "-n", "19", "ffmpeg", "-hide_banner", "-nostats", "-nostdin", "-i", path,
-        *_maps(side),
-        "-vf", "scale=192:-2,blackdetect=d=0.1:pic_th=0.90:pix_th=0.12",
-        "-af", "silencedetect=noise=-50dB:d=0.1",
-        "-f", "null", "-",
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=DETECT_TIMEOUT_SEC)
+    from engine.argv_safe import HeldLinks
+
+    shield = HeldLinks()
+    try:
+        cmd = [
+            "nice", "-n", "19", "ffmpeg", "-hide_banner", "-nostats", "-nostdin", "-i", shield.hide(path),
+            *_maps(side),
+            "-vf", "scale=192:-2,blackdetect=d=0.1:pic_th=0.90:pix_th=0.12",
+            "-af", "silencedetect=noise=-50dB:d=0.1",
+            "-f", "null", "-",
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=DETECT_TIMEOUT_SEC)
+    finally:
+        shield.release()
     blacks, silences = parse_detect_log(res.stderr)
     return breaks_from(blacks, silences)
 
@@ -133,12 +139,18 @@ def _with_program_table(path: str, side: Dict[str, Any], folder: str) -> Optiona
             return None
     except OSError:
         return None
+    from engine.argv_safe import HeldLinks
+
     dest = os.path.join(folder, "source.ts")
-    res = subprocess.run(
-        ["nice", "-n", "19", "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", path,
-         *_maps(side), "-c", "copy", "-f", "mpegts", dest],
-        capture_output=True, timeout=DETECT_TIMEOUT_SEC,
-    )
+    shield = HeldLinks()
+    try:
+        res = subprocess.run(
+            ["nice", "-n", "19", "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", shield.hide(path),
+             *_maps(side), "-c", "copy", "-f", "mpegts", dest],
+            capture_output=True, timeout=DETECT_TIMEOUT_SEC,
+        )
+    finally:
+        shield.release()
     return dest if res.returncode == 0 and os.path.isfile(dest) else None
 
 
@@ -154,11 +166,19 @@ def comskip_ads(exe: str, path: str, side: Optional[Dict[str, Any]] = None) -> L
         ini = os.path.join(out, "comskip.ini")
         with open(ini, "w", encoding="utf-8") as f:
             f.write("output_edl=1\noutput_txt=0\noutput_default=0\nverbose=0\n")
-        subprocess.run(
-            ["nice", "-n", "19", exe, f"--ini={ini}", f"--output={out}", "--quiet", source],
-            capture_output=True, timeout=DETECT_TIMEOUT_SEC,
-        )
-        edl = os.path.join(out, os.path.splitext(os.path.basename(source))[0] + ".edl")
+        from engine.argv_safe import HeldLinks
+
+        shield = HeldLinks()
+        edl = ""
+        try:
+            seen = shield.hide(source)
+            subprocess.run(
+                ["nice", "-n", "19", exe, f"--ini={ini}", f"--output={out}", "--quiet", seen],
+                capture_output=True, timeout=DETECT_TIMEOUT_SEC,
+            )
+            edl = os.path.join(out, os.path.splitext(os.path.basename(seen))[0] + ".edl")
+        finally:
+            shield.release()
         try:
             with open(edl, encoding="utf-8") as f:
                 return parse_edl(f.read())
@@ -167,14 +187,19 @@ def comskip_ads(exe: str, path: str, side: Optional[Dict[str, Any]] = None) -> L
 
 
 def media_seconds(path: str) -> float:
+    from engine.argv_safe import HeldLinks
+
+    shield = HeldLinks()
     try:
         res = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", shield.hide(path)],
             capture_output=True, text=True, timeout=60,
         )
         return float(res.stdout.strip() or 0)
     except (OSError, subprocess.SubprocessError, ValueError):
         return 0.0
+    finally:
+        shield.release()
 
 
 def believable(breaks: List[List[float]], seconds: float) -> bool:
@@ -204,7 +229,7 @@ def waiting_marks(recordings_dir: str, min_bytes: int) -> List[str]:
     except OSError:
         return []
     for entry in entries:
-        if not entry.name.endswith(".ts") or not entry.is_file(follow_symlinks=False):
+        if entry.name.startswith(".yagi-") or not entry.name.endswith(".ts") or not entry.is_file(follow_symlinks=False):
             continue
         side = read_sidecar(entry.path)
         if (

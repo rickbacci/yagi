@@ -691,6 +691,7 @@ class MpvController:
             self._wait_until_stopped()
         else:
             self._reap_stale_window()
+        self._drop_play_link()
 
         hud_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "tv_hud.lua")
         cli_bin = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "bin", "yagi")
@@ -756,6 +757,9 @@ class MpvController:
             ])
         else:
             cmd.append("--force-seekable=yes")
+            from engine.argv_safe import HeldLinks
+            self._play_link = HeldLinks()
+            play_url = self._play_link.hide(file_path)
         Timeshift.ensure_dir()
         log_path = os.path.join(TIMESHIFT_DIR, "hud.log")
         touch_private_file(log_path)
@@ -937,11 +941,18 @@ class MpvController:
                 pass
             self.proc = None
 
+    def _drop_play_link(self) -> None:
+        held = getattr(self, "_play_link", None)
+        if held is not None:
+            held.release()
+            self._play_link = None
+
     def stop(self) -> None:
         """Close TV. The live slice holds the window, dump, and follower, so nothing outlives it."""
         if self.is_running():
             self.send_command(["quit"])
         self._wait_until_stopped()
+        self._drop_play_link()
         Timeshift.wipe()
         if not in_unit(LIVE_SLICE):
             stop_unit(LIVE_SLICE)
