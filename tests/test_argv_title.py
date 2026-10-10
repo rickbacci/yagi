@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 SECRET = "SECRET-SHOW-TITLE"
+SHORT_TITLES = ("", "X", "Up", "24", "M*A*S*H", SECRET)
 
 
 def _joined(cmd) -> str:
@@ -75,6 +76,51 @@ class TestRecorderArgv(unittest.TestCase):
             _assert_clean(self, cmd)
             self.assertTrue(os.path.samefile(cmd[-3], session.file_path))
             self.assertIn(SECRET, os.path.basename(session.file_path))
+
+    def test_every_title_length_is_hidden_with_no_fallback(self):
+        from engine.argv_safe import HeldLinks
+        from engine.dvr import DvrManager
+
+        fake = MagicMock()
+        fake.pid = 424242
+        fake.poll.return_value = None
+        for title in SHORT_TITLES:
+            with tempfile.TemporaryDirectory() as tmp:
+                channels = os.path.join(tmp, "channels.json")
+                with open(channels, "w", encoding="utf-8") as f:
+                    json.dump([{"channel_number": "8.1", "station": "FOX", "tune_name": "8.1"}], f)
+                with patch("subprocess.Popen", return_value=fake) as popen, \
+                        patch("engine.tuner.TunerManager.adapter_is_free", return_value=True), \
+                        patch.object(DvrManager, "wait_until_growing", return_value=True):
+                    session = DvrManager.start_recording(
+                        "8.1", duration=60, program_title=title,
+                        recordings_dir=tmp, channels_file=channels,
+                        active_path=os.path.join(tmp, "active.json"),
+                    )
+                cmd = popen.call_args[0][0]
+                base = os.path.basename(session.file_path)
+                for part in cmd:
+                    self.assertNotIn(base, str(part), title)
+                if title and not all(c in "0123456789abcdef" for c in title):
+                    self.assertNotIn(title, _joined(cmd))
+                dump = next(part.split("=", 1)[1] for part in cmd if str(part).startswith("--stream-dump="))
+                self.assertTrue(dump.startswith("/dev/fd/") or os.path.basename(dump).startswith(".yagi-"))
+                self.assertTrue(os.path.samefile(dump, session.file_path))
+                from engine.argv_safe import release_pid
+                release_pid(session.pid)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            titled = os.path.join(tmp, "8.1-FOX_X_20260101_000000.ts")
+            with open(titled, "wb") as f:
+                f.write(b"\x47" * 188)
+            shield = HeldLinks()
+            with patch("engine.argv_safe.os.link", side_effect=OSError("cross-device")):
+                hidden = shield.hide(titled)
+            self.assertTrue(hidden.startswith("/dev/fd/"))
+            self.assertNotIn(os.path.basename(titled), hidden)
+            self.assertNotIn("X_20260101", hidden)
+            self.assertIn(shield.fds[0], shield.fds)
+            shield.release()
 
 
 class TestPlaybackAndToolsArgv(unittest.TestCase):

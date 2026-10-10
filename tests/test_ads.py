@@ -99,7 +99,10 @@ class TestComskipSeesTheProgram(unittest.TestCase):
                 self.assertEqual(ads.comskip_ads("/usr/bin/comskip", path, {"service_id": 3}), [[100.5, 130.0]])
             remux, comskip = calls
             self.assertIn("-c", remux)
-            self.assertEqual(remux[remux.index("-i") + 1], path)
+            shown = remux[remux.index("-i") + 1]
+            self.assertNotEqual(shown, path)
+            self.assertTrue(os.path.basename(shown).startswith(".yagi-"))
+            self.assertNotIn(os.path.basename(path), shown)
             self.assertEqual(os.path.dirname(os.path.dirname(comskip[-1])), d)
             self.assertNotEqual(comskip[-1], path)
             self.assertEqual(os.listdir(d), ["show.ts"])
@@ -117,7 +120,10 @@ class TestComskipSeesTheProgram(unittest.TestCase):
                     mock.patch.object(ads.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
                 self.assertEqual(ads.comskip_ads("/usr/bin/comskip", path), [])
             self.assertEqual(run.call_count, 1)
-            self.assertEqual(run.call_args[0][0][-1], path)
+            shown = run.call_args[0][0][-1]
+            self.assertNotEqual(shown, path)
+            self.assertTrue(os.path.basename(shown).startswith(".yagi-"))
+            self.assertNotIn(os.path.basename(path), shown)
 
 
 class TestFinish(unittest.TestCase):

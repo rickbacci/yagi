@@ -791,7 +791,8 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self.assertIn("--hwdec=auto-safe", cmd)
         self.assertNotIn("--hwdec=no", cmd)
         self.assertIn("--force-seekable=yes", cmd)
-        self.assertEqual(cmd[-1], rec)
+        self.assertTrue(os.path.samefile(cmd[-1], rec))
+        self.assertNotEqual(os.path.basename(cmd[-1]), os.path.basename(rec))
 
     @patch("subprocess.Popen")
     def test_launch_file_leaves_the_program_to_the_hud(self, mock_popen):
