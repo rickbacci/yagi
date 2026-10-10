@@ -622,13 +622,13 @@ class DvrManager:
                     [sys.executable, LIVE_COPY_PY, str(live["file"]), file_path, str(start_byte), str(service_id)],
                     slice_name=REC_SLICE,
                 ),
-                titles=[program_title],
             )
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                pass_fds=tuple(shield.fds),
             )
         except Exception:
             shield.release()
@@ -825,10 +825,11 @@ class DvrManager:
         shield = HeldLinks()
         try:
             proc = subprocess.Popen(
-                shield.rewrite(own_scope(cmd, slice_name=REC_SLICE), titles=[program_title]),
+                shield.rewrite(own_scope(cmd, slice_name=REC_SLICE)),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
+                pass_fds=tuple(shield.fds),
             )
         except Exception:
             shield.release()

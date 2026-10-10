@@ -108,7 +108,10 @@ def ffmpeg_ads(path: str, side: Dict[str, Any]) -> List[List[float]]:
             "-af", "silencedetect=noise=-50dB:d=0.1",
             "-f", "null", "-",
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=DETECT_TIMEOUT_SEC)
+        res = subprocess.run(
+            cmd, capture_output=True, text=True, errors="replace",
+            timeout=DETECT_TIMEOUT_SEC, pass_fds=tuple(shield.fds),
+        )
     finally:
         shield.release()
     blacks, silences = parse_detect_log(res.stderr)
@@ -147,7 +150,7 @@ def _with_program_table(path: str, side: Dict[str, Any], folder: str) -> Optiona
         res = subprocess.run(
             ["nice", "-n", "19", "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", shield.hide(path),
              *_maps(side), "-c", "copy", "-f", "mpegts", dest],
-            capture_output=True, timeout=DETECT_TIMEOUT_SEC,
+            capture_output=True, timeout=DETECT_TIMEOUT_SEC, pass_fds=tuple(shield.fds),
         )
     finally:
         shield.release()
@@ -174,7 +177,7 @@ def comskip_ads(exe: str, path: str, side: Optional[Dict[str, Any]] = None) -> L
             seen = shield.hide(source)
             subprocess.run(
                 ["nice", "-n", "19", exe, f"--ini={ini}", f"--output={out}", "--quiet", seen],
-                capture_output=True, timeout=DETECT_TIMEOUT_SEC,
+                capture_output=True, timeout=DETECT_TIMEOUT_SEC, pass_fds=tuple(shield.fds),
             )
             edl = os.path.join(out, os.path.splitext(os.path.basename(seen))[0] + ".edl")
         finally:
@@ -193,7 +196,7 @@ def media_seconds(path: str) -> float:
     try:
         res = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", shield.hide(path)],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=60, pass_fds=tuple(shield.fds),
         )
         return float(res.stdout.strip() or 0)
     except (OSError, subprocess.SubprocessError, ValueError):

@@ -772,6 +772,7 @@ class MpvController:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
+            pass_fds=tuple(getattr(self, "_play_link", None).fds) if getattr(self, "_play_link", None) else (),
         )
         if fifo_fd is not None:
             os.close(fifo_fd)

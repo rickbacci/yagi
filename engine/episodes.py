@@ -299,7 +299,9 @@ def in_use(path: str) -> bool:
 
     shield = HeldLinks()
     try:
-        res = subprocess.run(["fuser", shield.hide(path)], capture_output=True, timeout=2)
+        res = subprocess.run(
+            ["fuser", shield.hide(path)], capture_output=True, timeout=2, pass_fds=tuple(shield.fds),
+        )
     except FileNotFoundError:
         return False
     except Exception:

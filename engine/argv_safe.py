@@ -1,63 +1,56 @@
-"""Keep programme titles out of child argv.
+"""Keep library paths out of child argv.
 
-A recording's filename carries the show. Other users can read
-/proc/PID/cmdline, so a child is handed a hard link whose name does not.
-The titled name stays on disk for the library. The link is the same inode,
-so growth, fuser, and playback still see the file.
+Every recording file handed to another process is a neutral hard link
+(.yagi-<hex>.ext) on the same inode. There is no check of the title, its
+length, or whether the name looks generic. If the link cannot be created,
+the child gets an inherited /dev/fd/N instead. The titled path is never
+the fallback.
 """
 
 from __future__ import annotations
 
 import os
 import uuid
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 _OPEN: dict = {}
 
 
-def _tokens(titles: Iterable[object], path: str = "") -> List[str]:
-    from engine.dvr import read_sidecar, sanitize_filename
-
-    raw = [str(item or "").strip() for item in titles]
-    if path:
-        side = read_sidecar(path)
-        raw.append(str(side.get("title") or ""))
-        for ep in side.get("episodes") or []:
-            if isinstance(ep, dict):
-                raw.append(str(ep.get("title") or ""))
-    out = []
-    for item in raw:
-        if len(item) >= 3 and item not in out:
-            out.append(item)
-        safe = sanitize_filename(item)
-        if len(safe) >= 3 and safe not in out and safe != "recording":
-            out.append(safe)
-    return out
+def _neutral(path: str) -> bool:
+    return os.path.basename(path).startswith(".yagi-")
 
 
-def _leaks(path: str, titles: Iterable[object]) -> bool:
-    if not path or path.startswith(("dvb://", "fd://", "/dev/fd/")):
+def _shield_file(path: str) -> bool:
+    """A real library file. URLs, sockets, and links we already made are not."""
+    if not path or not isinstance(path, str):
+        return False
+    if path.startswith(("dvb://", "fd://", "/dev/fd/", "/proc/self/fd/")):
+        return False
+    if _neutral(path):
         return False
     try:
-        if not os.path.isfile(path):
-            return False
+        return os.path.isfile(path)
     except OSError:
         return False
-    base = os.path.basename(path)
-    if base.startswith(".yagi-"):
-        return False
-    return any(token in base for token in _tokens(titles, path))
 
 
 class HeldLinks:
-    """Neutral hard links that stay until the child is done with the path."""
+    """Neutral names and inherited fds kept until the child is finished."""
 
     def __init__(self) -> None:
         self.links: List[str] = []
+        self.fds: List[int] = []
 
     def hide(self, path: str, titles: Iterable[object] = ()) -> str:
-        if not _leaks(path, titles):
+        del titles
+        if not _shield_file(path):
             return path
+        try:
+            return self._hardlink(path)
+        except OSError:
+            return self._fd(path)
+
+    def _hardlink(self, path: str) -> str:
         ext = os.path.splitext(path)[1] or ".ts"
         folder = os.path.dirname(os.path.abspath(path)) or "."
         link = os.path.join(folder, f".yagi-{uuid.uuid4().hex}{ext}")
@@ -65,15 +58,23 @@ class HeldLinks:
         self.links.append(link)
         return link
 
+    def _fd(self, path: str) -> str:
+        try:
+            fd = os.open(path, os.O_RDWR)
+        except OSError as exc:
+            raise RuntimeError("refusing to pass a library path on a child command line") from exc
+        self.fds.append(fd)
+        return f"/dev/fd/{fd}"
+
     def rewrite(self, cmd: List[str], titles: Iterable[object] = ()) -> List[str]:
+        del titles
         out = []
         for arg in cmd:
             prefix, path = _split_opt(arg)
             if path is None:
                 out.append(arg)
                 continue
-            hidden = self.hide(path, titles)
-            out.append(prefix + hidden if prefix else hidden)
+            out.append(prefix + self.hide(path) if prefix else self.hide(path))
         return out
 
     def release(self) -> None:
@@ -83,12 +84,18 @@ class HeldLinks:
             except OSError:
                 pass
         self.links.clear()
+        for fd in self.fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self.fds.clear()
 
 
-def _split_opt(arg: str):
-    if not isinstance(arg, str) or arg.startswith("-") and "=" not in arg:
-        return "", arg if _looks_like_path(arg) else None
-    if "=" in arg and arg.startswith("--"):
+def _split_opt(arg: str) -> Tuple[str, Optional[str]]:
+    if not isinstance(arg, str) or (arg.startswith("-") and "=" not in arg):
+        return "", arg if isinstance(arg, str) and _looks_like_path(arg) else None
+    if arg.startswith("--") and "=" in arg:
         prefix, value = arg.split("=", 1)
         if _looks_like_path(value):
             return prefix + "=", value
@@ -99,11 +106,10 @@ def _split_opt(arg: str):
 
 
 def _looks_like_path(value: str) -> bool:
-    if not value or value.startswith(("dvb://", "fd://")):
+    """A library media file. Binaries, sockets, and configs are not titles."""
+    if not value or value.startswith(("dvb://", "fd://", "/dev/fd/", "/proc/self/fd/")):
         return False
-    if value.startswith("/") or value.startswith("./") or value.startswith("../"):
-        return True
-    return os.path.sep in value or value.lower().endswith((".ts", ".mkv", ".mp4", ".json"))
+    return value.lower().endswith((".ts", ".mkv", ".mp4"))
 
 
 def remember(pid: int, held: HeldLinks) -> None:
