@@ -295,12 +295,17 @@ def _episode_side(side: Dict[str, Any], ep: Dict[str, Any], source: str, lo: int
 
 
 def in_use(path: str) -> bool:
+    from engine.argv_safe import HeldLinks
+
+    shield = HeldLinks()
     try:
-        res = subprocess.run(["fuser", path], capture_output=True, timeout=2)
+        res = subprocess.run(["fuser", shield.hide(path)], capture_output=True, timeout=2)
     except FileNotFoundError:
         return False
     except Exception:
         return True
+    finally:
+        shield.release()
     return res.returncode == 0
 
 

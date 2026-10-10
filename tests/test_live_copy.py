@@ -181,7 +181,10 @@ class TestStartLiveCopy(unittest.TestCase):
                 )
             cmd = popen.call_args[0][0]
             self.assertTrue(cmd[-5].endswith("live_copy.py"))
-            self.assertEqual(cmd[-4:], ["/cache/live.ts", session.file_path, "1880", "5"])
+            self.assertEqual(cmd[-4], "/cache/live.ts")
+            self.assertTrue(os.path.samefile(cmd[-3], session.file_path))
+            self.assertNotIn("Home_Improvement", " ".join(cmd))
+            self.assertEqual(cmd[-2:], ["1880", "5"])
             self.assertTrue(session.copies_live)
             self.assertEqual((session.adapter_id, session.socket_path, session.start_time), (0, "", 1000.0))
             side = read_sidecar(session.file_path)
