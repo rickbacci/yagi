@@ -245,20 +245,39 @@ BarWidget {
     root.ruleList = list
   }
 
+  // Personal fields go on stdin. Argv stays the fixed verb so procfs does not show the title.
+  function flushStdin(proc) {
+    if (!proc.stdinPayload) return
+    var cmd = proc.command || []
+    var wants = false
+    for (var i = 0; i < cmd.length; i++) if (cmd[i] === "--stdin") wants = true
+    if (!wants) return
+    var payload = proc.stdinPayload
+    proc.stdinPayload = ""
+    proc.write(payload)
+    proc.stdinEnabled = false
+  }
+
+  function runPrivate(proc, argv, details) {
+    proc.stdinPayload = JSON.stringify(details || {})
+    proc.stdinEnabled = true
+    proc.running = false
+    proc.command = argv.concat(["--stdin"])
+    proc.running = true
+  }
+
   function toggleRecordAll(show) {
     if (!show) return
-    ruleProc.running = false
     if (show.id && root.ruleIds[show.id]) {
-      ruleProc.command = [root.binPath, "series", "remove", show.id]
+      root.runPrivate(ruleProc, [root.binPath, "series", "remove"], { target: show.id })
     } else {
       if (!show.tune_name) return
-      ruleProc.command = [
-        root.binPath, "series", "add", show.tune_name,
-        "--title", show.title || "",
-        "--channel", show.channel || ""
-      ]
+      root.runPrivate(ruleProc, [root.binPath, "series", "add"], {
+        target: show.tune_name,
+        title: show.title || "",
+        channel: show.channel || ""
+      })
     }
-    ruleProc.running = true
   }
 
   function applySchedule(raw) {
@@ -274,19 +293,18 @@ BarWidget {
   function scheduleLater(show) {
     if (!show || !show.tune_name || !show.gps_start) return
     var dur = Math.max(60, Number(show.duration_sec) || 1800)
-    schedProc.running = false
-    var cmd = [
-      root.binPath, "record", "later", show.tune_name, String(dur),
-      "--title", show.title || "Scheduled",
-      "--gps", String(show.gps_start),
-      "--clock", show.start || "",
-      "--end-clock", show.end || "",
-      "--display-name", show.display_name || show.tune_name
-    ]
-    if (show.channel_number) cmd.push("--channel", String(show.channel_number))
-    if (Model.isGameTitle(show.title)) cmd.push("--extra", Model.gameExtraMin() + "m")
-    schedProc.command = cmd
-    schedProc.running = true
+    var details = {
+      target: show.tune_name,
+      duration: String(dur),
+      title: show.title || "Scheduled",
+      gps: Number(show.gps_start) || 0,
+      clock: show.start || "",
+      end_clock: show.end || "",
+      display_name: show.display_name || show.tune_name
+    }
+    if (show.channel_number) details.channel = String(show.channel_number)
+    if (Model.isGameTitle(show.title)) details.extra = Model.gameExtraMin() + "m"
+    root.runPrivate(schedProc, [root.binPath, "record", "later"], details)
   }
 
   function scheduledId(show) {
@@ -329,9 +347,7 @@ BarWidget {
 
   function removeScheduled(itemId) {
     if (!itemId) return
-    schedProc.running = false
-    schedProc.command = [root.binPath, "record", "unlater", itemId]
-    schedProc.running = true
+    root.runPrivate(schedProc, [root.binPath, "record", "unlater"], { target: itemId })
   }
 
   function useStripShow(show) {
@@ -578,15 +594,11 @@ BarWidget {
 
   function playRecording(filePath, playable) {
     if (playable === false) return
-    recPlayProc.running = false
-    recPlayProc.command = [root.binPath, "record", "play", filePath]
-    recPlayProc.running = true
+    root.runPrivate(recPlayProc, [root.binPath, "record", "play"], { target: filePath })
   }
 
   function deleteRecording(filePath) {
-    dvrProc.running = false
-    dvrProc.command = [root.binPath, "record", "delete", filePath]
-    dvrProc.running = true
+    root.runPrivate(dvrProc, [root.binPath, "record", "delete"], { target: filePath })
   }
 
   function listLen() {
@@ -713,22 +725,15 @@ BarWidget {
 
   function startRecord(chName, duration, title) {
     if (!chName) return
-    dvrProc.running = false
-    var cmd = [root.binPath, "record", "start", chName]
-    if (duration) cmd.push(duration)
-    if (title) {
-      cmd.push("--title")
-      cmd.push(title)
-    }
-    dvrProc.command = cmd
-    dvrProc.running = true
+    var details = { target: chName }
+    if (duration) details.duration = String(duration)
+    if (title) details.title = title
+    root.runPrivate(dvrProc, [root.binPath, "record", "start"], details)
   }
 
   function stopRecord(chName) {
     if (!chName) return
-    dvrProc.running = false
-    dvrProc.command = [root.binPath, "record", "stop", chName]
-    dvrProc.running = true
+    root.runPrivate(dvrProc, [root.binPath, "record", "stop"], { target: chName })
   }
 
   function toggleRecord(chName) {
@@ -919,9 +924,7 @@ BarWidget {
 
   function tuneNow(chName) {
     root.activeChannelName = chName
-    tuneProc.running = false
-    tuneProc.command = [root.binPath, "play", chName]
-    tuneProc.running = true
+    root.runPrivate(tuneProc, [root.binPath, "play"], { channel: chName })
   }
 
   function cycleListed(delta) {
@@ -1046,18 +1049,19 @@ BarWidget {
 
   function setRecordingKept(rec, keep) {
     if (!rec) return
-    dvrProc.running = false
-    dvrProc.command = [root.binPath, "record", keep ? "keep" : "unkeep", rec.path || rec.name]
-    dvrProc.running = true
+    root.runPrivate(dvrProc, [root.binPath, "record", keep ? "keep" : "unkeep"], {
+      target: rec.path || rec.name
+    })
   }
 
   function cycleShowLimit(show) {
     if (!show || !root.ruleIds[show.id]) return
     var cur = root.ruleKeep[show.id] || 0
     var next = cur === 0 ? 10 : (cur === 10 ? 30 : 0)
-    ruleProc.running = false
-    ruleProc.command = [root.binPath, "series", "keep", show.id, String(next)]
-    ruleProc.running = true
+    root.runPrivate(ruleProc, [root.binPath, "series", "keep"], {
+      target: show.id,
+      count: String(next)
+    })
   }
 
   function showLimitText(show) {
@@ -1118,17 +1122,13 @@ BarWidget {
   function hideListed(ch) {
     var num = ch ? String(ch.channel_number || "") : ""
     if (!num) return
-    hiddenProc.running = false
-    hiddenProc.command = [root.binPath, "hidden", "hide", num]
-    hiddenProc.running = true
+    root.runPrivate(hiddenProc, [root.binPath, "hidden", "hide"], { channel: num })
   }
 
   function showListed(ch) {
     var num = ch ? String(ch.channel_number || "") : ""
     if (!num) return
-    hiddenProc.running = false
-    hiddenProc.command = [root.binPath, "hidden", "show", num]
-    hiddenProc.running = true
+    root.runPrivate(hiddenProc, [root.binPath, "hidden", "show"], { channel: num })
   }
 
 
@@ -1255,8 +1255,7 @@ BarWidget {
   }
 
   function toggleFavorite(chName) {
-    favProc.command = [root.binPath, "favorite", "toggle", chName]
-    favProc.running = true
+    root.runPrivate(favProc, [root.binPath, "favorite", "toggle"], { channel: chName })
   }
 
   implicitWidth: row.implicitWidth + Style.space(12)
@@ -1616,7 +1615,9 @@ BarWidget {
 
   Process {
     id: ruleProc
+    property string stdinPayload: ""
     command: []
+    onStarted: root.flushStdin(ruleProc)
     onExited: function(code) {
       rulesFile.reload()
     }
@@ -1633,7 +1634,9 @@ BarWidget {
 
   Process {
     id: schedProc
+    property string stdinPayload: ""
     command: []
+    onStarted: root.flushStdin(schedProc)
     onExited: function(code) {
       scheduleFile.reload()
     }
@@ -1667,7 +1670,9 @@ BarWidget {
   // Processes for tuning & scan
   Process {
     id: tuneProc
+    property string stdinPayload: ""
     command: []
+    onStarted: root.flushStdin(tuneProc)
     onExited: function(code) {
       playerStateFile.reload()
       tuneStatusFile.reload()
@@ -1683,7 +1688,9 @@ BarWidget {
 
   Process {
     id: recPlayProc
+    property string stdinPayload: ""
     command: []
+    onStarted: root.flushStdin(recPlayProc)
     onExited: function(code) {
       playerStateFile.reload()
       if (code === 0) {
@@ -1701,7 +1708,9 @@ BarWidget {
 
   Process {
     id: favProc
+    property string stdinPayload: ""
     command: []
+    onStarted: root.flushStdin(favProc)
     onExited: function(code) {
       favoritesFile.reload()
     }
@@ -1709,7 +1718,9 @@ BarWidget {
 
   Process {
     id: hiddenProc
+    property string stdinPayload: ""
     command: []
+    onStarted: root.flushStdin(hiddenProc)
     onExited: function(code) {
       hiddenFile.reload()
     }
@@ -1779,7 +1790,9 @@ BarWidget {
 
   Process {
     id: dvrProc
+    property string stdinPayload: ""
     command: []
+    onStarted: root.flushStdin(dvrProc)
     onExited: function(code) {
       recordingsActiveFile.reload()
       recordingsFile.reload()

@@ -65,6 +65,7 @@ def save_rules(rules: List[Dict[str, Any]], path: Optional[str] = None) -> None:
         json.dump({"rules": rules}, f, indent=2)
     chmod_private_file(tmp)
     os.replace(tmp, target)
+    chmod_private_file(target)
 
 
 def add_rule(

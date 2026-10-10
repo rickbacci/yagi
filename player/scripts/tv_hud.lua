@@ -1688,18 +1688,20 @@ mp.add_forced_key_binding("r", "tv_record_toggle", function()
     local ch_ident = ch.tune_name or ch.name or ch.channel_number
     local rec = recording_for_channel(ch)
     local cli = tv_cli()
-    local args
+    local args, ident
     if rec then
-        local ident = rec.tune_name or rec.channel_number or ch_ident
-        args = {cli, "record", "stop", tostring(ident)}
+        ident = rec.tune_name or rec.channel_number or ch_ident
+        args = {cli, "record", "stop", "--stdin"}
     else
-        args = {cli, "record", "start", tostring(ch_ident)}
+        ident = ch_ident
+        args = {cli, "record", "start", "--stdin"}
     end
     mp.command_native_async({
         name = "subprocess",
         playback_only = false,
         capture_stdout = true,
-        args = args
+        args = args,
+        stdin_data = utils.format_json({ target = tostring(ident) }),
     }, function()
         reload_data()
         show_hud()
