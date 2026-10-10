@@ -22,6 +22,45 @@ from engine.paths import CHANNELS_JSON_PATH, FAVORITES_JSON_PATH, UI_PREFS_PATH,
 from player.controller import MpvController
 
 
+def apply_stdin(args, fields):
+    """Overlay personal fields from one JSON object on stdin. Argv still works without --stdin."""
+    if not getattr(args, "stdin", False):
+        return
+    raw = sys.stdin.read()
+    try:
+        data = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        print("Error: --stdin was not a JSON object.")
+        sys.exit(1)
+    if not isinstance(data, dict):
+        print("Error: --stdin expected a JSON object.")
+        sys.exit(1)
+    for key in fields:
+        if key not in data or data[key] is None:
+            continue
+        value = data[key]
+        if key == "gps":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                value = 0
+        elif key == "weekday":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                value = -1
+        elif key == "query":
+            if isinstance(value, str):
+                value = value.split()
+            elif isinstance(value, list):
+                value = [str(part) for part in value]
+            else:
+                value = [str(value)]
+        elif not isinstance(value, str):
+            value = str(value)
+        setattr(args, key, value)
+
+
 def cmd_status(args):
     if getattr(args, "count", False):
         from engine import pool
@@ -166,6 +205,7 @@ def cmd_list(args):
 
 
 def cmd_guide(args):
+    apply_stdin(args, ("query", "title", "clock", "length", "weekday", "channel", "tune", "alias", "id"))
     from engine.guide import (
         _WEEKDAY_NAMES,
         _load_history,
@@ -408,6 +448,7 @@ def cmd_pref(args):
 
 
 def cmd_favorite(args):
+    apply_stdin(args, ("channel",))
     from engine.favorites import favorite_key, favorite_label
     favs = load_favorites()
     action = args.action or "list"
@@ -443,6 +484,7 @@ def cmd_favorite(args):
 
 
 def cmd_hidden(args):
+    apply_stdin(args, ("channel",))
     from engine.hidden import hide_channel, load_hidden, show_channel
 
     action = args.action or "list"
@@ -470,6 +512,10 @@ def cmd_hidden(args):
 
 
 def cmd_play(args):
+    apply_stdin(args, ("channel",))
+    if not args.channel:
+        print("Name a channel. Example: yagi play \"8.1 FOX\"")
+        sys.exit(1)
     player = MpvController()
     print(f"📺 Tuning to: {args.channel}...")
     success = player.tune(args.channel)
@@ -599,6 +645,10 @@ def _grab_guide_if_due():
 
 
 def cmd_record(args):
+    apply_stdin(args, (
+        "target", "duration", "title", "gps", "clock", "end_clock",
+        "display_name", "extra", "channel",
+    ))
     from engine.dvr import DvrManager, MIN_PLAYABLE_BYTES
     action = args.action or "list"
 
@@ -822,6 +872,7 @@ def cmd_record(args):
 
 def cmd_series(args):
     """Record every airing of a show: list, add, remove, keep."""
+    apply_stdin(args, ("target", "title", "channel", "count"))
     from engine.rules import add_rule, arm_rules, load_rules, remove_rule, set_keep_last
     action = args.action or "list"
 
@@ -915,17 +966,20 @@ def main():
     p_guide.add_argument("--tune", default="", help="Tune name")
     p_guide.add_argument("--alias", default="", help="Another title for this slot")
     p_guide.add_argument("--id", default="", help="Slot id")
+    p_guide.add_argument("--stdin", action="store_true", help="Read the search or slot details as one JSON object on stdin")
     p_guide.set_defaults(func=cmd_guide)
 
     # favorite
     p_fav = subparsers.add_parser("favorite", aliases=["fav", "favorites"], help="Manage favorite channels")
     p_fav.add_argument("action", nargs="?", choices=["list", "add", "remove", "toggle"], default="list", help="Action to perform")
     p_fav.add_argument("channel", nargs="?", help="Channel name to favorite")
+    p_fav.add_argument("--stdin", action="store_true", help="Read the channel as JSON on stdin")
     p_fav.set_defaults(func=cmd_favorite)
 
     p_hid = subparsers.add_parser("hidden", help="Stations set aside from Watchable and Favorites")
     p_hid.add_argument("action", nargs="?", choices=["list", "hide", "show"], default="list")
     p_hid.add_argument("channel", nargs="?", help="Channel number, such as 19.1")
+    p_hid.add_argument("--stdin", action="store_true", help="Read the channel number as JSON on stdin")
     p_hid.set_defaults(func=cmd_hidden)
 
     p_pref = subparsers.add_parser("pref", help="UI preferences")
@@ -935,7 +989,8 @@ def main():
 
     # play
     p_play = subparsers.add_parser("play", help="Play a channel")
-    p_play.add_argument("channel", help="Channel name or callsign to tune")
+    p_play.add_argument("channel", nargs="?", default="", help="Channel name or callsign to tune")
+    p_play.add_argument("--stdin", action="store_true", help="Read the channel as JSON on stdin")
     p_play.set_defaults(func=cmd_play)
 
     p_relaunch = subparsers.add_parser("pip-relaunch", help=argparse.SUPPRESS)
@@ -991,6 +1046,7 @@ def main():
     p_rec.add_argument("--display-name", dest="display_name", default="", help="Station line")
     p_rec.add_argument("--extra", default="", help="Extra time after the show, e.g. 30m")
     p_rec.add_argument("--channel", default="", help="For later: the channel number, when two channels share a station name")
+    p_rec.add_argument("--stdin", action="store_true", help="Read the channel, title, and schedule as one JSON object on stdin")
     p_rec.set_defaults(func=cmd_record)
 
     p_series = subparsers.add_parser("series", help="Record every airing of a show")
@@ -1000,6 +1056,7 @@ def main():
     p_series.add_argument("count", nargs="?", help="For keep: how many episodes, 0 for all")
     p_series.add_argument("--title", default="", help="Show title")
     p_series.add_argument("--channel", default="", help="Channel number")
+    p_series.add_argument("--stdin", action="store_true", help="Read the station, title, and channel as one JSON object on stdin")
     p_series.set_defaults(func=cmd_series)
 
     args = parser.parse_args()

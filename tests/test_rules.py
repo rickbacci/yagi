@@ -37,6 +37,10 @@ class TestRecordAll(unittest.TestCase):
     def _arm(self, channels, now):
         return arm_rules(channels, now=now, rules_path=self.rules, schedule_path=self.schedule)
 
+    def test_rules_file_is_private(self):
+        add_rule("M*A*S*H", "19.2", "MeTV", path=self.rules)
+        self.assertEqual(os.stat(self.rules).st_mode & 0o777, 0o600)
+
     def test_rule_add_and_remove(self):
         rule = add_rule("That '70s Show", "5.3", "WEWS-3", path=self.rules)
         self.assertEqual(rule["id"], show_id("that 70s show", "5.3"))
