@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5
+
+- A missing `fuser` is treated as busy. The library size cap will not delete the recording you are watching when it cannot tell which files are open.
+- Tests: the bar is instantiated with Qt 6 against a checked-in Omarchy stub, and that load fails on the 0.1.1 widget that put a hover handler in the keyboard panel.
+
 ## 0.1.4
 
 - The bar widget loads again. Guide search imports Quickshell and Quickshell.Io, which provide Process and StdioCollector. Without those imports the shell rejected the page.

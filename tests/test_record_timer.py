@@ -91,10 +91,21 @@ class TestOwnScope(unittest.TestCase):
         # tests/__init__.py points XDG_RUNTIME_DIR at a sandbox, so a user
         # manager on the real runtime dir would otherwise look absent.
         import tests
+        try:
+            with open("/proc/1/comm", encoding="utf-8") as handle:
+                pid1 = handle.read().strip()
+        except OSError:
+            pid1 = ""
+        if pid1 != "systemd":
+            self.skipTest("pid 1 is not systemd")
         real = getattr(tests, "_real_run", "") or ""
         private = os.path.join(real, "systemd", "private") if real else ""
         if not shutil.which("systemd-run") or not os.path.exists(private):
-            self.skipTest("no systemd user manager")
+            self.fail(
+                "systemd is pid 1 but the user manager socket is missing "
+                f"({private or 'no XDG_RUNTIME_DIR'}). Start user@.service "
+                "or loginctl enable-linger."
+            )
         env = os.environ.copy()
         env["XDG_RUNTIME_DIR"] = real
         with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": real}):
@@ -271,20 +282,18 @@ class TestGuideStepsAside(unittest.TestCase):
         self.assertIn("Failed to start", text)
         self.assertNotIn("Recording finish started", text)
 
-    def test_version_is_0_1_4(self):
+    def test_manifest_version_matches_the_changelog(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         with open(os.path.join(root, "manifest.json"), encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["version"], "0.1.4")
+            version = json.load(f)["version"]
         with open(os.path.join(root, "CHANGELOG.md"), encoding="utf-8") as f:
-            log = f.read()
-        self.assertIn("## 0.1.4", log)
-        self.assertIn("## 0.1.3", log)
-        self.assertIn("## 0.1.2", log)
-        self.assertIn("## 0.1.1", log)
-        self.assertIn("clipboard", log)
-        self.assertIn("hover handler", log)
-        self.assertIn("52 53", log)
-        self.assertIn("own user service", log)
+            top = ""
+            for line in f:
+                if line.startswith("## "):
+                    top = line.strip().removeprefix("## ").strip()
+                    break
+        self.assertEqual(version, top)
+        self.assertEqual(version, "0.1.5")
 
     def test_a_second_finish_steps_aside_without_dropping_the_lock(self):
         from engine.episodes import FINISH_LOCK_KEY, finish_recordings

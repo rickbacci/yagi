@@ -13,6 +13,7 @@ trimmed to the same span a split episode gets. Games keep every minute.
 import os
 import re
 import subprocess
+import sys
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -294,7 +295,16 @@ def _episode_side(side: Dict[str, Any], ep: Dict[str, Any], source: str, lo: int
     return keep
 
 
+_fuser_missing_logged = False
+
+
 def in_use(path: str) -> bool:
+    """True when something has the file open, or when fuser cannot be asked.
+
+    A missing fuser used to look like 'not open', and the size cap then deleted
+    the recording that was playing. Not knowing is treated as busy.
+    """
+    global _fuser_missing_logged
     from engine.argv_safe import HeldLinks
 
     shield = HeldLinks()
@@ -303,7 +313,13 @@ def in_use(path: str) -> bool:
             ["fuser", shield.hide(path)], capture_output=True, timeout=2, pass_fds=tuple(shield.fds),
         )
     except FileNotFoundError:
-        return False
+        if not _fuser_missing_logged:
+            _fuser_missing_logged = True
+            print(
+                "fuser is not installed; treating recordings as busy so the size cap will not delete one that is playing.",
+                file=sys.stderr,
+            )
+        return True
     except Exception:
         return True
     finally:

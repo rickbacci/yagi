@@ -1,0 +1,13 @@
+module qs.Ui
+KeyboardPanel 1.0 KeyboardPanel.qml
+PanelKeyCatcher 1.0 PanelKeyCatcher.qml
+Button 1.0 Button.qml
+TextField 1.0 TextField.qml
+Panel 1.0 Panel.qml
+PopupCard 1.0 PopupCard.qml
+Toggle 1.0 Toggle.qml
+Dropdown 1.0 Dropdown.qml
+CursorSurface 1.0 CursorSurface.qml
+BorderSurface 1.0 BorderSurface.qml
+PanelActionButton 1.0 PanelActionButton.qml
+PanelToolTip 1.0 PanelToolTip.qml

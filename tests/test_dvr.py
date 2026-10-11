@@ -2,12 +2,14 @@
 Unit tests for Dual-Tuner DVR Engine.
 """
 
+import io
 import os
 import json
 import time
 import threading
 import unittest
 import tempfile
+from contextlib import redirect_stderr
 from unittest.mock import patch, MagicMock
 
 from engine.dvr import (
@@ -220,6 +222,45 @@ class TestDvrEngine(unittest.TestCase):
                 )
             self.assertEqual(removed, [paths[1]])
             self.assertTrue(os.path.exists(paths[0]))
+
+    def test_a_missing_fuser_does_not_delete_any_recording(self):
+        """FileNotFoundError used to mean 'not open', and the cap deleted the file."""
+        import engine.episodes as episodes
+
+        episodes._fuser_missing_logged = False
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            paths = []
+            for i, name in enumerate(["old.ts", "new.ts"]):
+                path = os.path.join(tmp_dir, name)
+                with open(path, "wb") as handle:
+                    handle.write(b"x" * 3000)
+                os.utime(path, (1000 + i, 1000 + i))
+                paths.append(path)
+
+            def missing_fuser(*_args, **_kwargs):
+                raise FileNotFoundError("fuser")
+
+            err = io.StringIO()
+            with patch("engine.episodes.subprocess.run", side_effect=missing_fuser), \
+                    patch("engine.dvr.resolve_library_budget_bytes", return_value=1), \
+                    redirect_stderr(err):
+                removed = DvrManager.enforce_library_budget(
+                    recordings_dir=tmp_dir,
+                    active_path=os.path.join(tmp_dir, "active.json"),
+                    rules_path=os.path.join(tmp_dir, "rules.json"),
+                )
+                again = DvrManager.enforce_library_budget(
+                    recordings_dir=tmp_dir,
+                    active_path=os.path.join(tmp_dir, "active.json"),
+                    rules_path=os.path.join(tmp_dir, "rules.json"),
+                )
+            self.assertEqual(removed, [])
+            self.assertEqual(again, [])
+            self.assertTrue(os.path.exists(paths[0]))
+            self.assertTrue(os.path.exists(paths[1]))
+            logged = err.getvalue()
+            self.assertEqual(logged.count("fuser is not installed"), 1)
+            self.assertIn("treating recordings as busy", logged)
 
     def _library(self, tmp_dir, rows):
         paths = {}

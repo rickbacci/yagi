@@ -301,11 +301,44 @@ def _used_types(text):
     return types
 
 
+# Uppercase name before a dot. Qt and Easing come with QtQuick. Screen is QtQuick.Window.
+SINGLETON_IMPORT = {
+    "Color": "qs.Commons",
+    "Style": "qs.Commons",
+    "Border": "qs.Commons",
+    "Quickshell": "Quickshell",
+    "Screen": "QtQuick.Window",
+    "Qt": "QtQuick",
+    "Easing": "QtQuick",
+    "Keys": "QtQuick",
+    "Component": "QtQuick",
+    "Text": "QtQuick",
+}
+
+
+def _singleton_uses(text):
+    tokens = list(_tokenize(text))
+    uses = []
+    for i, (kind, value, line) in enumerate(tokens):
+        if kind != "ident" or not value[:1].isupper():
+            continue
+        if i + 1 >= len(tokens) or tokens[i + 1][0] != "dot":
+            continue
+        if i > 0 and tokens[i - 1][0] == "dot":
+            continue
+        if i > 0 and tokens[i - 1] == ("ident", "import", tokens[i - 1][2]):
+            continue
+        uses.append((value, line))
+    return uses
+
+
 def missing_import_problems(text, path, sibling_types):
-    """A type used as an object must come from an import or a sibling file."""
+    """A type or singleton used here must come from an import or a sibling file."""
+    imported = set(_imports(text))
+    aliases = set(re.findall(r'import\s+"[^"]+"\s+as\s+(\w+)', text))
     provided = set(sibling_types)
     provided.update(re.findall(r"\bcomponent\s+([A-Z]\w*)", text))
-    for name in _imports(text):
+    for name in imported:
         if name not in MODULE_TYPES:
             continue
         provided.update(MODULE_TYPES[name])
@@ -315,6 +348,14 @@ def missing_import_problems(text, path, sibling_types):
             continue
         where = f"{path}:{line}" if path else str(line)
         problems.append(f"{where}: {type_name} is used but no import in this file provides it")
+    for name, line in _singleton_uses(text):
+        if name in aliases or name in sibling_types:
+            continue
+        need = SINGLETON_IMPORT.get(name)
+        if need is None or need in imported:
+            continue
+        where = f"{path}:{line}" if path else str(line)
+        problems.append(f"{where}: {name} needs `import {need}`")
     return problems
 
 
@@ -369,6 +410,23 @@ class TestQmlItems(unittest.TestCase):
         self.assertEqual(editable_input_problems(src), [])
         missing = "Loader {\n  active: guide.searchOpen\n  TextArea {}\n}\n"
         self.assertTrue(editable_input_problems(missing))
+
+    def test_color_without_commons_import_is_rejected(self):
+        src = "import QtQuick\nItem { color: Color.accent }\n"
+        found = missing_import_problems(src, "", set())
+        self.assertTrue(any("Color" in item and "qs.Commons" in item for item in found))
+        src = "import QtQuick\nimport qs.Commons\nItem { color: Color.accent }\n"
+        self.assertEqual(missing_import_problems(src, "", set()), [])
+        for name, need, use in (
+            ("Style", "qs.Commons", "Style.gapsOut"),
+            ("Border", "qs.Commons", "Border.controlSpec"),
+            ("Quickshell", "Quickshell", "Quickshell.env"),
+        ):
+            bare = f"import QtQuick\nItem {{ property var x: {use} }}\n"
+            found = missing_import_problems(bare, "", set())
+            self.assertTrue(any(name in item and need in item for item in found), found)
+            imported = f"import QtQuick\nimport {need}\nItem {{ property var x: {use} }}\n"
+            self.assertEqual(missing_import_problems(imported, "", set()), [])
 
     def test_a_type_without_its_import_is_rejected(self):
         src = "import QtQuick\nItem {\n  Process {}\n}\n"

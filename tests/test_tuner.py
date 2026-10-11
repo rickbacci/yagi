@@ -6,9 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from engine.tuner import (
-    LIVE_ADAPTER,
     TunerManager,
-    WORK_ADAPTER,
     _FE_READ_SIGNAL_STRENGTH,
     _FE_READ_SNR,
     _FE_READ_STATUS,
@@ -106,9 +104,13 @@ class TestTuner(unittest.TestCase):
         with patch("engine.tuner.glob.glob", return_value=["/dev/dvb/adapterX"]):
             self.assertEqual(TunerManager.list_tuners(), [])
 
-    def test_job_adapters_are_pinned(self):
-        self.assertEqual(LIVE_ADAPTER, 0)
-        self.assertEqual(WORK_ADAPTER, 1)
+    def test_live_takes_the_first_free_tuner_and_other_work_the_last(self):
+        from engine.pool import pick_live, pick_work
+
+        self.assertEqual(pick_live({}), 0)
+        self.assertEqual(pick_work({}), 1)
+        self.assertEqual(pick_live({0: "record"}), 1)
+        self.assertEqual(pick_work({1: "live"}), 0)
         self.assertFalse(TunerManager.adapter_is_free(99))
 
 
