@@ -1,6 +1,7 @@
-import QtQuick 6.4
+import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 import "Model.js" as Model
 
 Item {
@@ -21,7 +22,7 @@ Item {
     anchors.fill: parent
     visible: showRow.tv.cursorActive && showRow.tv.guideCursor === showRow.index
     radius: Style.spacing.labelGap
-    color: Style.hoverFillFor(showRow.tv.bar.foreground, Color.accent)
+    color: Style.hoverFillFor(showRow.tv.bar.foreground, C.Color.accent)
   }
 
   MouseArea {
@@ -44,7 +45,7 @@ Item {
     anchors.top: parent.top
     anchors.bottom: parent.bottom
     width: Style.space(3)
-    color: showRow.willRecord ? Color.urgent : Color.accent
+    color: showRow.willRecord ? C.Color.urgent : C.Color.accent
   }
 
   Column {
@@ -60,7 +61,7 @@ Item {
       width: parent.width
       textFormat: Text.PlainText
       text: showRow.modelData.title || ""
-      color: showRow.modelData.pattern || showRow.onNow || showRow.willRecord ? showRow.tv.bar.foreground : Color.muted
+      color: showRow.modelData.pattern || showRow.onNow || showRow.willRecord ? showRow.tv.bar.foreground : C.Color.muted
       font.family: showRow.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       font.bold: showRow.onNow || showRow.willRecord
@@ -71,7 +72,7 @@ Item {
       width: parent.width
       textFormat: Text.PlainText
       text: Model.showSubLine(showRow.modelData, showRow.tv.stationFor(showRow.modelData.channel))
-      color: Color.muted
+      color: C.Color.muted
       font.family: showRow.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       elide: Text.ElideRight

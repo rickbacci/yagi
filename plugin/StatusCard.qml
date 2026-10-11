@@ -1,6 +1,7 @@
-import QtQuick 6.4
+import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 
 // One accent line: the Guide updating, or shows waiting to record.
 BorderSurface {
@@ -13,8 +14,8 @@ BorderSurface {
   visible: card.message !== ""
   implicitHeight: statusRow.implicitHeight + Style.space(12)
   radius: Style.spacing.labelGap
-  color: Style.selectedFillFor(card.tv.bar.foreground, Color.accent)
-  borderSpec: Border.controlSpec("normal", card.tv.bar.foreground, Color.accent)
+  color: Style.selectedFillFor(card.tv.bar.foreground, C.Color.accent)
+  borderSpec: Border.controlSpec("normal", card.tv.bar.foreground, C.Color.accent)
 
   Item {
     id: statusRow
@@ -38,7 +39,7 @@ BorderSurface {
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       text: card.message
-      color: Color.accent
+      color: C.Color.accent
       font.family: card.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       font.bold: true

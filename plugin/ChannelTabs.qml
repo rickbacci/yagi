@@ -1,4 +1,4 @@
-import QtQuick 6.4
+import QtQuick
 import qs.Ui
 import qs.Commons
 

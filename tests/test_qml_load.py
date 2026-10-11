@@ -217,7 +217,18 @@ def _harness(qml_file, create, required, bind_required=True):
             "  guideRefreshing: false, guideWaitReason: '', guideStatusError: '',",
             "  guideStatusTowers: 0, guideStatusTower: 0, scheduleLine: '',",
             "  tunePhase: '', tuneMessage: '', tuneDisplay: '', tuneName: '', tuneSnr: '',",
-            "  pendingWatch: '', ruleIds: {},",
+            "  pendingWatch: '', ruleIds: {}, tunerCount: 2, showChannelBrowser: false,",
+            "  hiddenData: [], liveOn: false, gridStart: 0, gridEnd: 0,",
+            "  isLiveSession: false, pauseKept: false, scanBand: '',",
+            "  recordingsData: [], libraryShowSubtitle: '', libraryBytesLabel: '',",
+            "  libraryBudgetLabel: '', recCursorIndex: 0,",
+            "  getActiveDisplayNameFor: function() { return '' },",
+            "  libraryCapButtonText: function() { return '' },",
+            "  recordingTitle: function() { return '' },",
+            "  showLimitText: function() { return '' },",
+            "  freeTunerForRecording: function() { return false },",
+            "  setChannelFilter: function() {},",
+            "  cycleLibraryCap: function() {}, keepPause: function() {},",
             "  getActiveProgram: function() { return null },",
             "  getProgram: function() { return null },",
             "  getActiveDisplayName: function() { return '' },",
@@ -326,8 +337,25 @@ def stub_members():
     return found
 
 
+def _commons_color(tokens, index):
+    """True for Color or for C.Color when C is `import qs.Commons as C`."""
+    if index > 0 and tokens[index - 1][1] == "import":
+        return False
+    if index > 0 and tokens[index - 1][0] == "dot":
+        return (
+            tokens[index][1] == "Color"
+            and index >= 2
+            and tokens[index - 2][0] == "ident"
+        )
+    return True
+
+
 def singleton_member_problems(text):
-    """Color.accent is checked against the stub. Qt 6.4 reads a missing one as undefined."""
+    """Color.accent and C.Color.accent are checked against the stub.
+
+    Qt 6.4 reads a missing member as undefined. Qt 6.12's QtQuick.Color
+    wins the unqualified name, so the plugin uses the qualifier.
+    """
     tokens = list(_tokenize(text))
     members = stub_members()
     problems = []
@@ -336,7 +364,7 @@ def singleton_member_problems(text):
             continue
         if i + 2 >= len(tokens) or tokens[i + 1][0] != "dot" or tokens[i + 2][0] != "ident":
             continue
-        if i > 0 and (tokens[i - 1][0] == "dot" or tokens[i - 1][1] == "import"):
+        if not _commons_color(tokens, i):
             continue
         owner = value
         j = i + 2
@@ -555,6 +583,11 @@ class TestQmlLoads(unittest.TestCase):
             "noSuchMember" in output or "non-existent property" in output,
             output,
         )
+        qualified = singleton_member_problems(
+            "import QtQuick\nimport qs.Commons as C\n"
+            "Item { property color c: C.Color.noSuchMember }\n"
+        )
+        self.assertTrue(any("noSuchMember" in item for item in qualified), qualified)
 
     def test_a_page_missing_its_required_property_does_not_instantiate(self):
         src = "import QtQuick\nItem {\n  required property var tv\n}\n"

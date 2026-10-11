@@ -1,6 +1,7 @@
-import QtQuick 6.4
+import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 
 BorderSurface {
   id: card
@@ -9,8 +10,8 @@ BorderSurface {
   visible: card.tv.pendingWatch !== ""
   implicitHeight: bothBusyCol.implicitHeight + Style.space(12)
   radius: Style.spacing.labelGap
-  color: Style.selectedFillFor(card.tv.bar.foreground, Color.urgent)
-  borderSpec: Border.controlSpec("normal", card.tv.bar.foreground, Color.urgent)
+  color: Style.selectedFillFor(card.tv.bar.foreground, C.Color.urgent)
+  borderSpec: Border.controlSpec("normal", card.tv.bar.foreground, C.Color.urgent)
 
   Column {
     id: bothBusyCol
@@ -44,7 +45,7 @@ BorderSurface {
           text: "Stop " + (stopBtn.modelData.program_title || card.tv.recordingTitle(stopBtn.modelData))
           tooltipText: "Stop this recording and watch. What it recorded so far is kept"
           fontSize: Style.font.heading
-          foreground: Color.urgent
+          foreground: C.Color.urgent
           onClicked: card.tv.stopToWatch(stopBtn.modelData)
         }
       }

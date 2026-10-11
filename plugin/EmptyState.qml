@@ -1,6 +1,7 @@
-import QtQuick 6.4
+import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 
 Item {
   id: empty
@@ -20,7 +21,7 @@ Item {
     Text {
       anchors.horizontalCenter: parent.horizontalCenter
       text: empty.title
-      color: Color.muted
+      color: C.Color.muted
       font.family: empty.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       font.bold: empty.titleBold
@@ -29,7 +30,7 @@ Item {
     Text {
       anchors.horizontalCenter: parent.horizontalCenter
       text: empty.detail
-      color: Color.muted
+      color: C.Color.muted
       font.family: empty.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
     }

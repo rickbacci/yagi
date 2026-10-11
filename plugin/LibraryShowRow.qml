@@ -1,6 +1,7 @@
-import QtQuick 6.4
+import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 
 CursorSurface {
   id: showRow
@@ -11,7 +12,7 @@ CursorSurface {
 
   height: Math.max(Style.space(64), showInfo.implicitHeight + Style.space(16))
   foreground: showRow.tv.bar.foreground
-  accent: Color.accent
+  accent: C.Color.accent
   hasCursor: showRow.tv.libraryModalOpen && showRow.tv.cursorActive && showRow.tv.recCursorIndex === showRow.recIndex
 
   MouseArea {
@@ -58,7 +59,7 @@ CursorSurface {
       width: parent.width
       textFormat: Text.PlainText
       text: showRow.line
-      color: Color.muted
+      color: C.Color.muted
       font.family: showRow.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       elide: Text.ElideRight

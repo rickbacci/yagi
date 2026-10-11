@@ -1,8 +1,9 @@
-import QtQuick 6.4
+import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 import "Model.js" as Model
 
 BarWidget {
@@ -1291,8 +1292,8 @@ BarWidget {
     YagiIcon {
       id: barIcon
       size: Math.round(Style.font.body * 1.35)
-      color: root.isRecording ? Color.urgent
-           : (root.activeChannelName !== "" || root.isScanning) ? Color.accent
+      color: root.isRecording ? C.Color.urgent
+           : (root.activeChannelName !== "" || root.isScanning) ? C.Color.accent
            : root.bar.barForeground
       anchors.verticalCenter: parent.verticalCenter
     }
@@ -1318,7 +1319,7 @@ BarWidget {
         visible: !root.isScanning && root.barWatchLabel() !== "" && root.barRecLabel() !== ""
         textFormat: Text.PlainText
         text: "·"
-        color: Color.accent
+        color: C.Color.accent
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.heading
         font.bold: true
@@ -1329,7 +1330,7 @@ BarWidget {
         visible: !root.isScanning && root.barRecLabel() !== ""
         textFormat: Text.PlainText
         text: root.barRecLabel()
-        color: Color.urgent
+        color: C.Color.urgent
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.heading
         font.bold: true
@@ -1340,7 +1341,7 @@ BarWidget {
         visible: root.isScanning
         textFormat: Text.PlainText
         text: root.barStatusText()
-        color: Color.accent
+        color: C.Color.accent
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.heading
         font.bold: true

@@ -1,6 +1,7 @@
-import QtQuick 6.4
+import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 
 Item {
   id: header
@@ -15,13 +16,13 @@ Item {
     anchors.left: parent.left
     anchors.verticalCenter: parent.verticalCenter
     radius: Style.spacing.labelGap
-    color: Style.normalFillFor(header.tv.bar.foreground, Color.accent)
-    borderSpec: Border.controlSpec("normal", header.tv.bar.foreground, Color.accent)
+    color: Style.normalFillFor(header.tv.bar.foreground, C.Color.accent)
+    borderSpec: Border.controlSpec("normal", header.tv.bar.foreground, C.Color.accent)
 
     YagiIcon {
       anchors.centerIn: parent
       size: Math.round(Style.font.display * 1.1)
-      color: Color.accent
+      color: C.Color.accent
     }
   }
 
@@ -80,7 +81,7 @@ Item {
           ? ((header.tv.watchableChannels || []).length + " channels · " + header.tv.favoriteVisibleCount + " favorites")
           : "No channels yet"
       }
-      color: header.tv.isScanning ? Color.accent : Color.muted
+      color: header.tv.isScanning ? C.Color.accent : C.Color.muted
       font.family: header.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       elide: Text.ElideRight

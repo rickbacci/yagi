@@ -325,6 +325,10 @@ def _singleton_uses(text):
         if i + 1 >= len(tokens) or tokens[i + 1][0] != "dot":
             continue
         if i > 0 and tokens[i - 1][0] == "dot":
+            # C.Color.accent is still the qs.Commons palette. The qualifier
+            # is required on Qt 6.12, where unqualified Color is QtQuick's.
+            if value == "Color" and i >= 2 and tokens[i - 2][0] == "ident":
+                uses.append((value, line))
             continue
         if i > 0 and tokens[i - 1] == ("ident", "import", tokens[i - 1][2]):
             continue

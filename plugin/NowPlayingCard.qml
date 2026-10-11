@@ -1,6 +1,7 @@
-import QtQuick 6.4
+import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 import "Model.js" as Model
 
 BorderSurface {
@@ -21,9 +22,9 @@ BorderSurface {
   implicitHeight: watchRow.implicitHeight + Style.space(12)
   radius: Style.spacing.labelGap
   color: tuneHot
-    ? Style.hoverFillFor(card.tv.bar.foreground, Color.accent)
-    : Style.selectedFillFor(card.tv.bar.foreground, Color.accent)
-  borderSpec: Border.controlSpec("normal", card.tv.bar.foreground, Color.accent)
+    ? Style.hoverFillFor(card.tv.bar.foreground, C.Color.accent)
+    : Style.selectedFillFor(card.tv.bar.foreground, C.Color.accent)
+  borderSpec: Border.controlSpec("normal", card.tv.bar.foreground, C.Color.accent)
 
   MouseArea {
     id: tuneAgainArea
@@ -99,7 +100,7 @@ BorderSurface {
         visible: card.showLine !== ""
         textFormat: Text.PlainText
         text: "·"
-        color: Color.accent
+        color: C.Color.accent
         font.family: card.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         anchors.verticalCenter: parent.verticalCenter
@@ -110,7 +111,7 @@ BorderSurface {
         width: Math.max(0, watchLine.width - watchChannel.width - watchDot.width - watchLine.spacing * 2)
         textFormat: Text.PlainText
         text: card.showLine
-        color: (!card.tv.tuning && card.tv.tunePhase === "failed" && card.showLine === card.tv.tuneMessage) ? Color.urgent : Color.accent
+        color: (!card.tv.tuning && card.tv.tunePhase === "failed" && card.showLine === card.tv.tuneMessage) ? C.Color.urgent : C.Color.accent
         font.family: card.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         elide: Text.ElideRight

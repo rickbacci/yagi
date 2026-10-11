@@ -1,6 +1,7 @@
-import QtQuick 6.4
+import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 
 Column {
   id: library
@@ -27,13 +28,13 @@ Column {
       anchors.left: parent.left
       anchors.verticalCenter: parent.verticalCenter
       radius: Style.spacing.labelGap
-      color: Style.normalFillFor(library.tv.bar.foreground, Color.accent)
-      borderSpec: Border.controlSpec("normal", library.tv.bar.foreground, Color.accent)
+      color: Style.normalFillFor(library.tv.bar.foreground, C.Color.accent)
+      borderSpec: Border.controlSpec("normal", library.tv.bar.foreground, C.Color.accent)
 
       Text {
         anchors.centerIn: parent
         text: "󰑈"
-        color: Color.accent
+        color: C.Color.accent
         font.family: library.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
       }
@@ -92,7 +93,7 @@ Column {
             ? (library.tv.recordingsData.length + (library.tv.recordingsData.length === 1 ? " recording · " : " recordings · ")
                + library.tv.libraryBytesLabel + (library.tv.libraryBudgetLabel && library.tv.libraryBudgetLabel !== "Unlimited" ? " of " + library.tv.libraryBudgetLabel : ""))
             : "Nothing recorded yet")
-        color: Color.muted
+        color: C.Color.muted
         font.family: library.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         elide: Text.ElideRight
@@ -135,7 +136,7 @@ Column {
       textFormat: Text.PlainText
       text: library.onRecorded ? "Record from the Guide, then play it back here."
                                : "Nothing scheduled. In the Guide, Record takes one airing and Record series takes every one."
-      color: Color.muted
+      color: C.Color.muted
       font.family: library.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
     }
@@ -188,7 +189,7 @@ Column {
               anchors.bottomMargin: Style.space(2)
               textFormat: Text.PlainText
               text: entry.modelData.title || ""
-              color: Color.muted
+              color: C.Color.muted
               font.family: library.tv.bar.fontFamily
               font.pixelSize: library.onRecorded ? Style.font.title : Style.font.heading
               font.bold: true

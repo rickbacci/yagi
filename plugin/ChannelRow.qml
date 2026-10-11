@@ -1,6 +1,7 @@
-import QtQuick 6.4
+import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 import "Model.js" as Model
 
 CursorSurface {
@@ -22,7 +23,7 @@ CursorSurface {
 
   height: Math.max(Style.space(36), chLine.implicitHeight + Style.space(12))
   foreground: chItem.tv.bar.foreground
-  accent: Color.accent
+  accent: C.Color.accent
   hasCursor: chItem.tv.cursorActive && chItem.tv.cursorIndex === index
   current: isCurrent
 
@@ -32,7 +33,7 @@ CursorSurface {
     anchors.top: parent.top
     anchors.bottom: parent.bottom
     width: Style.space(3)
-    color: chItem.isRecordingHere ? Color.urgent : Color.accent
+    color: chItem.isRecordingHere ? C.Color.urgent : C.Color.accent
   }
 
   MouseArea {
@@ -76,7 +77,7 @@ CursorSurface {
     fontSize: Style.font.heading
     iconText: chItem.isFav ? "★" : "☆"
     tooltipText: chItem.isFav ? "Remove favorite" : "Add favorite"
-    foreground: chItem.isFav ? Color.accent : Color.muted
+    foreground: chItem.isFav ? C.Color.accent : C.Color.muted
     fontFamily: chItem.tv.bar.fontFamily
     onClicked: chItem.tv.toggleFavorite(chItem.tv.listedKey(chItem.modelData))
   }
@@ -99,7 +100,7 @@ CursorSurface {
         id: chNum
         textFormat: Text.PlainText
         text: chItem.channelBadge
-        color: chItem.isCurrent ? Color.accent : chItem.tv.bar.foreground
+        color: chItem.isCurrent ? C.Color.accent : chItem.tv.bar.foreground
         font.family: chItem.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         font.bold: true
@@ -110,7 +111,7 @@ CursorSurface {
         width: Math.max(0, chLine.width - chLine.textX)
         textFormat: Text.PlainText
         text: chItem.onNow && chItem.onNow.title ? chItem.onNow.title : chItem.stationName
-        color: chItem.isCurrent ? Color.accent : chItem.tv.bar.foreground
+        color: chItem.isCurrent ? C.Color.accent : chItem.tv.bar.foreground
         font.family: chItem.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         font.bold: chItem.isCurrent
@@ -124,13 +125,13 @@ CursorSurface {
       width: Math.max(0, chLine.width - chLine.textX)
       height: Style.space(2)
       radius: height / 2
-      color: Style.normalFillFor(chItem.tv.bar.foreground, Color.accent)
+      color: Style.normalFillFor(chItem.tv.bar.foreground, C.Color.accent)
 
       Rectangle {
         width: parent.width * Math.max(0, chItem.progress)
         height: parent.height
         radius: parent.radius
-        color: Color.accent
+        color: C.Color.accent
       }
     }
 
@@ -140,7 +141,7 @@ CursorSurface {
       width: Math.max(0, chLine.width - chLine.textX)
       textFormat: Text.PlainText
       text: Model.channelSubLine(chItem.stationName, chItem.onNext)
-      color: Color.muted
+      color: C.Color.muted
       font.family: chItem.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       elide: Text.ElideRight

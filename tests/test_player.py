@@ -1468,7 +1468,7 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("root.tuneDisplay", src)
         self.assertIn("root.tunePhase === \"failed\"", src)
         self.assertNotIn("netColor", src)
-        self.assertIn("color: chItem.isRecordingHere ? Color.urgent : Color.accent", src)
+        self.assertIn("color: chItem.isRecordingHere ? C.Color.urgent : C.Color.accent", src)
         self.assertIn("Model.recordDurationArg", src)
         self.assertIn("isLiveSession", src)
         self.assertIn("isLibraryPlayback", src)
@@ -1478,10 +1478,10 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("function barRecLabel", src)
         self.assertIn("Model.getDisplayTitle(ch)", src)
         self.assertIn("YagiIcon {", src)
-        self.assertIn("root.isRecording ? Color.urgent", src)
+        self.assertIn("root.isRecording ? C.Color.urgent", src)
         self.assertIn('text: "·"', src)
         self.assertIn("color: root.bar.barForeground", src)
-        self.assertIn("color: Color.urgent", src)
+        self.assertIn("color: C.Color.urgent", src)
 
     def test_guide_strip_uses_lineup_and_omarchy_tokens(self):
         model = os.path.join(PROJECT_ROOT, "plugin", "Model.js")

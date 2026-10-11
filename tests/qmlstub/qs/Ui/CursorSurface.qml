@@ -4,4 +4,5 @@ Item {
   property color accent: "#88f"
   property bool hasCursor: false
   property bool current: false
+  property real radius: 0
 }

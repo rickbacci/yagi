@@ -1,8 +1,9 @@
-import QtQuick 6.4
+import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 
 Column {
   id: guide
@@ -104,7 +105,7 @@ Column {
         text: guide.tv.guideSearchText.length
               ? guide.tv.guideSearchText
               : (guide.onGrid ? "Search shows and teams" : "Filter shows")
-        color: guide.tv.guideSearchText.length ? guide.tv.bar.foreground : Color.muted
+        color: guide.tv.guideSearchText.length ? guide.tv.bar.foreground : C.Color.muted
         font.family: guide.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         elide: Text.ElideRight
@@ -190,7 +191,7 @@ Column {
       anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       text: guide.tv.gridMatchCount === 1 ? "1 match" : guide.tv.gridMatchCount + " matches"
-      color: Color.accent
+      color: C.Color.accent
       font.family: guide.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       font.bold: true
@@ -221,7 +222,7 @@ Column {
             ? "No favorites yet. Open All and click ☆ on a channel to add it here."
             : (guide.tv.guideWaitReason
                || "No listings yet for these channels. Each Guide update adds what the stations send.")
-    color: Color.muted
+    color: C.Color.muted
     font.family: guide.tv.bar.fontFamily
     font.pixelSize: Style.font.heading
     wrapMode: Text.Wrap
@@ -256,7 +257,7 @@ Column {
     textFormat: Text.PlainText
     text: guide.tv.showsLoading ? "Reading the Guide…"
           : (guide.tv.guideSearchActive ? "No show here matches." : "Nothing listed for this time yet. Each Guide update adds what the stations send.")
-    color: Color.muted
+    color: C.Color.muted
     font.family: guide.tv.bar.fontFamily
     font.pixelSize: Style.font.heading
     wrapMode: Text.Wrap
