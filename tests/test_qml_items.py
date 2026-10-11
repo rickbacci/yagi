@@ -113,6 +113,10 @@ def _tokenize(text):
             yield ("dot", ".", line)
             i += 1
             continue
+        if ch in "()":
+            yield (ch, ch, line)
+            i += 1
+            continue
         i += 1
 
 
@@ -154,6 +158,10 @@ def item_only_problems(text, path=""):
                 stack.pop()
             continue
         if kind == "dot":
+            continue
+        if kind in ("(", ")"):
+            pending = None
+            awaiting_value = False
             continue
         pending = None
         awaiting_value = False
@@ -248,6 +256,68 @@ def editable_input_problems(text, path=""):
     return problems
 
 
+# Types a file may use only when it imports the module that provides them.
+# Sibling .qml files in plugin/ are available without an import.
+MODULE_TYPES = {
+    "QtQuick": {
+        "Item", "Rectangle", "Text", "MouseArea", "Column", "Row", "Flickable",
+        "Repeater", "Loader", "Image", "Timer", "Flow", "NumberAnimation",
+        "HoverHandler", "Component", "ListView", "Grid", "TextInput", "TextEdit",
+        "TextArea", "ShaderEffect", "Canvas", "FocusScope", "AnimatedImage",
+    },
+    "QtQuick.Controls": {"TextField", "Button", "ScrollBar", "ComboBox", "Slider", "Label", "Popup", "Pane"},
+    "QtQuick.Effects": {"MultiEffect"},
+    "QtQuick.Layouts": {"ColumnLayout", "RowLayout", "GridLayout", "StackLayout"},
+    "QtQuick.Window": {"Window"},
+    "Quickshell": {"BarWidget", "IpcHandler", "PanelWindow", "Scope", "Variants"},
+    "Quickshell.Io": {"Process", "StdioCollector", "FileView", "SplitParser", "Socket"},
+    "Quickshell.Wayland": {"WlrLayershell"},
+    "qs.Ui": {
+        "Button", "CursorSurface", "KeyboardPanel", "PanelKeyCatcher",
+        "BorderSurface", "PanelActionButton", "PanelToolTip", "TextField",
+    },
+    "qs.Commons": set(),
+}
+
+
+def _imports(text):
+    found = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("import ") or stripped.startswith("import \""):
+            continue
+        parts = stripped.split()
+        if len(parts) >= 2:
+            found.append(parts[1])
+    return found
+
+
+def _used_types(text):
+    types = []
+    tokens = list(_tokenize(text))
+    for i, (kind, value, line) in enumerate(tokens):
+        if kind == "ident" and value[:1].isupper() and i + 1 < len(tokens) and tokens[i + 1][0] == "{":
+            types.append((value, line))
+    return types
+
+
+def missing_import_problems(text, path, sibling_types):
+    """A type used as an object must come from an import or a sibling file."""
+    provided = set(sibling_types)
+    provided.update(re.findall(r"\bcomponent\s+([A-Z]\w*)", text))
+    for name in _imports(text):
+        if name not in MODULE_TYPES:
+            continue
+        provided.update(MODULE_TYPES[name])
+    problems = []
+    for type_name, line in _used_types(text):
+        if type_name in provided:
+            continue
+        where = f"{path}:{line}" if path else str(line)
+        problems.append(f"{where}: {type_name} is used but no import in this file provides it")
+    return problems
+
+
 class TestQmlItems(unittest.TestCase):
     def test_hover_handler_directly_in_keyboard_panel_is_rejected(self):
         src = "KeyboardPanel {\n  HoverHandler {}\n  Item {}\n}\n"
@@ -299,6 +369,25 @@ class TestQmlItems(unittest.TestCase):
         self.assertEqual(editable_input_problems(src), [])
         missing = "Loader {\n  active: guide.searchOpen\n  TextArea {}\n}\n"
         self.assertTrue(editable_input_problems(missing))
+
+    def test_a_type_without_its_import_is_rejected(self):
+        src = "import QtQuick\nItem {\n  Process {}\n}\n"
+        found = missing_import_problems(src, "", set())
+        self.assertTrue(any("Process" in item for item in found))
+        src = "import QtQuick\nimport Quickshell.Io\nItem {\n  Process {}\n}\n"
+        self.assertEqual(missing_import_problems(src, "", set()), [])
+
+    def test_plugin_qml_imports_every_type_it_uses(self):
+        names = {name[:-4] for name in os.listdir(PLUGIN) if name.endswith(".qml")}
+        found = []
+        for name in sorted(os.listdir(PLUGIN)):
+            if not name.endswith(".qml"):
+                continue
+            path = os.path.join(PLUGIN, name)
+            siblings = names - {name[:-4]}
+            with open(path, encoding="utf-8") as handle:
+                found.extend(missing_import_problems(handle.read(), path, siblings))
+        self.assertEqual(found, [])
 
     def test_plugin_qml_keeps_editable_fields_inside_an_inactive_loader(self):
         found = []
