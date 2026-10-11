@@ -210,6 +210,86 @@ class TestGuideStepsAside(unittest.TestCase):
         again.assert_not_called()
         spawn_again.assert_not_called()
 
+    def test_recording_finish_is_its_own_service_with_a_neutral_name(self):
+        cli = _load_cli()
+        ok = subprocess.CompletedProcess([], 0, "", "")
+        allowed_env = {
+            "HOME", "PATH", "TZ", "XDG_RUNTIME_DIR", "XDG_CONFIG_HOME",
+            "XDG_CACHE_HOME", "XDG_VIDEOS_DIR",
+        }
+        with mock.patch("engine.paths.systemd_user", return_value=True), \
+                mock.patch.object(cli.subprocess, "run", return_value=ok) as run, \
+                mock.patch.object(cli.subprocess, "Popen") as spawn:
+            cli._start_recording_finish()
+            cli._start_recording_finish()
+        spawn.assert_not_called()
+        self.assertEqual(run.call_count, 2)
+        units = []
+        for call in run.call_args_list:
+            argv = call[0][0]
+            self.assertNotIn("--scope", argv)
+            self.assertIn("--description=Yagi recording finish", argv)
+            self.assertIn("RuntimeMaxSec=21600", argv)
+            self.assertEqual(argv[-2:], ["record", "finish"])
+            unit = next(part.split("=", 1)[1] for part in argv if part.startswith("--unit="))
+            units.append(unit)
+            self.assertNotIn(".ts", " ".join(argv))
+            for i, part in enumerate(argv):
+                if part != "-E":
+                    continue
+                key = argv[i + 1].split("=", 1)[0]
+                self.assertIn(key, allowed_env)
+        self.assertNotEqual(units[0], units[1])
+        self.assertRegex(units[0], r"^yagi-finish-[0-9a-f]{12}\.service$")
+        self.assertRegex(units[1], r"^yagi-finish-[0-9a-f]{12}\.service$")
+
+    def test_a_failed_finish_start_is_logged_and_not_called_started(self):
+        import io
+        from contextlib import redirect_stdout
+
+        cli = _load_cli()
+        failed = subprocess.CompletedProcess([], 1, "", "Failed to start transient service")
+        buf = io.StringIO()
+        with mock.patch("engine.paths.systemd_user", return_value=True), \
+                mock.patch.object(cli.subprocess, "run", return_value=failed), \
+                mock.patch.object(cli.subprocess, "Popen") as spawn, \
+                redirect_stdout(buf):
+            cli._start_recording_finish()
+        spawn.assert_not_called()
+        text = buf.getvalue()
+        self.assertIn("Recording finish left alone.", text)
+        self.assertIn("Failed to start", text)
+        self.assertNotIn("Recording finish started", text)
+
+    def test_version_is_0_1_1(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "manifest.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["version"], "0.1.1")
+        with open(os.path.join(root, "CHANGELOG.md"), encoding="utf-8") as f:
+            log = f.read()
+        self.assertIn("## 0.1.1", log)
+        self.assertIn("52 53", log)
+        self.assertIn("own user service", log)
+
+    def test_a_second_finish_steps_aside_without_dropping_the_lock(self):
+        from engine.episodes import FINISH_LOCK_KEY, finish_recordings
+        held, release = threading.Event(), threading.Event()
+
+        def hold():
+            with state_lock(FINISH_LOCK_KEY):
+                held.set()
+                release.wait(5)
+
+        other = threading.Thread(target=hold)
+        other.start()
+        held.wait(5)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                self.assertEqual(finish_recordings(d, 1000), [])
+        finally:
+            release.set()
+            other.join()
+
     def test_a_second_update_steps_aside(self):
         key = f"test-guide-update-{os.getpid()}"
         held, release = threading.Event(), threading.Event()

@@ -58,7 +58,7 @@ Built and tested on one Hauppauge WinTV-dualHD. See Tuners below.
 - First run: no stations until you scan, no Hidden list until you hide one, no Guide titles until `guide refresh` (what the stations send in PSIP). The engine does not ship a canned lineup. `markets/cleveland.json` is only an example you can copy in.
 - Super+K is Omarchy’s keybindings overlay. It does not open this flyout. Use the antenna, or bind `omarchy-shell -q shell toggle richardb.yagi` in your Hyprland config.
 - State JSON is not all `0600`.
-- Version in `manifest.json` is `0.1.0`. Not a published 1.0.
+- Version in `manifest.json` is `0.1.1`. Not a published 1.0.
 
 ## Tuners
 
