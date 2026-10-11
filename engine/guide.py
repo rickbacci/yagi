@@ -379,12 +379,24 @@ def merge_lineup(
     return merged
 
 
-def apply_program_events(channels: Dict[str, Any], events: Dict[str, List[Dict[str, Any]]]) -> None:
+def apply_program_events(channels: Dict[str, Any], events: Dict[str, List[Dict[str, Any]]]) -> Tuple[int, List[str]]:
+    """Attach listings to lineup channels. Returns how many channels got events, and keys that did not match.
+
+    parse_atsc_ts already maps a source id through the TVCT (and the lineup's
+    program number, when a station map renumbered the channel). A key that is
+    still not in the lineup is reported, not dropped quietly.
+    """
+    attached = 0
+    dropped: List[str] = []
     for number, programs in (events or {}).items():
-        if number not in channels or not isinstance(programs, list):
+        kept = [p for p in programs if isinstance(p, dict)] if isinstance(programs, list) else []
+        if number not in channels or not kept:
+            if kept:
+                dropped.append(str(number))
             continue
-        channels[number]["programs"] = [p for p in programs if isinstance(p, dict)]
+        channels[number]["programs"] = kept
         channels[number]["source"] = "psip"
+        attached += 1
         now_prog, next_prog = now_and_next(channels[number]["programs"])
         if now_prog:
             channels[number]["title"] = now_prog.get("title") or channels[number].get("title")
@@ -400,6 +412,14 @@ def apply_program_events(channels: Dict[str, Any], events: Dict[str, List[Dict[s
             channels[number]["next_title"] = next_prog.get("title") or ""
         elif not now_prog:
             channels[number]["next_title"] = ""
+    if dropped:
+        print(
+            "Guide dropped listings for "
+            + ", ".join(dropped)
+            + " (not in the lineup).",
+            flush=True,
+        )
+    return attached, dropped
 
 
 def guide_tuner_free() -> bool:
@@ -913,6 +933,88 @@ def arm_weekly_slots(
     return added
 
 
+def guide_retry_wait(failures: int) -> int:
+    """Seconds to wait after a failed grab. Two minutes, then double, capped at the normal gap."""
+    if failures <= 0:
+        return 0
+    return min(GUIDE_GRAB_GAP_SEC, 120 * (2 ** min(int(failures) - 1, 6)))
+
+
+def guide_backoff_active(status: Optional[Dict[str, Any]], now: float) -> bool:
+    """True when a recorded failure is still inside its backoff window."""
+    if not isinstance(status, dict):
+        return False
+    try:
+        failures = int(status.get("failures") or 0)
+        failed_at = float(status.get("failed_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    if failures <= 0 or failed_at <= 0:
+        return False
+    return float(now) < failed_at + guide_retry_wait(failures)
+
+
+def _guide_status_path(guide_path: str) -> str:
+    return os.path.join(os.path.dirname(guide_path) or ".", "guide_status.json")
+
+
+def note_guide_failure(reason: str, path: Optional[str] = None) -> None:
+    """Record why a grab did not attach listings, and push the next try back."""
+    from engine.psip import read_guide_status, write_guide_status
+
+    target = path or _guide_status_path(GUIDE_JSON_PATH)
+    prev = read_guide_status(target)
+    try:
+        failures = int(prev.get("failures") or 0) + 1
+    except (TypeError, ValueError):
+        failures = 1
+    now = time.time()
+    write_guide_status(
+        False,
+        int(prev.get("tower") or 0),
+        int(prev.get("towers") or 0),
+        path=target,
+        error=str(reason or "Guide update failed.")[:800],
+        failures=failures,
+        failed_at=now,
+        result_at=now,
+    )
+
+
+def mark_guide_attempt(path: Optional[str] = None) -> None:
+    """The timer has handed the grab to its own service. A crash before a result is visible."""
+    from engine.psip import read_guide_status, write_guide_status
+
+    target = path or _guide_status_path(GUIDE_JSON_PATH)
+    prev = read_guide_status(target)
+    write_guide_status(
+        False,
+        int(prev.get("tower") or 0),
+        int(prev.get("towers") or 0),
+        path=target,
+        attempt_at=time.time(),
+    )
+
+
+def settle_unfinished_attempt(path: Optional[str] = None) -> bool:
+    """A launch that never wrote a result. Count it once so the next ticks back off."""
+    from engine.psip import guide_update_running, read_guide_status
+
+    target = path or _guide_status_path(GUIDE_JSON_PATH)
+    if guide_update_running(target):
+        return False
+    status = read_guide_status(target)
+    try:
+        attempt = float(status.get("attempt_at") or 0)
+        result = float(status.get("result_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    if attempt <= 0 or result >= attempt:
+        return False
+    note_guide_failure("Guide update ended before it recorded a result.", path=target)
+    return True
+
+
 def refresh_guide(
     channels: Optional[List[Dict[str, Any]]] = None,
     guide_path: Optional[str] = None,
@@ -924,9 +1026,13 @@ def refresh_guide(
     """
     Write guide.json from the scanned lineup.
     Optional grabber fills programs on whichever tuner is free.
+    updated_at moves only when events attach to a lineup channel.
     reread marks the listings stale so the next timer tick reads them.
     """
+    from engine.psip import write_guide_status
+
     target = guide_path or GUIDE_JSON_PATH
+    status_path = _guide_status_path(target)
     lineup = channels
     if lineup is None:
         lineup = _read_channels_file(channels_path or CHANNELS_JSON_PATH)
@@ -946,12 +1052,44 @@ def refresh_guide(
     else:
         merged = dict(existing) if existing else {}
     skipped = False
+    attached = 0
+    dropped: List[str] = []
+    error = ""
     if grabber is not None:
-        if (epg_tuner_held(sessions) if sessions is not None else not guide_tuner_free()):
+        busy = epg_tuner_held(sessions) if sessions is not None else not guide_tuner_free()
+        if busy:
             skipped = True
+            error = "No free tuner."
         else:
-            apply_program_events(merged, grabber() or {})
-            read_at = time.time()
+            try:
+                events = grabber() or {}
+            except Exception as exc:
+                events = {}
+                error = str(exc)
+            if getattr(grabber, "last_skipped", False) and not events:
+                skipped = True
+                error = "No free tuner."
+            attached, dropped = apply_program_events(merged, events)
+            notes = [str(note) for note in (getattr(grabber, "last_notes", []) or []) if note]
+            yielded = bool(getattr(grabber, "last_yielded", False)) and not notes and not dropped and not error
+            if attached:
+                read_at = time.time()
+                error = ""
+            elif skipped or yielded:
+                skipped = True
+                if yielded:
+                    error = "Gave the tuner to live TV."
+                error = error or "No free tuner."
+            else:
+                parts = []
+                if error:
+                    parts.append(error)
+                if dropped:
+                    parts.append("Dropped " + ", ".join(dropped) + " (not in the lineup).")
+                parts.extend(notes)
+                if not parts:
+                    parts.append("No listings attached.")
+                error = " ".join(parts)[:800]
     remember_guide_history(
         merged,
         history_path=os.path.join(os.path.dirname(target), "guide_history.json"),
@@ -961,27 +1099,61 @@ def refresh_guide(
         for prog in (row.get("programs") or []) if isinstance(row, dict) else []:
             if isinstance(prog, dict) and prog.get("synopsis"):
                 prog["synopsis"] = collapse_repeats(str(prog["synopsis"]))
-    # updated_at is when the broadcast was last read. A lineup sync is not a read.
+    # updated_at is when listings last attached. A lineup sync is not a read,
+    # and neither is a grab that came back empty.
     if reread and grabber is None:
         read_at = 0.0
     payload = {"updated_at": read_at, "channels": merged, "source": "lineup"}
     _write_guide(payload, target)
-    return {"skipped": skipped, "channels": merged}
+    if grabber is not None:
+        now = time.time()
+        if attached:
+            leftover = ""
+            if dropped:
+                leftover = "Dropped " + ", ".join(dropped) + " (not in the lineup)."
+            write_guide_status(
+                False, 0, 0, path=status_path,
+                error=leftover, failures=0, failed_at=0, attempt_at=0, result_at=now,
+            )
+        elif skipped:
+            write_guide_status(False, 0, 0, path=status_path, error=error, result_at=now)
+        else:
+            note_guide_failure(error, path=status_path)
+    return {
+        "skipped": skipped,
+        "channels": merged,
+        "attached": attached,
+        "dropped": dropped,
+        "error": error,
+    }
 
 
 GUIDE_UPDATE_LOCK_KEY = "guide-update"
 
 
 def run_guide_update(grabber: Optional[Callable[[], Dict[str, List[Dict[str, Any]]]]] = None) -> str:
-    """The timer's Guide update, one at a time: done, skipped, or running."""
+    """The timer's Guide update, one at a time: done, skipped, failed, or running."""
     try:
         with state_lock(GUIDE_UPDATE_LOCK_KEY, timeout=0):
             if grabber is None:
                 from engine.psip import collect_guide_events as grabber
             result = refresh_guide(grabber=grabber)
     except TimeoutError:
+        run_guide_update.last_error = ""
         return "running"
-    return "skipped" if result.get("skipped") else "done"
+    except Exception as exc:
+        note_guide_failure(str(exc))
+        run_guide_update.last_error = str(exc)
+        return "failed"
+    run_guide_update.last_error = str(result.get("error") or "")
+    if result.get("skipped"):
+        return "skipped"
+    if not result.get("attached"):
+        return "failed"
+    return "done"
+
+
+run_guide_update.last_error = ""
 
 
 def sync_guide_from_channels(channels: List[Dict[str, Any]], guide_path: Optional[str] = None) -> Dict[str, Any]:

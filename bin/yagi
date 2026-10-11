@@ -228,8 +228,7 @@ def cmd_guide(args):
     if action == "update":
         from engine.guide import run_guide_update
         done = run_guide_update(grabber=collect_guide_events)
-        print({"done": "Guide refreshed.", "skipped": "Guide left alone — no free tuner.",
-               "running": "Guide update already running."}[done])
+        print(_guide_update_line(done), flush=True)
         return
     if action == "shows":
         from engine.shows import load_shows
@@ -343,12 +342,10 @@ def cmd_guide(args):
                 print(f"    After: {after}")
         return
     if getattr(args, "action", None) == "refresh":
-        result = refresh_guide(grabber=collect_guide_events)
-        if result.get("skipped"):
-            print("Guide left alone — Tuner 1 is recording.")
-        else:
-            print("Guide refreshed from Tuner 1 PSIP.")
-        guide = {"channels": result.get("channels") or {}}
+        from engine.guide import run_guide_update
+        done = run_guide_update(grabber=collect_guide_events)
+        print(_guide_update_line(done), flush=True)
+        guide = load_guide()
     else:
         refresh_guide(grabber=None)
         guide = load_guide()
@@ -616,15 +613,41 @@ def parse_duration_str(d_str):
         return int(float(d))
 
 
+def _guide_update_line(done: str) -> str:
+    from engine.guide import run_guide_update
+    if done == "failed":
+        detail = run_guide_update.last_error or "No listings attached."
+        return f"Guide update failed. {detail}"
+    return {
+        "done": "Guide refreshed.",
+        "skipped": "Guide left alone — no free tuner.",
+        "running": "Guide update already running.",
+    }.get(done, done)
+
+
 def _grab_guide_if_due():
-    """A few times a day on a free tuner. The update takes minutes, so it runs on
-    its own and the next tick can still start or stop a recording."""
+    """A few times a day on a free tuner. The update takes minutes, so it runs
+    as its own user service. The oneshot exits without taking the grab with it."""
     try:
         from engine import pool
-        from engine.guide import guide_grab_due, guide_tuner_free, load_guide
-        from engine.psip import clear_stale_guide_status, guide_update_running
+        from engine.guide import (
+            guide_backoff_active,
+            guide_grab_due,
+            guide_tuner_free,
+            load_guide,
+            mark_guide_attempt,
+            note_guide_failure,
+            settle_unfinished_attempt,
+        )
+        from engine.paths import GUIDE_UNIT, own_service, systemd_user, unit_active
+        from engine.psip import clear_stale_guide_status, guide_update_running, read_guide_status
         clear_stale_guide_status()
-        if guide_update_running():
+        if guide_update_running() or unit_active(GUIDE_UNIT):
+            return
+        if settle_unfinished_attempt():
+            print("Guide update ended before it recorded a result.", flush=True)
+            return
+        if guide_backoff_active(read_guide_status(), time.time()):
             return
         from engine.schedule import next_window
         guide = load_guide()
@@ -632,16 +655,33 @@ def _grab_guide_if_due():
         soon = next_window() if pool.free_count() < len(pool.adapters()) else None
         if not guide_grab_due(time.time(), guide.get("updated_at"), not guide_tuner_free(), next_record_at=soon):
             return
-        from engine.paths import own_scope
-        subprocess.Popen(
-            own_scope([sys.executable, os.path.abspath(__file__), "guide", "update"]),
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        cmd = own_service([sys.executable, os.path.abspath(__file__), "guide", "update"])
+        mark_guide_attempt()
+        if systemd_user():
+            # Returns when the service has started, not when the grab finishes.
+            started = subprocess.run(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            if started.returncode != 0:
+                reason = (started.stderr or started.stdout or "systemd-run failed").strip()
+                print(f"Guide left alone. {reason}", flush=True)
+                note_guide_failure(reason)
+                return
+        else:
+            subprocess.Popen(cmd, stdin=subprocess.DEVNULL, start_new_session=True)
     except Exception as exc:
-        print(f"Guide left alone. {exc}")
+        print(f"Guide left alone. {exc}", flush=True)
+        try:
+            from engine.guide import note_guide_failure
+            note_guide_failure(str(exc))
+        except Exception:
+            pass
         return
-    print("Guide update started.")
+    print("Guide update started.", flush=True)
 
 
 def cmd_record(args):

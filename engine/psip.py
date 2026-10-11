@@ -538,28 +538,43 @@ def dump_mux(adapter_id: int, frequency: int, dwell_sec: float = EPG_DWELL_SECS)
             "-o", dest,
             "EPG",
         ]
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        from engine import pool
-        deadline = time.time() + max(20, int(dwell_sec) + 12)
+        err_path = os.path.join(tmp, "zap.err")
+        err_f = open(err_path, "w", encoding="utf-8")
+        proc = None
         try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=err_f,
+            )
+            from engine import pool
+            deadline = time.time() + max(20, int(dwell_sec) + 12)
             while proc.poll() is None and time.time() < deadline:
                 if pool.guide_must_yield(adapter_id):
                     raise GuideYield()
                 time.sleep(0.2)
         finally:
-            if proc.poll() is None:
+            err_f.close()
+            if proc is not None and proc.poll() is None:
                 proc.kill()
                 try:
                     proc.wait(timeout=2)
                 except subprocess.TimeoutExpired:
                     pass
+        data = b""
         if os.path.isfile(dest):
             with open(dest, "rb") as f:
-                return f.read()
+                data = f.read()
+        if data:
+            return data
+        err = ""
+        try:
+            with open(err_path, encoding="utf-8", errors="replace") as f:
+                err = f.read().strip()
+        except OSError:
+            err = ""
+        line = err.splitlines()[-1].strip()[:300] if err else "dvbv5-zap produced no data"
+        raise RuntimeError(line)
     return b""
 
 
@@ -586,9 +601,15 @@ def collect_guide_events(
     Each read corrects video and audio PIDs from that tower's PMT.
     """
     from engine import pool
+    notes: List[str] = []
+    yielded = False
+    collect_guide_events.last_notes = notes
+    collect_guide_events.last_yielded = False
+    collect_guide_events.last_skipped = False
     if dump_fn is not None and adapter_id is None:
         adapter_id = EPG_ADAPTER
     if _guide_tuner(sessions, adapter_id) is None:
+        collect_guide_events.last_skipped = True
         return {}
     if channels is None:
         from engine.guide import _read_channels_file
@@ -597,29 +618,45 @@ def collect_guide_events(
     events: Dict[str, List[Dict[str, Any]]] = {}
     freqs = unique_frequencies(channels)
     live = dump_fn is None
+    if not freqs:
+        notes.append("No tower frequencies in the lineup.")
+        collect_guide_events.last_notes = notes
+        return {}
+    if live:
+        print(f"Guide update reading {len(freqs)} towers.", flush=True)
+        write_guide_status(True, 0, len(freqs))
     try:
         for i, freq in enumerate(freqs, start=1):
             tuner = _guide_tuner(sessions, adapter_id)
             if tuner is None:
+                if not events and not notes:
+                    collect_guide_events.last_skipped = True
                 break
             if live:
                 write_guide_status(True, i, len(freqs), adapter=tuner)
             with state_lock(pool.lock_key(tuner)):
                 if _guide_tuner(sessions, tuner) is None:
+                    if not events and not notes:
+                        collect_guide_events.last_skipped = True
                     break
                 if live:
                     print(f"EPG mux {i}/{len(freqs)} {freq} Hz on tuner {tuner}", flush=True)
                 try:
                     raw = zap(tuner, freq) or b""
                 except GuideYield:
+                    yielded = True
                     if live:
                         print(f"EPG gave tuner {tuner} to live TV", flush=True)
                     time.sleep(1.0)
                     continue
                 except Exception as exc:
+                    notes.append(f"{freq} Hz: {exc}")
                     if live:
                         print(f"EPG mux {freq} Hz failed: {exc}", flush=True)
                     continue
+            if not raw:
+                notes.append(f"{freq} Hz: empty dump")
+                continue
             sections = collect_sections(raw)
             if live:
                 time.sleep(0.3)
@@ -631,6 +668,8 @@ def collect_guide_events(
                     except OSError:
                         pass
             parsed = parse_atsc_ts(raw, lineup_programs(channels, freq), sections)
+            if not parsed:
+                notes.append(f"{freq} Hz: no EIT in the dump")
             for number, programs in parsed.items():
                 bucket = events.setdefault(number, [])
                 seen = {(p.get("gps_start"), p.get("title")) for p in bucket}
@@ -642,9 +681,17 @@ def collect_guide_events(
                     bucket.append(prog)
                 bucket.sort(key=lambda e: int(e.get("gps_start") or 0))
     finally:
+        real = [note for note in notes if note]
+        collect_guide_events.last_notes = real
+        collect_guide_events.last_yielded = yielded and not real
         if live:
             write_guide_status(False, 0, len(freqs))
     return events
+
+
+collect_guide_events.last_notes = []
+collect_guide_events.last_yielded = False
+collect_guide_events.last_skipped = False
 
 
 # PMT stream types: MPEG-2, H.264, HEVC video; MPEG, AAC, AC-3, E-AC-3 audio.
@@ -694,11 +741,38 @@ def lineup_programs(channels: Optional[List[Dict[str, Any]]], frequency: int) ->
     return {program: nums[0] for program, nums in found.items() if len(set(nums)) == 1}
 
 
+_KEEP = object()
+
+
+def read_guide_status(path: Optional[str] = None) -> Dict[str, Any]:
+    try:
+        with open(path or GUIDE_STATUS_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def write_guide_status(
     running: bool, tower: int, towers: int, path: Optional[str] = None, adapter: Optional[int] = None,
+    error: Any = _KEEP, failures: Any = _KEEP, failed_at: Any = _KEEP,
+    attempt_at: Any = _KEEP, result_at: Any = _KEEP,
 ) -> None:
-    """What the flyout shows while a Guide update runs, and which tuner it holds."""
+    """What the flyout shows while a Guide update runs, and which tuner it holds.
+
+    error, failures, and the attempt clocks survive a tower-by-tower rewrite
+    unless the caller passes a new value. Starting a run clears the error text.
+    """
     target = path or GUIDE_STATUS_PATH
+    prev = read_guide_status(target)
+
+    def keep(value: Any, key: str, default: Any) -> Any:
+        if value is _KEEP:
+            return prev.get(key, default)
+        return default if value is None else value
+
+    if running and error is _KEEP:
+        error = ""
     payload = {
         "running": bool(running),
         "pid": os.getpid() if running else 0,
@@ -706,9 +780,14 @@ def write_guide_status(
         "towers": int(towers),
         "adapter": adapter if running else None,
         "updated_at": time.time(),
+        "error": str(keep(error, "error", "") or ""),
+        "failures": int(keep(failures, "failures", 0) or 0),
+        "failed_at": float(keep(failed_at, "failed_at", 0) or 0),
+        "attempt_at": float(keep(attempt_at, "attempt_at", 0) or 0),
+        "result_at": float(keep(result_at, "result_at", 0) or 0),
     }
     try:
-        os.makedirs(os.path.dirname(target), exist_ok=True)
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
         tmp = f"{target}.tmp.{os.getpid()}"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f)
@@ -719,12 +798,8 @@ def write_guide_status(
 
 
 def guide_update_running(path: Optional[str] = None) -> bool:
-    try:
-        with open(path or GUIDE_STATUS_PATH, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return False
-    return isinstance(data, dict) and bool(data.get("running"))
+    data = read_guide_status(path)
+    return bool(data.get("running"))
 
 
 def clear_stale_guide_status(path: Optional[str] = None) -> bool:

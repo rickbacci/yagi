@@ -97,6 +97,25 @@ class TestGrid(unittest.TestCase):
         self.assertEqual(g["rows"][0]["ch"], "3.1")
         self.assertEqual([b[5] for b in g["rows"][0]["blocks"]], [True, False, False])
 
+    def test_upcoming_means_a_listing_that_has_not_ended(self):
+        runner = r"""
+const fs = require("fs");
+const vm = require("vm");
+const ctx = {};
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(process.argv[1], "utf8"), ctx);
+const i = JSON.parse(process.argv[2]);
+process.stdout.write(JSON.stringify([
+  ctx.guideHasUpcoming(i.guide, i.now),
+  ctx.guideHasUpcoming(i.guide, i.later),
+  ctx.guideHasUpcoming({}, i.now)
+]));
+"""
+        payload = {"guide": GUIDE, "now": NOW, "later": NOW + 200 * 3600}
+        res = subprocess.run(["node", "-e", runner, MODEL, json.dumps(payload)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(json.loads(res.stdout), [True, False, False])
+
 
 if __name__ == "__main__":
     unittest.main()
