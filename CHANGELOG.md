@@ -11,3 +11,4 @@
 - `f` or a double-click in the picture fullscreens it. Esc, `f`, or another double-click returns to the small pinned window. The Hyprland rule must not pin that window.
 - 1080i and 480i are deinterlaced. Progressive 720p is left alone. `i` shows player stats.
 - The channel, Guide, and recordings highlight clears when the pointer leaves the row or the panel.
+- The picture opens at the volume and mute it had when it last closed. The first open is unmuted at normal volume.

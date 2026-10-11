@@ -18,7 +18,15 @@ if PROJECT_ROOT not in sys.path:
 
 from engine.tuner import TunerManager
 from engine.scanner import AtscScanner, write_scan_status
-from engine.paths import CHANNELS_JSON_PATH, FAVORITES_JSON_PATH, UI_PREFS_PATH, RECORDINGS_DIR
+from engine.paths import (
+    CHANNELS_JSON_PATH,
+    FAVORITES_JSON_PATH,
+    UI_PREFS_PATH,
+    RECORDINGS_DIR,
+    chmod_private_file,
+    ensure_private_dir,
+    state_lock,
+)
 from player.controller import MpvController
 
 
@@ -386,14 +394,39 @@ def load_ui_prefs() -> dict:
 
 
 def save_ui_prefs(prefs: dict) -> None:
-    os.makedirs(os.path.dirname(UI_PREFS_PATH), exist_ok=True)
-    tmp = f"{UI_PREFS_PATH}.tmp"
+    ensure_private_dir(os.path.dirname(UI_PREFS_PATH))
+    tmp = f"{UI_PREFS_PATH}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(prefs, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    chmod_private_file(tmp)
     os.replace(tmp, UI_PREFS_PATH)
+    chmod_private_file(UI_PREFS_PATH)
+
+
+def _parse_audio_pref(raw_volume: str, raw_mute: str):
+    """Volume 0–130 and mute. First-run defaults live in the player, not here."""
+    try:
+        volume = float(raw_volume)
+    except (TypeError, ValueError):
+        return None
+    if volume != volume:
+        return None
+    volume = max(0.0, min(130.0, volume))
+    stored = int(volume) if volume == int(volume) else volume
+    flag = (raw_mute or "").strip().lower()
+    if flag not in ("on", "off", "yes", "no", "1", "0", "true", "false"):
+        return None
+    return stored, flag in ("on", "yes", "1", "true")
 
 
 def cmd_pref(args):
+    with state_lock(UI_PREFS_PATH):
+        _cmd_pref_locked(args)
+
+
+def _cmd_pref_locked(args):
     prefs = load_ui_prefs()
     key = args.key
     value = (args.value or "").lower()
@@ -441,7 +474,19 @@ def cmd_pref(args):
             print(f"Recording library cap is {format_bytes(budget)}.")
         return
 
-    print("Unknown pref. Use: yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off")
+    if key == "audio":
+        parsed = _parse_audio_pref(args.value or "", getattr(args, "flag", "") or "")
+        if parsed is None:
+            print("Use: yagi pref audio <volume> on|off")
+            return
+        volume, muted = parsed
+        prefs["volume"] = volume
+        prefs["mute"] = muted
+        save_ui_prefs(prefs)
+        print(f"Volume is {volume}, {'muted' if muted else 'on'}.")
+        return
+
+    print("Unknown pref. Use: yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off | pref audio <volume> on|off")
 
 
 def cmd_favorite(args):
@@ -1066,8 +1111,9 @@ def main():
     p_hid.set_defaults(func=cmd_hidden)
 
     p_pref = subparsers.add_parser("pref", help="UI preferences")
-    p_pref.add_argument("key", help="Preference key (filter, library-max)")
-    p_pref.add_argument("value", nargs="?", default="", help="favorites, all, hidden, or a library cap")
+    p_pref.add_argument("key", help="filter, library-max, or audio")
+    p_pref.add_argument("value", nargs="?", default="", help="filter name, library cap, or volume")
+    p_pref.add_argument("flag", nargs="?", default="", help="on or off when the key is audio")
     p_pref.set_defaults(func=cmd_pref)
 
     # play

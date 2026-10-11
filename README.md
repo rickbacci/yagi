@@ -119,7 +119,7 @@ The TV window, once it has focus:
 | f or double-click | Fullscreen. Again, or Esc, returns to the small picture |
 | i | Picture stats |
 | c | Captions |
-| m | Mute |
+| m | Mute. The wheel changes the volume. The next open uses this volume and mute |
 
 From a terminal, if `yagi` is on your `PATH`:
 

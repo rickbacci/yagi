@@ -353,7 +353,8 @@ class TestMpvPlayerController(unittest.TestCase):
              patch("player.controller.os.close"), \
              patch("player.controller.Timeshift.patch_state"), \
              patch("player.controller.update_player_state"), \
-             patch("player.controller.Timeshift.picture_open_byte", return_value=0):
+             patch("player.controller.Timeshift.picture_open_byte", return_value=0), \
+             patch("player.controller.load_surf_prefs", return_value={}):
             self.controller.launch(channel_name="53.1 Daystar", adapter_id=None)
 
         mock_dump.assert_called_once()
@@ -377,7 +378,9 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertIn("--demuxer-readahead-secs=3", cmd)
         self.assertIn("--demuxer-max-bytes=4194304", cmd)
         self.assertIn("--ytdl=no", cmd)
-        self.assertIn("--mute=yes", cmd)
+        self.assertIn("--volume=100", cmd)
+        self.assertIn("--mute=no", cmd)
+        self.assertNotIn("--mute=yes", cmd)
         self.assertIn("--sub-create-cc-track=yes", cmd)
         self.assertIn("--slang=eng", cmd)
         self.assertIn("--subs-fallback=yes", cmd)
@@ -810,6 +813,77 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         self.assertNotEqual(os.path.basename(cmd[-1]), os.path.basename(rec))
 
     @patch("subprocess.Popen")
+    def test_launch_file_uses_saved_volume_and_mute(self, mock_popen):
+        mock_popen.return_value = MagicMock(pid=1)
+        rec = os.path.join(self.tmp_dir.name, "show.ts")
+        with open(rec, "wb") as f:
+            f.write(b"x" * (256 * 1024))
+        saved = {"channel_filter": "all", "volume": 35, "mute": True}
+        with patch("os.path.exists", return_value=True), \
+             patch("player.controller.update_player_state"), \
+             patch("player.controller.load_surf_prefs", return_value=saved):
+            self.assertTrue(self.controller.launch_file(rec))
+        cmd = _popen_argv(mock_popen, "mpv")
+        self.assertIn("--volume=35", cmd)
+        self.assertIn("--mute=yes", cmd)
+        joined = " ".join(str(part) for part in cmd)
+        self.assertNotIn("channel_filter", joined)
+
+    def test_pref_audio_remembers_volume_and_mute(self):
+        from engine.paths import DIR_PRIVATE, FILE_PRIVATE, UI_PREFS_PATH
+        from player.controller import playback_levels
+
+        self.assertEqual(playback_levels({}), ("100", False))
+        self.assertEqual(playback_levels({"volume": "nope", "mute": "off"}), ("100", False))
+        self.assertEqual(playback_levels({"volume": 400, "mute": "yes"}), ("130", True))
+        os.makedirs(os.path.dirname(UI_PREFS_PATH), mode=0o700, exist_ok=True)
+        with open(UI_PREFS_PATH, "w", encoding="utf-8") as handle:
+            json.dump({"channel_filter": "all", "library_max_gb": 20}, handle)
+        try:
+            res = subprocess.run(
+                [sys.executable, CLI_BIN, "pref", "audio", "35", "on"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(list(res.args[-4:]), ["pref", "audio", "35", "on"])
+            with open(UI_PREFS_PATH, encoding="utf-8") as handle:
+                data = json.load(handle)
+            self.assertEqual(data["volume"], 35)
+            self.assertIs(data["mute"], True)
+            self.assertEqual(data["channel_filter"], "all")
+            self.assertEqual(data["library_max_gb"], 20)
+            self.assertEqual(os.stat(UI_PREFS_PATH).st_mode & 0o777, FILE_PRIVATE)
+            self.assertEqual(os.stat(os.path.dirname(UI_PREFS_PATH)).st_mode & 0o777, DIR_PRIVATE)
+            self.assertEqual(playback_levels(data), ("35", True))
+            bad = subprocess.run(
+                [sys.executable, CLI_BIN, "pref", "audio", "nope", "on"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(bad.returncode, 0, bad.stderr)
+            with open(UI_PREFS_PATH, encoding="utf-8") as handle:
+                again = json.load(handle)
+            self.assertEqual(again["volume"], 35)
+            self.assertIs(again["mute"], True)
+            off = subprocess.run(
+                [sys.executable, CLI_BIN, "pref", "audio", "100", "off"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(off.returncode, 0, off.stderr)
+            with open(UI_PREFS_PATH, encoding="utf-8") as handle:
+                last = json.load(handle)
+            self.assertEqual(last["volume"], 100)
+            self.assertIs(last["mute"], False)
+            self.assertEqual(last["channel_filter"], "all")
+        finally:
+            try:
+                os.remove(UI_PREFS_PATH)
+            except OSError:
+                pass
+
+    @patch("subprocess.Popen")
     def test_launch_file_leaves_the_program_to_the_hud(self, mock_popen):
         mock_popen.return_value = MagicMock(pid=1)
         rec = os.path.join(self.tmp_dir.name, "tower.ts")
@@ -1128,6 +1202,8 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertIn("MBTN_LEFT_DBL", src)
         self.assertIn('cli_async({"fullscreen", "--player"})', src)
         self.assertIn('cli_async({"fullscreen", "--player", "--exit"})', src)
+        self.assertIn('"pref", "audio"', src)
+        self.assertIn("flush_audio", src)
         self.assertIn("display-stats-toggle", src)
         self.assertIn("video-frame-info/interlaced", src)
         self.assertIn("@yagi-deint:bwdif", src)

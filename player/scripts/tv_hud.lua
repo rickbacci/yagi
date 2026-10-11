@@ -1579,9 +1579,53 @@ end
 mp.add_periodic_timer(1, poll_signal)
 poll_signal()
 
+-- Last volume and mute. The first reading is how this window opened.
+-- Later changes are written to ui prefs. Nothing but the number and on/off
+-- goes on the command line.
+local audio_saved_vol = nil
+local audio_saved_mute = nil
+local audio_dirty = false
+local audio_timer = nil
+local function flush_audio()
+    if not audio_dirty or audio_saved_vol == nil then return end
+    audio_dirty = false
+    if audio_timer then
+        pcall(function() audio_timer:kill() end)
+        audio_timer = nil
+    end
+    mp.command_native_async({
+        name = "subprocess",
+        playback_only = false,
+        detach = true,
+        args = {tv_cli(), "pref", "audio", tostring(audio_saved_vol), audio_saved_mute and "on" or "off"},
+    }, function() end)
+end
+local function note_audio()
+    local vol = mp.get_property_number("volume")
+    local muted = mp.get_property_bool("mute")
+    if vol == nil or muted == nil then return end
+    vol = math.floor(vol + 0.5)
+    if vol < 0 then vol = 0 elseif vol > 130 then vol = 130 end
+    if audio_saved_vol == nil then
+        audio_saved_vol = vol
+        audio_saved_mute = muted
+        return
+    end
+    if vol == audio_saved_vol and muted == audio_saved_mute then return end
+    audio_saved_vol = vol
+    audio_saved_mute = muted
+    audio_dirty = true
+    if audio_timer then pcall(function() audio_timer:kill() end) end
+    audio_timer = mp.add_timeout(0.4, function()
+        audio_timer = nil
+        flush_audio()
+    end)
+end
+
 -- Detached sync --reap. Super+W quits from inside mpv. live.ts goes once
 -- this window and the tune lock are gone.
 mp.register_event("shutdown", function()
+    pcall(flush_audio)
     pcall(write_player_state, false, "", "")
     local cli = tv_cli()
     if cli and cli ~= "" then
@@ -1596,10 +1640,12 @@ mp.register_event("shutdown", function()
 end)
 
 mp.observe_property("volume", "number", function(_, _)
+    note_audio()
     if hud_visible then pcall(render_hud) end
 end)
 
 mp.observe_property("mute", "bool", function(_, _)
+    note_audio()
     if hud_visible then pcall(render_hud) end
 end)
 

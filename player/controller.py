@@ -408,6 +408,26 @@ def load_surf_prefs() -> Dict[str, Any]:
     return prefs
 
 
+def playback_levels(prefs: Optional[Dict[str, Any]] = None) -> tuple:
+    """Volume text and mute for a new picture. First run is 100, unmuted."""
+    data = load_surf_prefs() if prefs is None else prefs
+    raw = data.get("volume", 100)
+    try:
+        volume = float(raw)
+    except (TypeError, ValueError):
+        volume = 100.0
+    if volume != volume:
+        volume = 100.0
+    volume = max(0.0, min(130.0, volume))
+    volume_text = str(int(volume)) if volume == int(volume) else str(volume)
+    raw_mute = data.get("mute", False)
+    if isinstance(raw_mute, str):
+        muted = raw_mute.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        muted = bool(raw_mute)
+    return volume_text, muted
+
+
 def load_favorites_list() -> List[Any]:
     from engine.favorites import load_favorites
     return load_favorites(FAVORITES_JSON_PATH)
@@ -734,6 +754,7 @@ class MpvController:
         hud_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "tv_hud.lua")
         cli_bin = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "bin", "yagi")
         live_dump = is_timeshift_path(file_path)
+        volume, muted = playback_levels()
         cmd = [
             "mpv",
             f"--input-ipc-server={self.socket_path}",
@@ -756,7 +777,8 @@ class MpvController:
             "--input-default-bindings=no",
             f"--script={hud_script}",
             "--osd-level=0",
-            "--mute=yes",
+            f"--volume={volume}",
+            "--mute=yes" if muted else "--mute=no",
             "--sub-create-cc-track=yes",
             "--slang=eng",
             "--subs-fallback=yes",
