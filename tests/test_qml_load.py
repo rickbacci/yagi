@@ -314,7 +314,20 @@ class TestQmlLoads(unittest.TestCase):
             text=True,
             cwd=PROJECT_ROOT,
         )
-        self.assertEqual(show.returncode, 0, show.stderr)
+        if show.returncode != 0:
+            fetched = subprocess.run(
+                ["git", "fetch", "--depth", "1", "origin", "08ae869"],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+            )
+            show = subprocess.run(
+                ["git", "show", "08ae869:plugin/GuidePage.qml"],
+                capture_output=True,
+                text=True,
+                cwd=PROJECT_ROOT,
+            )
+            self.assertEqual(show.returncode, 0, (show.stderr or "") + (fetched.stderr or ""))
         self.assertNotIn("import Quickshell.Io", show.stdout)
         with tempfile.TemporaryDirectory() as tree:
             plugin = os.path.join(tree, "plugin")
