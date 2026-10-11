@@ -4,6 +4,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -87,10 +88,19 @@ class TestOwnScope(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--") + 1:], ["python3", "yagi", "guide", "update"])
 
     def test_the_process_leaves_the_callers_cgroup(self):
-        cmd = own_scope(["sleep", "2"])
-        if cmd[0] != "systemd-run":
+        # tests/__init__.py points XDG_RUNTIME_DIR at a sandbox, so a user
+        # manager on the real runtime dir would otherwise look absent.
+        import tests
+        real = getattr(tests, "_real_run", "") or ""
+        private = os.path.join(real, "systemd", "private") if real else ""
+        if not shutil.which("systemd-run") or not os.path.exists(private):
             self.skipTest("no systemd user manager")
-        proc = subprocess.Popen(cmd, start_new_session=True)
+        env = os.environ.copy()
+        env["XDG_RUNTIME_DIR"] = real
+        with mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": real}):
+            cmd = own_scope(["sleep", "2"])
+        self.assertEqual(cmd[0], "systemd-run", cmd)
+        proc = subprocess.Popen(cmd, start_new_session=True, env=env)
         try:
             for _ in range(50):
                 try:
@@ -261,12 +271,13 @@ class TestGuideStepsAside(unittest.TestCase):
         self.assertIn("Failed to start", text)
         self.assertNotIn("Recording finish started", text)
 
-    def test_version_is_0_1_3(self):
+    def test_version_is_0_1_4(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         with open(os.path.join(root, "manifest.json"), encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["version"], "0.1.3")
+            self.assertEqual(json.load(f)["version"], "0.1.4")
         with open(os.path.join(root, "CHANGELOG.md"), encoding="utf-8") as f:
             log = f.read()
+        self.assertIn("## 0.1.4", log)
         self.assertIn("## 0.1.3", log)
         self.assertIn("## 0.1.2", log)
         self.assertIn("## 0.1.1", log)

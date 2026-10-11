@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4
+
+- The bar widget loads again. Guide search imports Quickshell and Quickshell.Io, which provide Process and StdioCollector. Without those imports the shell rejected the page.
+
 ## 0.1.3
 
 - Guide search is not an editable text field until you open it. While it is open it stays read-only to Qt, so a foreign clipboard cannot stall the shell. Paste is capped and timed out. The search text stays off the command line.

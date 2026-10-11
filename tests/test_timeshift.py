@@ -762,11 +762,17 @@ class TestTimeshift(unittest.TestCase):
                     Timeshift.release_tune_lock()
 
     def test_tune_lock_ignores_dead_pid(self):
+        # Pid 1 is alive, and root can signal it. A pid past pid_max is not.
+        try:
+            with open("/proc/sys/kernel/pid_max", encoding="utf-8") as handle:
+                dead_pid = int(handle.read().strip()) + 1
+        except (OSError, ValueError):
+            dead_pid = 2**22
         with tempfile.TemporaryDirectory() as tmp_dir:
             lock = os.path.join(tmp_dir, "tune.lock")
             with patch("engine.timeshift.TUNE_LOCK_PATH", lock):
                 with open(lock, "w", encoding="utf-8") as f:
-                    f.write("1")
+                    f.write(str(dead_pid))
                 self.assertFalse(Timeshift.tune_lock_held())
                 self.assertFalse(os.path.exists(lock))
 

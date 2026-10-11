@@ -7,10 +7,31 @@ on:
 
 jobs:
   unittest:
+    name: ubuntu
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install test dependencies
         run: bash scripts/setup-test-env.sh
+      - name: Run the suite
+        run: python3 -m unittest
+
+  unittest-arch:
+    name: arch
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install git
+        run: pacman -Sy --noconfirm git
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
+            python qt6-declarative qt5-declarative qt6-svg \
+            luajit psmisc nodejs ffmpeg mpv procps-ng
+          test -x /usr/bin/qmltestrunner
+          test -x /usr/lib/qt6/bin/qmltestrunner
       - name: Run the suite
         run: python3 -m unittest
