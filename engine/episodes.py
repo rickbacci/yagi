@@ -502,6 +502,7 @@ def finish_recordings(recordings_dir: str, min_bytes: int) -> List[str]:
                 if snap_to_breaks(path, airings):
                     touched.append(path)
     except TimeoutError:
+        print("Recording finish stepped aside. Another finish is running.", flush=True)
         return []
     return touched
 

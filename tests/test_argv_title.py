@@ -151,7 +151,12 @@ class TestPlaybackAndToolsArgv(unittest.TestCase):
                     patch("player.controller.update_player_state"), \
                     patch("os.path.exists", return_value=True):
                 self.assertTrue(controller.launch_file(path))
-            cmd = popen.call_args[0][0]
+            # A pin thread may also spawn hyprctl. The picture command is the one that runs mpv.
+            cmd = next(
+                list(call.args[0])
+                for call in popen.call_args_list
+                if call.args and "mpv" in call.args[0]
+            )
             _assert_clean(self, cmd)
             self.assertTrue(os.path.samefile(cmd[-1], path))
             self.assertNotIn(SECRET, os.path.basename(cmd[-1]))

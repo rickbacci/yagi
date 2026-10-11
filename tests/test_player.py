@@ -33,6 +33,18 @@ from engine.timeshift import Timeshift
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 LUA_HUD = os.path.join(PROJECT_ROOT, "player", "scripts", "tv_hud.lua")
+
+
+def _popen_argv(mock_popen, argv0):
+    """The launch under test. A pin thread may also Popen hyprctl.
+
+    own_scope puts systemd-run in front of the program when a user bus exists.
+    """
+    for call in mock_popen.call_args_list:
+        args = call.args[0] if call.args else None
+        if args and argv0 in args:
+            return list(args)
+    raise AssertionError(f"no {argv0} process")
 CLI_BIN = os.path.join(PROJECT_ROOT, "bin", "yagi")
 
 
@@ -341,11 +353,12 @@ class TestMpvPlayerController(unittest.TestCase):
              patch("player.controller.os.close"), \
              patch("player.controller.Timeshift.patch_state"), \
              patch("player.controller.update_player_state"), \
-             patch("player.controller.Timeshift.picture_open_byte", return_value=0):
+             patch("player.controller.Timeshift.picture_open_byte", return_value=0), \
+             patch("player.controller.load_surf_prefs", return_value={}):
             self.controller.launch(channel_name="53.1 Daystar", adapter_id=None)
 
         mock_dump.assert_called_once()
-        cmd = mock_popen.call_args[0][0]
+        cmd = _popen_argv(mock_popen, "mpv")
         self.assertIn("--force-window=immediate", cmd)
         self.assertIn("--window-dragging=no", cmd)
         self.assertIn("--keepaspect-window=no", cmd)
@@ -365,7 +378,9 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertIn("--demuxer-readahead-secs=3", cmd)
         self.assertIn("--demuxer-max-bytes=4194304", cmd)
         self.assertIn("--ytdl=no", cmd)
-        self.assertIn("--mute=yes", cmd)
+        self.assertIn("--volume=100", cmd)
+        self.assertIn("--mute=no", cmd)
+        self.assertNotIn("--mute=yes", cmd)
         self.assertIn("--sub-create-cc-track=yes", cmd)
         self.assertIn("--slang=eng", cmd)
         self.assertIn("--subs-fallback=yes", cmd)
@@ -786,13 +801,87 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         with patch("os.path.exists", return_value=True):
             with patch("player.controller.update_player_state"):
                 self.assertTrue(self.controller.launch_file(rec))
-        cmd = mock_popen.call_args[0][0]
+        cmd = _popen_argv(mock_popen, "mpv")
         self.assertFalse(any(str(arg).startswith("--dvbin-") for arg in cmd))
         self.assertIn("--hwdec=auto-safe", cmd)
         self.assertNotIn("--hwdec=no", cmd)
+        self.assertIn("--deinterlace=auto", cmd)
+        self.assertIn("--scale=lanczos", cmd)
+        self.assertNotIn("--profile=high-quality", cmd)
         self.assertIn("--force-seekable=yes", cmd)
         self.assertTrue(os.path.samefile(cmd[-1], rec))
         self.assertNotEqual(os.path.basename(cmd[-1]), os.path.basename(rec))
+
+    @patch("subprocess.Popen")
+    def test_launch_file_uses_saved_volume_and_mute(self, mock_popen):
+        mock_popen.return_value = MagicMock(pid=1)
+        rec = os.path.join(self.tmp_dir.name, "show.ts")
+        with open(rec, "wb") as f:
+            f.write(b"x" * (256 * 1024))
+        saved = {"channel_filter": "all", "volume": 35, "mute": True}
+        with patch("os.path.exists", return_value=True), \
+             patch("player.controller.update_player_state"), \
+             patch("player.controller.load_surf_prefs", return_value=saved):
+            self.assertTrue(self.controller.launch_file(rec))
+        cmd = _popen_argv(mock_popen, "mpv")
+        self.assertIn("--volume=35", cmd)
+        self.assertIn("--mute=yes", cmd)
+        joined = " ".join(str(part) for part in cmd)
+        self.assertNotIn("channel_filter", joined)
+
+    def test_pref_audio_remembers_volume_and_mute(self):
+        from engine.paths import DIR_PRIVATE, FILE_PRIVATE, UI_PREFS_PATH
+        from player.controller import playback_levels
+
+        self.assertEqual(playback_levels({}), ("100", False))
+        self.assertEqual(playback_levels({"volume": "nope", "mute": "off"}), ("100", False))
+        self.assertEqual(playback_levels({"volume": 400, "mute": "yes"}), ("130", True))
+        os.makedirs(os.path.dirname(UI_PREFS_PATH), mode=0o700, exist_ok=True)
+        with open(UI_PREFS_PATH, "w", encoding="utf-8") as handle:
+            json.dump({"channel_filter": "all", "library_max_gb": 20}, handle)
+        try:
+            res = subprocess.run(
+                [sys.executable, CLI_BIN, "pref", "audio", "35", "on"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(list(res.args[-4:]), ["pref", "audio", "35", "on"])
+            with open(UI_PREFS_PATH, encoding="utf-8") as handle:
+                data = json.load(handle)
+            self.assertEqual(data["volume"], 35)
+            self.assertIs(data["mute"], True)
+            self.assertEqual(data["channel_filter"], "all")
+            self.assertEqual(data["library_max_gb"], 20)
+            self.assertEqual(os.stat(UI_PREFS_PATH).st_mode & 0o777, FILE_PRIVATE)
+            self.assertEqual(os.stat(os.path.dirname(UI_PREFS_PATH)).st_mode & 0o777, DIR_PRIVATE)
+            self.assertEqual(playback_levels(data), ("35", True))
+            bad = subprocess.run(
+                [sys.executable, CLI_BIN, "pref", "audio", "nope", "on"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(bad.returncode, 0, bad.stderr)
+            with open(UI_PREFS_PATH, encoding="utf-8") as handle:
+                again = json.load(handle)
+            self.assertEqual(again["volume"], 35)
+            self.assertIs(again["mute"], True)
+            off = subprocess.run(
+                [sys.executable, CLI_BIN, "pref", "audio", "100", "off"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(off.returncode, 0, off.stderr)
+            with open(UI_PREFS_PATH, encoding="utf-8") as handle:
+                last = json.load(handle)
+            self.assertEqual(last["volume"], 100)
+            self.assertIs(last["mute"], False)
+            self.assertEqual(last["channel_filter"], "all")
+        finally:
+            try:
+                os.remove(UI_PREFS_PATH)
+            except OSError:
+                pass
 
     @patch("subprocess.Popen")
     def test_launch_file_leaves_the_program_to_the_hud(self, mock_popen):
@@ -1110,8 +1199,15 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertNotIn("timeshift_skip", src)
         self.assertNotIn("open_dump_at", src)
         self.assertNotIn('mp.command("cycle fullscreen")', src)
-        self.assertNotIn("tv_fs_key", src)
-        self.assertNotIn("MBTN_LEFT_DBL", src)
+        self.assertIn("MBTN_LEFT_DBL", src)
+        self.assertIn('cli_async({"fullscreen", "--player"})', src)
+        self.assertIn('cli_async({"fullscreen", "--player", "--exit"})', src)
+        self.assertIn('"pref", "audio"', src)
+        self.assertIn("flush_audio", src)
+        self.assertIn("display-stats-toggle", src)
+        self.assertIn("video-frame-info/interlaced", src)
+        self.assertIn("@yagi-deint:bwdif", src)
+        self.assertIn("video-params/h", src)
         self.assertIn("Super+F", src)
         self.assertIn("function program_on_now", src)
         self.assertIn("function picture_ready", src)
@@ -1202,6 +1298,72 @@ class TestOmarchyFullscreen(unittest.TestCase):
             if call.args[0][:2] == ["hyprctl", "dispatch"]
         ]
         self.assertEqual(dispatched, [OMARCHY_FULLSCREEN_LUA])
+
+    @patch("player.controller.subprocess.run")
+    def test_exit_only_leaves_fullscreen_and_pins_again(self, mock_run):
+        tv = {
+            "class": "yagi",
+            "address": "0xabc",
+            "pinned": False,
+            "fullscreen": 2,
+        }
+        after = {**tv, "fullscreen": 0}
+
+        def fake_run(cmd, capture_output=True, text=True):
+            m = MagicMock()
+            m.returncode = 0
+            m.stderr = ""
+            if cmd[:3] == ["hyprctl", "activewindow", "-j"]:
+                m.stdout = json.dumps(tv)
+            elif cmd[:3] == ["hyprctl", "clients", "-j"]:
+                m.stdout = json.dumps([after])
+            else:
+                m.stdout = "ok"
+            return m
+
+        mock_run.side_effect = fake_run
+        _toggle_omarchy_fullscreen(target_tv=True, exit_only=True)
+        dispatched = [
+            call.args[0][2]
+            for call in mock_run.call_args_list
+            if call.args[0][:2] == ["hyprctl", "dispatch"]
+        ]
+        self.assertEqual(dispatched[0], 'hl.dsp.window.fullscreen({ mode = "fullscreen", window = "address:0xabc" })')
+        self.assertEqual(dispatched[1], 'hl.dsp.window.pin({ window = "address:0xabc" })')
+
+    @patch("player.controller.subprocess.run")
+    def test_exit_only_does_nothing_when_the_picture_is_small(self, mock_run):
+        tv = {"class": "yagi", "address": "0xabc", "pinned": True, "fullscreen": 0}
+
+        def fake_run(cmd, capture_output=True, text=True):
+            m = MagicMock()
+            m.returncode = 0
+            m.stderr = ""
+            m.stdout = json.dumps(tv if "activewindow" in cmd or "clients" in cmd else "ok")
+            if cmd[:2] == ["hyprctl", "clients"]:
+                m.stdout = json.dumps([tv])
+            return m
+
+        mock_run.side_effect = fake_run
+        _toggle_omarchy_fullscreen(target_tv=True, exit_only=True)
+        dispatched = [
+            call.args[0][2]
+            for call in mock_run.call_args_list
+            if call.args[0][:2] == ["hyprctl", "dispatch"]
+        ]
+        self.assertEqual(dispatched, [])
+
+    def test_list_hover_clears_when_the_pointer_leaves(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for name in ("ChannelRow.qml", "ShowRow.qml", "RecordingRow.qml", "LibraryShowRow.qml", "ScheduledRow.qml"):
+            with open(os.path.join(root, "plugin", name), encoding="utf-8") as f:
+                src = f.read()
+            self.assertIn("onExited:", src)
+            self.assertIn("cursorActive = false", src)
+        with open(os.path.join(root, "plugin", "BarWidget.qml"), encoding="utf-8") as f:
+            panel = f.read()
+        self.assertIn("HoverHandler", panel)
+        self.assertIn("root.cursorActive = false", panel)
 
 
 class TestCliNextPrev(unittest.TestCase):

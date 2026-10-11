@@ -1579,9 +1579,53 @@ end
 mp.add_periodic_timer(1, poll_signal)
 poll_signal()
 
+-- Last volume and mute. The first reading is how this window opened.
+-- Later changes are written to ui prefs. Nothing but the number and on/off
+-- goes on the command line.
+local audio_saved_vol = nil
+local audio_saved_mute = nil
+local audio_dirty = false
+local audio_timer = nil
+local function flush_audio()
+    if not audio_dirty or audio_saved_vol == nil then return end
+    audio_dirty = false
+    if audio_timer then
+        pcall(function() audio_timer:kill() end)
+        audio_timer = nil
+    end
+    mp.command_native_async({
+        name = "subprocess",
+        playback_only = false,
+        detach = true,
+        args = {tv_cli(), "pref", "audio", tostring(audio_saved_vol), audio_saved_mute and "on" or "off"},
+    }, function() end)
+end
+local function note_audio()
+    local vol = mp.get_property_number("volume")
+    local muted = mp.get_property_bool("mute")
+    if vol == nil or muted == nil then return end
+    vol = math.floor(vol + 0.5)
+    if vol < 0 then vol = 0 elseif vol > 130 then vol = 130 end
+    if audio_saved_vol == nil then
+        audio_saved_vol = vol
+        audio_saved_mute = muted
+        return
+    end
+    if vol == audio_saved_vol and muted == audio_saved_mute then return end
+    audio_saved_vol = vol
+    audio_saved_mute = muted
+    audio_dirty = true
+    if audio_timer then pcall(function() audio_timer:kill() end) end
+    audio_timer = mp.add_timeout(0.4, function()
+        audio_timer = nil
+        flush_audio()
+    end)
+end
+
 -- Detached sync --reap. Super+W quits from inside mpv. live.ts goes once
 -- this window and the tune lock are gone.
 mp.register_event("shutdown", function()
+    pcall(flush_audio)
     pcall(write_player_state, false, "", "")
     local cli = tv_cli()
     if cli and cli ~= "" then
@@ -1596,10 +1640,12 @@ mp.register_event("shutdown", function()
 end)
 
 mp.observe_property("volume", "number", function(_, _)
+    note_audio()
     if hud_visible then pcall(render_hud) end
 end)
 
 mp.observe_property("mute", "bool", function(_, _)
+    note_audio()
     if hud_visible then pcall(render_hud) end
 end)
 
@@ -1627,8 +1673,69 @@ mp.add_forced_key_binding("MBTN_MID", "tv_mute_mid", function()
     show_hud()
 end)
 
--- Fullscreen is Omarchy Super+F only (see yagi fullscreen). Do not
--- bind `f` or double-click — stock mpv fullscreen is also off.
+-- Hyprland fullscreen, not mpv's. Super+F does not unpin a pinned window.
+-- f and double-click do. Esc only leaves fullscreen.
+local function toggle_fullscreen()
+    cli_async({"fullscreen", "--player"})
+end
+local function exit_fullscreen()
+    cli_async({"fullscreen", "--player", "--exit"})
+end
+mp.add_forced_key_binding("f", "tv_fullscreen", toggle_fullscreen)
+mp.add_forced_key_binding("MBTN_LEFT_DBL", "tv_fullscreen_click", toggle_fullscreen)
+mp.add_forced_key_binding("ESC", "tv_fullscreen_exit", exit_fullscreen)
+mp.add_forced_key_binding("i", "tv_stats", function()
+    mp.command("script-binding stats/display-stats-toggle")
+end)
+mp.add_forced_key_binding("I", "tv_stats_page", function()
+    mp.command("script-binding stats/display-page-1")
+end)
+
+-- 1080i and 480i stay combed under hardware decode. bwdif runs only then.
+-- The displayed frame goes progressive once bwdif is on, so that flag is not
+-- a reason to remove the filter. A resolution change is a new stream.
+local bwdif_on = false
+local deint_on = false
+local stream_h = nil
+local function clear_bwdif()
+    if bwdif_on then
+        mp.commandv("vf", "remove", "@yagi-deint")
+        bwdif_on = false
+    end
+end
+local function set_deint(_, interlaced)
+    if interlaced then
+        deint_on = true
+        local hw = mp.get_property("hwdec-current") or "no"
+        if hw ~= "no" and hw ~= "" then
+            mp.set_property("deinterlace", "no")
+            if not bwdif_on then
+                mp.commandv("vf", "add", "@yagi-deint:bwdif")
+                bwdif_on = true
+            end
+        else
+            clear_bwdif()
+            mp.set_property("deinterlace", "yes")
+        end
+        return
+    end
+    -- A deinterlaced frame is progressive. That is not a new stream.
+    if deint_on or bwdif_on then return end
+    if interlaced == false and mp.get_property_native("video-params/h") then
+        mp.set_property("deinterlace", "no")
+    end
+end
+mp.observe_property("video-frame-info/interlaced", "bool", set_deint)
+mp.observe_property("video-params/h", "number", function(_, h)
+    if h == nil or h == stream_h then return end
+    local first = stream_h == nil
+    stream_h = h
+    if first then return end
+    deint_on = false
+    clear_bwdif()
+    mp.set_property("deinterlace", "auto")
+    set_deint(nil, mp.get_property_native("video-frame-info/interlaced"))
+end)
 mp.add_forced_key_binding("c", "tv_sub_cycle", function()
     mp.command("cycle sub")
     show_hud()

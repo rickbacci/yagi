@@ -18,7 +18,15 @@ if PROJECT_ROOT not in sys.path:
 
 from engine.tuner import TunerManager
 from engine.scanner import AtscScanner, write_scan_status
-from engine.paths import CHANNELS_JSON_PATH, FAVORITES_JSON_PATH, UI_PREFS_PATH, RECORDINGS_DIR
+from engine.paths import (
+    CHANNELS_JSON_PATH,
+    FAVORITES_JSON_PATH,
+    UI_PREFS_PATH,
+    RECORDINGS_DIR,
+    chmod_private_file,
+    ensure_private_dir,
+    state_lock,
+)
 from player.controller import MpvController
 
 
@@ -386,14 +394,39 @@ def load_ui_prefs() -> dict:
 
 
 def save_ui_prefs(prefs: dict) -> None:
-    os.makedirs(os.path.dirname(UI_PREFS_PATH), exist_ok=True)
-    tmp = f"{UI_PREFS_PATH}.tmp"
+    ensure_private_dir(os.path.dirname(UI_PREFS_PATH))
+    tmp = f"{UI_PREFS_PATH}.tmp.{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(prefs, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    chmod_private_file(tmp)
     os.replace(tmp, UI_PREFS_PATH)
+    chmod_private_file(UI_PREFS_PATH)
+
+
+def _parse_audio_pref(raw_volume: str, raw_mute: str):
+    """Volume 0–130 and mute. First-run defaults live in the player, not here."""
+    try:
+        volume = float(raw_volume)
+    except (TypeError, ValueError):
+        return None
+    if volume != volume:
+        return None
+    volume = max(0.0, min(130.0, volume))
+    stored = int(volume) if volume == int(volume) else volume
+    flag = (raw_mute or "").strip().lower()
+    if flag not in ("on", "off", "yes", "no", "1", "0", "true", "false"):
+        return None
+    return stored, flag in ("on", "yes", "1", "true")
 
 
 def cmd_pref(args):
+    with state_lock(UI_PREFS_PATH):
+        _cmd_pref_locked(args)
+
+
+def _cmd_pref_locked(args):
     prefs = load_ui_prefs()
     key = args.key
     value = (args.value or "").lower()
@@ -441,7 +474,19 @@ def cmd_pref(args):
             print(f"Recording library cap is {format_bytes(budget)}.")
         return
 
-    print("Unknown pref. Use: yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off")
+    if key == "audio":
+        parsed = _parse_audio_pref(args.value or "", getattr(args, "flag", "") or "")
+        if parsed is None:
+            print("Use: yagi pref audio <volume> on|off")
+            return
+        volume, muted = parsed
+        prefs["volume"] = volume
+        prefs["mute"] = muted
+        save_ui_prefs(prefs)
+        print(f"Volume is {volume}, {'muted' if muted else 'on'}.")
+        return
+
+    print("Unknown pref. Use: yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off | pref audio <volume> on|off")
 
 
 def cmd_favorite(args):
@@ -546,7 +591,10 @@ def cmd_pause(args):
 
 
 def cmd_fullscreen(args):
-    MpvController().toggle_fullscreen(target_tv=bool(getattr(args, "player", False)))
+    MpvController().toggle_fullscreen(
+        target_tv=bool(getattr(args, "player", False)),
+        exit_only=bool(getattr(args, "exit", False)),
+    )
 
 
 def cmd_focus(args):
@@ -625,6 +673,55 @@ def _guide_update_line(done: str) -> str:
     }.get(done, done)
 
 
+def _launch_service(cmd, unit: str, description: str, runtime_max_sec: int):
+    """Start cmd where the record timer's cgroup cannot kill it.
+
+    None means it started. A string is why systemd-run refused. Without a user
+    manager the process is spawned here, which is only safe when this process
+    itself outlives the child.
+    """
+    from engine.paths import own_service, systemd_user
+    wrapped = own_service(cmd, unit=unit, description=description, runtime_max_sec=runtime_max_sec)
+    if not systemd_user():
+        subprocess.Popen(wrapped, stdin=subprocess.DEVNULL, start_new_session=True)
+        return None
+    try:
+        started = subprocess.run(
+            wrapped,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return str(exc)
+    if started.returncode != 0:
+        return (started.stderr or started.stdout or "systemd-run failed").strip()
+    return None
+
+
+def _start_recording_finish() -> None:
+    """Ad marks and trims, outside the record timer's cgroup.
+
+    Each start gets its own unit, so two finishes that overlap do not collide.
+    The finish lock inside the command does the real work once. A start that
+    fails stays in the record-timer journal, and the next tick tries again
+    because the files are still waiting.
+    """
+    from engine.paths import new_finish_unit
+    unit = new_finish_unit()
+    err = _launch_service(
+        [sys.executable, os.path.abspath(__file__), "record", "finish"],
+        unit=unit,
+        description="Yagi recording finish",
+        runtime_max_sec=6 * 3600,
+    )
+    if err:
+        print(f"Recording finish left alone. {err}", flush=True)
+        return
+    print(f"Recording finish started ({unit}).", flush=True)
+
+
 def _grab_guide_if_due():
     """A few times a day on a free tuner. The update takes minutes, so it runs
     as its own user service. The oneshot exits without taking the grab with it."""
@@ -639,7 +736,7 @@ def _grab_guide_if_due():
             note_guide_failure,
             settle_unfinished_attempt,
         )
-        from engine.paths import GUIDE_UNIT, own_service, systemd_user, unit_active
+        from engine.paths import GUIDE_UNIT, unit_active
         from engine.psip import clear_stale_guide_status, guide_update_running, read_guide_status
         clear_stale_guide_status()
         if guide_update_running() or unit_active(GUIDE_UNIT):
@@ -655,24 +752,18 @@ def _grab_guide_if_due():
         soon = next_window() if pool.free_count() < len(pool.adapters()) else None
         if not guide_grab_due(time.time(), guide.get("updated_at"), not guide_tuner_free(), next_record_at=soon):
             return
-        cmd = own_service([sys.executable, os.path.abspath(__file__), "guide", "update"])
         mark_guide_attempt()
-        if systemd_user():
-            # Returns when the service has started, not when the grab finishes.
-            started = subprocess.run(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=20,
-            )
-            if started.returncode != 0:
-                reason = (started.stderr or started.stdout or "systemd-run failed").strip()
-                print(f"Guide left alone. {reason}", flush=True)
-                note_guide_failure(reason)
-                return
-        else:
-            subprocess.Popen(cmd, stdin=subprocess.DEVNULL, start_new_session=True)
+        # Returns when the service has started, not when the grab finishes.
+        err = _launch_service(
+            [sys.executable, os.path.abspath(__file__), "guide", "update"],
+            unit=GUIDE_UNIT,
+            description="Yagi Guide update",
+            runtime_max_sec=900,
+        )
+        if err:
+            print(f"Guide left alone. {err}", flush=True)
+            note_guide_failure(err)
+            return
     except Exception as exc:
         print(f"Guide left alone. {exc}", flush=True)
         try:
@@ -819,7 +910,9 @@ def cmd_record(args):
 
     elif action == "due":
         # Due is the timer. When it exits, systemd kills children still in its
-        # scope. Recorders, finish, and Guide run through own_scope.
+        # cgroup. Guide update and recording finish are their own services.
+        # A recorder stays in this process until its file is growing, so its
+        # scope is already out of this cgroup before due returns.
         from engine.release import refresh
         try:
             moved = refresh()
@@ -841,12 +934,7 @@ def cmd_record(args):
         for session in DvrManager.sweep_active():
             print(f"Stopped {session.station} ({session.channel_number}).")
         if finish_waiting(RECORDINGS_DIR, MIN_PLAYABLE_BYTES):
-            from engine.paths import own_scope
-            subprocess.Popen(
-                own_scope([sys.executable, os.path.abspath(__file__), "record", "finish"]),
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            _start_recording_finish()
         from engine import pool
         ready = due_items()
         taken = set()
@@ -1023,8 +1111,9 @@ def main():
     p_hid.set_defaults(func=cmd_hidden)
 
     p_pref = subparsers.add_parser("pref", help="UI preferences")
-    p_pref.add_argument("key", help="Preference key (filter, library-max)")
-    p_pref.add_argument("value", nargs="?", default="", help="favorites, all, hidden, or a library cap")
+    p_pref.add_argument("key", help="filter, library-max, or audio")
+    p_pref.add_argument("value", nargs="?", default="", help="filter name, library cap, or volume")
+    p_pref.add_argument("flag", nargs="?", default="", help="on or off when the key is audio")
     p_pref.set_defaults(func=cmd_pref)
 
     # play
@@ -1053,6 +1142,11 @@ def main():
         "--player",
         action="store_true",
         help="Target the yagi window even if it is not focused",
+    )
+    p_fs.add_argument(
+        "--exit",
+        action="store_true",
+        help="Leave fullscreen and pin the small picture. Does nothing if it is already small.",
     )
     p_fs.set_defaults(func=cmd_fullscreen)
 

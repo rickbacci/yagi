@@ -124,21 +124,28 @@ _SERVICE_ENV = (
 )
 
 
-def own_service(cmd: List[str], unit: str = GUIDE_UNIT) -> List[str]:
+def own_service(
+    cmd: List[str],
+    unit: str = GUIDE_UNIT,
+    description: str = "Yagi Guide update",
+    runtime_max_sec: int = 900,
+) -> List[str]:
     """A transient user service that outlives the record timer.
 
     systemd-run without --wait returns when the service has started, not when
     the command finishes. The caller waits for that, then the oneshot may exit.
+    description and unit are fixed labels. They must not carry a title, a
+    channel, or a file path.
     """
     if not systemd_user():
         return list(cmd)
     args = [
         "systemd-run", "--user", "--quiet", "--collect", "--no-ask-password",
         f"--unit={unit}",
-        "--description=Yagi Guide update",
+        f"--description={description}",
         "--service-type=exec",
         "-p", "TimeoutStopSec=15",
-        "-p", "RuntimeMaxSec=900",
+        "-p", f"RuntimeMaxSec={int(runtime_max_sec)}",
         "-p", "StandardOutput=journal",
         "-p", "StandardError=journal",
     ]
@@ -147,6 +154,12 @@ def own_service(cmd: List[str], unit: str = GUIDE_UNIT) -> List[str]:
         if val:
             args.extend(["-E", f"{key}={val}"])
     return args + ["--"] + list(cmd)
+
+
+def new_finish_unit() -> str:
+    """One unit per finish start. The id is random, not a recording's name."""
+    import uuid
+    return f"yagi-finish-{uuid.uuid4().hex[:12]}.service"
 
 
 def unit_state(unit: str) -> str:

@@ -12,6 +12,7 @@ import select
 import signal
 import socket
 import subprocess
+import threading
 from typing import Optional, Dict, Any, List
 from urllib.parse import unquote
 
@@ -103,10 +104,36 @@ def focus_tv_window(wait: float = 3.0) -> bool:
     while True:
         clients = _hypr_json("clients") or []
         if any(isinstance(c, dict) and c.get("class") == "yagi" for c in clients):
-            return _hypr_dispatch('hl.dsp.focus({ window = "class:^yagi$" })')
+            focused = _hypr_dispatch('hl.dsp.focus({ window = "class:^yagi$" })')
+            ensure_tv_pinned()
+            return focused
         if time.time() >= deadline:
             return False
         time.sleep(0.2)
+
+
+def ensure_tv_pinned(wait: float = 3.0) -> None:
+    """Pin the small picture. A fullscreen window is left alone.
+
+    The Hyprland rule must not set pin. A pin in that rule comes back the
+    moment this window is not fullscreen, and fullscreen then no-ops.
+    """
+    try:
+        deadline = time.time() + wait
+        while True:
+            client = _hypr_tv_client()
+            if client:
+                if int(client.get("fullscreen") or 0) != 0 or client.get("pinned"):
+                    return
+                addr = client.get("address")
+                if addr:
+                    _hypr_dispatch(f'hl.dsp.window.pin({{ window = "address:{addr}" }})')
+                return
+            if time.time() >= deadline:
+                return
+            time.sleep(0.2)
+    except Exception:
+        return
 
 
 def _hypr_dispatch(lua: str) -> bool:
@@ -130,12 +157,13 @@ def _hypr_tv_client():
     )
 
 
-def _toggle_omarchy_fullscreen(target_tv: bool = False) -> None:
-    """Unpin the Yagi window if needed, then the same fullscreen dispatcher Omarchy Super+F uses.
+def _toggle_omarchy_fullscreen(target_tv: bool = False, exit_only: bool = False) -> None:
+    """Unpin, then Hyprland fullscreen. Leaving fullscreen pins the small picture again.
 
-    Pin is a static window-rule effect. Super+F on a pinned client stays at
-    fullscreen 0 (measured on this Hyprland). Super+F special-cases the PiP
-    when it is the focused window. `--player` targets the TV window from CLI.
+    Super+F alone does not unpin, and a pinned window stays at fullscreen 0.
+    `f` and double-click call this with the TV window. The window rule must
+    not pin: that pin returns while the window is still not fullscreen, and
+    the fullscreen request no-ops.
     """
     active = _hypr_json("activewindow") or {}
     target = active if active.get("class") == "yagi" else None
@@ -146,17 +174,27 @@ def _toggle_omarchy_fullscreen(target_tv: bool = False) -> None:
     pinned = bool((target or {}).get("pinned"))
     was_fs = int((target or {}).get("fullscreen") or 0) != 0
     win = f', window = "address:{addr}"' if is_tv else ""
-    if is_tv and pinned and not was_fs:
+    if is_tv and was_fs:
+        _hypr_dispatch(f'hl.dsp.window.fullscreen({{ mode = "fullscreen"{win} }})')
+        # The size rule returns once fullscreen is 0. Pin after that, not before.
+        deadline = time.time() + 0.8
+        while True:
+            after = _hypr_tv_client() or {}
+            if int(after.get("fullscreen") or 0) == 0:
+                if not after.get("pinned"):
+                    _hypr_dispatch(f'hl.dsp.window.pin({{ window = "address:{addr}" }})')
+                return
+            if time.time() >= deadline:
+                return
+            time.sleep(0.05)
+    if exit_only:
+        return
+    if is_tv and pinned:
         _hypr_dispatch(f'hl.dsp.window.pin({{ window = "address:{addr}" }})')
     if is_tv:
         _hypr_dispatch(f'hl.dsp.window.fullscreen({{ mode = "fullscreen"{win} }})')
     else:
         _hypr_dispatch(OMARCHY_FULLSCREEN_LUA)
-    if not is_tv or not was_fs:
-        return
-    after = _hypr_tv_client() or {}
-    if int(after.get("fullscreen") or 0) == 0 and not after.get("pinned"):
-        _hypr_dispatch(f'hl.dsp.window.pin({{ window = "address:{addr}" }})')
 
 
 def update_player_state(
@@ -368,6 +406,26 @@ def load_surf_prefs() -> Dict[str, Any]:
         except Exception:
             pass
     return prefs
+
+
+def playback_levels(prefs: Optional[Dict[str, Any]] = None) -> tuple:
+    """Volume text and mute for a new picture. First run is 100, unmuted."""
+    data = load_surf_prefs() if prefs is None else prefs
+    raw = data.get("volume", 100)
+    try:
+        volume = float(raw)
+    except (TypeError, ValueError):
+        volume = 100.0
+    if volume != volume:
+        volume = 100.0
+    volume = max(0.0, min(130.0, volume))
+    volume_text = str(int(volume)) if volume == int(volume) else str(volume)
+    raw_mute = data.get("mute", False)
+    if isinstance(raw_mute, str):
+        muted = raw_mute.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        muted = bool(raw_mute)
+    return volume_text, muted
 
 
 def load_favorites_list() -> List[Any]:
@@ -696,6 +754,7 @@ class MpvController:
         hud_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), "scripts", "tv_hud.lua")
         cli_bin = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "bin", "yagi")
         live_dump = is_timeshift_path(file_path)
+        volume, muted = playback_levels()
         cmd = [
             "mpv",
             f"--input-ipc-server={self.socket_path}",
@@ -704,6 +763,12 @@ class MpvController:
             "--title=Yagi",
             "--force-window=immediate",
             "--hwdec=auto-safe",
+            # auto deinterlaces 1080i and 480i and leaves progressive 720p alone.
+            # The HUD adds bwdif when hardware decode still hands up combed frames.
+            "--deinterlace=auto",
+            "--scale=lanczos",
+            "--cscale=lanczos",
+            "--dscale=mitchell",
             "--keepaspect-window=no",
             "--window-dragging=no",
             "--no-osc",
@@ -712,7 +777,8 @@ class MpvController:
             "--input-default-bindings=no",
             f"--script={hud_script}",
             "--osd-level=0",
-            "--mute=yes",
+            f"--volume={volume}",
+            "--mute=yes" if muted else "--mute=no",
             "--sub-create-cc-track=yes",
             "--slang=eng",
             "--subs-fallback=yes",
@@ -809,9 +875,11 @@ class MpvController:
                 return False
             if os.path.exists(self.socket_path):
                 time.sleep(0.1)
+                threading.Thread(target=ensure_tv_pinned, kwargs={"wait": 3.0}, daemon=True).start()
                 return commit_playing()
             time.sleep(0.05)
         if self.proc is not None and self.proc.poll() is None:
+            threading.Thread(target=ensure_tv_pinned, kwargs={"wait": 3.0}, daemon=True).start()
             return commit_playing()
         return False
 
@@ -920,9 +988,9 @@ class MpvController:
     def seek(self, seconds: float) -> bool:
         return self.transport.seek(seconds)
 
-    def toggle_fullscreen(self, target_tv: bool = False) -> None:
-        """Omarchy Super+F dispatcher. Unpin this PiP first — Hyprland no-ops fullscreen while pinned."""
-        _toggle_omarchy_fullscreen(target_tv=target_tv)
+    def toggle_fullscreen(self, target_tv: bool = False, exit_only: bool = False) -> None:
+        """Hyprland fullscreen. Unpin this picture first. exit_only leaves fullscreen."""
+        _toggle_omarchy_fullscreen(target_tv=target_tv, exit_only=exit_only)
 
     def _wait_until_stopped(self, timeout: float = 2.0) -> None:
         deadline = time.time() + timeout
