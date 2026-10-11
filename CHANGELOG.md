@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- The bar widget loads again. The hover handler sits on the key catcher. KeyboardPanel only accepts items, and a handler placed there stopped the plugin from loading.
+
 ## 0.1.1
 
 - The Guide grab runs as its own user service, so the record timer exiting no longer kills it.
