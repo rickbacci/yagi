@@ -1,0 +1,16 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test dependencies
+        run: bash scripts/setup-test-env.sh
+      - name: Run the suite
+        run: python3 -m unittest

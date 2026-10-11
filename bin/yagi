@@ -212,6 +212,13 @@ def cmd_list(args):
         print(f"{ch_num:<7} {net:<8} {display[:32]:<32} {freq_mhz:<12} {ch.get('modulation', '8VSB')}")
 
 
+def cmd_clipboard_text(args):
+    """Print clipboard text. Capped and timed out. Nothing from the user is on argv."""
+    del args
+    from engine.clipboard import read_clipboard_text
+    sys.stdout.write(read_clipboard_text())
+
+
 def cmd_guide(args):
     apply_stdin(args, ("query", "title", "clock", "length", "weekday", "channel", "tune", "alias", "id"))
     from engine.guide import (
@@ -1081,6 +1088,12 @@ def main():
     # list / channels
     p_list = subparsers.add_parser("list", aliases=["channels"], help="List discovered channels")
     p_list.set_defaults(func=cmd_list)
+
+    p_clip = subparsers.add_parser(
+        "clipboard-text",
+        help="Print clipboard text, capped and timed out, for the Guide search paste",
+    )
+    p_clip.set_defaults(func=cmd_clipboard_text)
 
     # guide / epg
     p_guide = subparsers.add_parser("guide", aliases=["epg"], help="Show electronic program guide schedules")

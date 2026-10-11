@@ -173,18 +173,25 @@ class TestTimeshiftStop(unittest.TestCase):
             sock = os.path.join(tmp, "dump.sock")
             state = os.path.join(tmp, "state.json")
             got = []
+            ready = threading.Event()
+            done = threading.Event()
 
             def serve():
                 server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 server.bind(sock)
                 server.listen(1)
                 server.settimeout(2)
-                conn, _ = server.accept()
-                with conn:
-                    got.append(conn.recv(128))
-                server.close()
+                ready.set()
+                try:
+                    conn, _ = server.accept()
+                    with conn:
+                        got.append(conn.recv(128))
+                finally:
+                    server.close()
+                    done.set()
 
             threading.Thread(target=serve, daemon=True).start()
+            self.assertTrue(ready.wait(2), "dump socket did not start listening")
             killed = []
             with patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state), \
                  patch("engine.timeshift.TIMESHIFT_SOCKET_PATH", sock), \
@@ -194,6 +201,7 @@ class TestTimeshiftStop(unittest.TestCase):
                  patch("engine.timeshift.os.kill", side_effect=lambda pid, sig: killed.append(sig)):
                 Timeshift._write_state({"pid": 55, "socket": sock})
                 Timeshift.stop_dump()
+            self.assertTrue(done.wait(2), "dump socket did not receive the quit")
             self.assertIn(b"quit", got[0])
             self.assertIn(signal.SIGTERM, killed)
             self.assertFalse(os.path.exists(sock))

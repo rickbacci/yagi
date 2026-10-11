@@ -261,14 +261,16 @@ class TestGuideStepsAside(unittest.TestCase):
         self.assertIn("Failed to start", text)
         self.assertNotIn("Recording finish started", text)
 
-    def test_version_is_0_1_2(self):
+    def test_version_is_0_1_3(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         with open(os.path.join(root, "manifest.json"), encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["version"], "0.1.2")
+            self.assertEqual(json.load(f)["version"], "0.1.3")
         with open(os.path.join(root, "CHANGELOG.md"), encoding="utf-8") as f:
             log = f.read()
+        self.assertIn("## 0.1.3", log)
         self.assertIn("## 0.1.2", log)
         self.assertIn("## 0.1.1", log)
+        self.assertIn("clipboard", log)
         self.assertIn("hover handler", log)
         self.assertIn("52 53", log)
         self.assertIn("own user service", log)

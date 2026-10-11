@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Guide search is not an editable text field until you open it. While it is open it stays read-only to Qt, so a foreign clipboard cannot stall the shell. Paste is capped and timed out. The search text stays off the command line.
+
 ## 0.1.2
 
 - The bar widget loads again. The hover handler sits on the key catcher. KeyboardPanel only accepts items, and a handler placed there stopped the plugin from loading.

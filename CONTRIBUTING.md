@@ -4,14 +4,17 @@ User setup is in [README.md](README.md). Why the play path works is `DESIGN.md`.
 
 ## Tests
 
-From the repo root:
+From the repo root, install the test tools once, then run the suite:
 
 ```bash
+bash scripts/setup-test-env.sh
 python3 -m unittest
 python3 bin/yagi status
 ```
 
-Tests set their own `XDG_*` directories and do not read or write `~/Videos/TV` or `~/.config/yagi`. They also do not put sockets in `/tmp`. They reject a non-item, such as a hover handler or a timer, placed directly in `KeyboardPanel`. That panel's default property only accepts items, and a handler there stops the bar from loading.
+`scripts/setup-test-env.sh` installs python3, luajit (also available as `lua`), psmisc (`fuser`, so the library cap can see a file that is open), nodejs, ffmpeg, mpv, and procps. GitHub Actions runs that script and then `python3 -m unittest` on every pull request and every push to `main`. A missing one of those tools fails the suite; it is not a skip.
+
+Tests set their own `XDG_*` directories and do not read or write `~/Videos/TV` or `~/.config/yagi`. They also do not put sockets in `/tmp`. They reject a non-item, such as a hover handler or a timer, placed directly in `KeyboardPanel`. That panel's default property only accepts items, and a handler there stops the bar from loading. They also reject an editable text field (`TextField`, `TextInput`, `TextEdit`, `TextArea`) that is not inside a `Loader` whose `active` starts false.
 
 After a QML change, `omarchy restart shell`.
 

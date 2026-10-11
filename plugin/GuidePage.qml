@@ -6,19 +6,60 @@ Column {
   id: guide
   required property var tv
   required property Item keyTarget
-  property alias searchField: guideSearch
   property alias grid: guideGrid
   property alias showsFlick: stripFlick
   property alias showsList: showsRepeater
+  // False until the user opens search. The field is a Loader child, so it
+  // does not exist while this stays false.
+  property bool searchOpen: false
+  readonly property bool searchFocused: guide.searchOpen && searchLoader.item !== null && searchLoader.item.activeFocus
+  readonly property int searchLimit: 64
 
   readonly property bool onGrid: guide.tv.guideTab === "grid"
+
+  function openSearch() {
+    guide.searchOpen = true
+  }
+
+  function closeSearch() {
+    guide.searchOpen = false
+  }
+
+  function clearSearch() {
+    guide.tv.guideSearchText = ""
+    guide.searchOpen = false
+  }
+
+  function insertSearch(chunk) {
+    var next = (guide.tv.guideSearchText + (chunk || "")).slice(0, guide.searchLimit)
+    guide.tv.guideSearchText = next
+    if (searchLoader.item)
+      searchLoader.item.text = next
+  }
+
+  function backspaceSearch() {
+    var cur = guide.tv.guideSearchText
+    if (!cur.length)
+      return
+    var next = cur.slice(0, cur.length - 1)
+    guide.tv.guideSearchText = next
+    if (searchLoader.item)
+      searchLoader.item.text = next
+  }
+
+  function pasteSearch() {
+    if (pasteProc.running)
+      return
+    pasteProc.command = [guide.tv.binPath, "clipboard-text"]
+    pasteProc.running = true
+  }
 
   visible: guide.tv.guideStripOpen
   spacing: Style.space(6)
 
   Item {
     width: parent.width
-    height: Math.max(tabRow.implicitHeight, guideSearch.implicitHeight)
+    height: Math.max(tabRow.implicitHeight, searchPlaceholder.implicitHeight)
 
     Row {
       id: tabRow
@@ -44,23 +85,100 @@ Column {
       }
     }
 
-    TextField {
-      id: guideSearch
+    Item {
+      id: searchBox
       anchors.left: tabRow.right
       anchors.leftMargin: Style.space(10)
       anchors.right: matchCount.visible ? matchCount.left : parent.right
       anchors.rightMargin: matchCount.visible ? Style.space(8) : 0
       anchors.verticalCenter: parent.verticalCenter
-      placeholderText: guide.onGrid ? "Search shows and teams" : "Filter shows"
-      Keys.onEscapePressed: {
-        text = ""
-        guide.keyTarget.forceActiveFocus()
+      height: searchPlaceholder.implicitHeight
+
+      Text {
+        id: searchPlaceholder
+        visible: !guide.searchOpen
+        width: parent.width
+        textFormat: Text.PlainText
+        text: guide.tv.guideSearchText.length
+              ? guide.tv.guideSearchText
+              : (guide.onGrid ? "Search shows and teams" : "Filter shows")
+        color: guide.tv.guideSearchText.length ? guide.tv.bar.foreground : Color.muted
+        font.family: guide.tv.bar.fontFamily
+        font.pixelSize: Style.font.heading
+        elide: Text.ElideRight
+
+        MouseArea {
+          anchors.fill: parent
+          onClicked: guide.openSearch()
+        }
       }
-      Keys.onReturnPressed: guide.tv.leaveGuideSearch()
-      Keys.onDownPressed: guide.tv.leaveGuideSearch()
-      font.family: guide.tv.bar.fontFamily
-      font.pixelSize: Style.font.heading
-      onTextChanged: guide.tv.guideSearchText = text
+
+      // Inactive until search is open. Qt 6.12 connects every TextInput to
+      // clipboard dataChanged and then reads the offer synchronously.
+      Loader {
+        id: searchLoader
+        active: guide.searchOpen
+        anchors.fill: parent
+        sourceComponent: Component {
+          TextField {
+            id: guideSearch
+            readOnly: true
+            maximumLength: guide.searchLimit
+            placeholderText: guide.onGrid ? "Search shows and teams" : "Filter shows"
+            font.family: guide.tv.bar.fontFamily
+            font.pixelSize: Style.font.heading
+            anchors.fill: parent
+            Component.onCompleted: {
+              text = guide.tv.guideSearchText
+              forceActiveFocus()
+            }
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+              if (event.key === Qt.Key_Escape) {
+                guide.tv.guideSearchText = ""
+                guide.keyTarget.forceActiveFocus()
+                event.accepted = true
+                Qt.callLater(guide.closeSearch)
+                return
+              }
+              if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter || event.key === Qt.Key_Down) {
+                guide.tv.leaveGuideSearch()
+                event.accepted = true
+                return
+              }
+              if (event.key === Qt.Key_Backspace) {
+                guide.backspaceSearch()
+                event.accepted = true
+                return
+              }
+              if ((event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier))
+                  || (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier))) {
+                guide.pasteSearch()
+                event.accepted = true
+                return
+              }
+              var ch = event.text || ""
+              if (ch.length && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+                guide.insertSearch(ch)
+                event.accepted = true
+              }
+            }
+          }
+        }
+      }
+    }
+
+    Process {
+      id: pasteProc
+      stdout: StdioCollector {
+        id: pasteOut
+        waitForEnd: true
+      }
+      onExited: function(code) {
+        if (!guide.searchOpen || code !== 0)
+          return
+        guide.insertSearch(String(pasteOut.text || "").replace(/[\r\n]+/g, " "))
+      }
     }
 
     Text {

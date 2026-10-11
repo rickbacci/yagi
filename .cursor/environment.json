@@ -1,0 +1,4 @@
+{
+  "name": "Yagi",
+  "install": "bash scripts/setup-test-env.sh"
+}
