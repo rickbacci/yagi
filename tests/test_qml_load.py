@@ -11,6 +11,7 @@ which has no Quickshell.Io import, and that compile must fail.
 """
 
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -22,10 +23,126 @@ from tests.test_qml_items import _tokenize
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLUGIN = os.path.join(PROJECT_ROOT, "plugin")
-QML_RUNNER = (
-    shutil.which("qmltestrunner")
-    or ("/usr/lib/qt6/bin/qmltestrunner" if os.path.isfile("/usr/lib/qt6/bin/qmltestrunner") else "")
-)
+# Arch puts Qt 5's qmltestrunner on PATH (/usr/bin) and Qt 6's at this path.
+QT6_QMLTESTRUNNER = "/usr/lib/qt6/bin/qmltestrunner"
+_QT6_VERSION = re.compile(r"\bQt\s*6(\.|$)")
+_QT5_VERSION = re.compile(r"\bQt\s*5(\.|$)")
+
+
+class QmlRunnerError(RuntimeError):
+    """No usable Qt 6 qmltestrunner. A Qt 5 one on PATH is not a substitute."""
+
+
+def qml_child_env(base=None):
+    """Offscreen, with the desktop theme and display variables removed.
+
+    A user session often sets QT_QPA_PLATFORMTHEME=gtk3. Qt 5 then warns
+    'cannot open display' and exits before it compiles anything.
+    """
+    env = dict(base if base is not None else os.environ)
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    for key in ("QT_QPA_PLATFORMTHEME", "DISPLAY", "WAYLAND_DISPLAY", "QT_STYLE_OVERRIDE"):
+        env.pop(key, None)
+    return env
+
+
+def _version_text(path):
+    env = qml_child_env()
+    chunks = []
+    for flag in ("-v", "--version", "-version"):
+        try:
+            proc = subprocess.run(
+                [path, flag],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                env=env,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        chunks.append((proc.stdout or "") + "\n" + (proc.stderr or ""))
+    return "\n".join(chunks)
+
+
+def _same_file(left, right):
+    try:
+        return os.path.isfile(left) and os.path.isfile(right) and os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def _reports_qt6(path):
+    """True when this qmltestrunner is Qt 6. Qt 5's -v text, qmake6, or ldd decides."""
+    text = _version_text(path)
+    saw6 = bool(_QT6_VERSION.search(text))
+    saw5 = bool(_QT5_VERSION.search(text))
+    if saw6 and not saw5:
+        return True
+    if saw5 and not saw6:
+        return False
+    for tool in ("qtpaths6", "qmake6"):
+        exe = shutil.which(tool)
+        if not exe:
+            continue
+        try:
+            bins = subprocess.run(
+                [exe, "-query", "QT_INSTALL_BINS"],
+                capture_output=True, text=True, timeout=8,
+            )
+            ver = subprocess.run(
+                [exe, "-query", "QT_VERSION"],
+                capture_output=True, text=True, timeout=8,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if not (ver.stdout or "").strip().startswith("6"):
+            continue
+        bindir = (bins.stdout or "").strip()
+        if bindir and _same_file(path, os.path.join(bindir, "qmltestrunner")):
+            return True
+    try:
+        ldd = subprocess.run(["ldd", path], capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    linked = (ldd.stdout or "") + (ldd.stderr or "")
+    if "libQt6Core" in linked or "libQt6Test" in linked:
+        return True
+    if "libQt5Core" in linked or "libQt5Test" in linked:
+        return False
+    return False
+
+
+def find_qt6_qmltestrunner(search_path=None, fixed_paths=None):
+    """Qt 6 runner. A Qt 5 qmltestrunner earlier on PATH is ignored.
+
+    Order: /usr/lib/qt6/bin/qmltestrunner, qmltestrunner6, qmltestrunner-qt6,
+    then PATH's qmltestrunner only when that binary reports Qt 6.
+    """
+    if fixed_paths is None:
+        fixed_paths = (QT6_QMLTESTRUNNER,)
+    chosen = []
+    for path in fixed_paths:
+        if path and os.path.isfile(path) and os.access(path, os.X_OK) and path not in chosen:
+            chosen.append(path)
+    for name in ("qmltestrunner6", "qmltestrunner-qt6"):
+        found = shutil.which(name, path=search_path)
+        if found and found not in chosen:
+            chosen.append(found)
+    on_path = shutil.which("qmltestrunner", path=search_path)
+    if on_path and on_path not in chosen:
+        if _reports_qt6(on_path):
+            chosen.append(on_path)
+        elif not chosen:
+            raise QmlRunnerError(
+                f"{on_path} is Qt 5. The QML tests need Qt 6, "
+                f"for example {QT6_QMLTESTRUNNER} from qt6-declarative."
+            )
+    if not chosen:
+        raise QmlRunnerError(
+            "No Qt 6 qmltestrunner found. Install qt6-declarative "
+            "(Ubuntu: qt6-declarative-dev-tools; Arch: qt6-declarative)."
+        )
+    return chosen[0]
 
 QTQUICK = {
     "Item", "Rectangle", "Text", "MouseArea", "Column", "Row", "Flickable",
@@ -43,7 +160,11 @@ ITEM_PROPS = {
 
 
 def _runner_available():
-    return bool(QML_RUNNER) and os.path.isfile(QML_RUNNER)
+    try:
+        find_qt6_qmltestrunner()
+    except QmlRunnerError:
+        return False
+    return True
 
 
 def _members(plugin_dir):
@@ -253,21 +374,22 @@ def _harness(qml_file, create):
 
 def compile_qml(qml_file, import_root, plugin_dir, create=False):
     """Return (ok, output). Compiles and instantiates qml_file."""
-    if not _runner_available():
-        return False, "qmltestrunner is not installed"
+    try:
+        runner = find_qt6_qmltestrunner()
+    except QmlRunnerError as exc:
+        return False, str(exc)
     work = tempfile.mkdtemp(prefix="qml-load-")
     try:
         os.chmod(work, 0o700)
         harness = os.path.join(work, "tst_Load.qml")
         with open(harness, "w", encoding="utf-8") as handle:
             handle.write(_harness(os.path.abspath(qml_file), create))
-        env = os.environ.copy()
-        env["QT_QPA_PLATFORM"] = "offscreen"
+        env = qml_child_env()
         env["XDG_RUNTIME_DIR"] = work
         env["QML2_IMPORT_PATH"] = import_root
         env["QML_IMPORT_PATH"] = import_root
         proc = subprocess.run(
-            [QML_RUNNER, "-input", harness, "-o", "-,txt", "-import", import_root],
+            [runner, "-input", harness, "-o", "-,txt", "-import", import_root],
             capture_output=True,
             text=True,
             env=env,
@@ -282,8 +404,47 @@ def compile_qml(qml_file, import_root, plugin_dir, create=False):
 
 class TestQmlLoads(unittest.TestCase):
     def setUp(self):
-        if not _runner_available():
-            self.fail("qmltestrunner is required; run scripts/setup-test-env.sh")
+        try:
+            find_qt6_qmltestrunner()
+        except QmlRunnerError as exc:
+            self.fail(str(exc))
+
+    def test_a_qt5_runner_earlier_on_path_is_not_used(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = os.path.join(folder, "qmltestrunner")
+            with open(fake, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "#!/bin/sh\n"
+                    "case \"$1\" in\n"
+                    "-v|--version|-version)\n"
+                    "  echo 'qmltestrunner version 5.15.16'\n"
+                    "  echo 'Qt 5.15.16'\n"
+                    "  exit 0\n"
+                    "  ;;\n"
+                    "esac\n"
+                    "echo 'Gtk-WARNING cannot open display' >&2\n"
+                    "exit 1\n"
+                )
+            os.chmod(fake, stat.S_IRWXU)
+            search = folder + os.pathsep + os.environ.get("PATH", "")
+            self.assertEqual(shutil.which("qmltestrunner", path=search), fake)
+            chosen = find_qt6_qmltestrunner(search)
+        self.assertFalse(_same_file(chosen, fake))
+        self.assertTrue(
+            chosen == QT6_QMLTESTRUNNER or _reports_qt6(chosen),
+            chosen,
+        )
+
+    def test_only_a_qt5_runner_fails_with_a_clear_message(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = os.path.join(folder, "qmltestrunner")
+            with open(fake, "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\necho 'Qt 5.15.16'\nexit 0\n")
+            os.chmod(fake, stat.S_IRWXU)
+            with self.assertRaises(QmlRunnerError) as caught:
+                find_qt6_qmltestrunner(folder, fixed_paths=())
+        self.assertIn("Qt 5", str(caught.exception))
+        self.assertIn(fake, str(caught.exception))
 
     def test_bar_widget_compiles_and_instantiates(self):
         with tempfile.TemporaryDirectory() as stubs:
