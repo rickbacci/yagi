@@ -307,34 +307,18 @@ class TestQmlLoads(unittest.TestCase):
         self.assertEqual(failed, [])
 
     def test_release_08ae869_guide_page_is_not_a_type(self):
-        """The merged 0.1.3 file used StdioCollector without importing it."""
-        show = subprocess.run(
-            ["git", "show", "08ae869:plugin/GuidePage.qml"],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-        )
-        if show.returncode != 0:
-            fetched = subprocess.run(
-                ["git", "fetch", "--depth", "1", "origin", "08ae869"],
-                capture_output=True,
-                text=True,
-                cwd=PROJECT_ROOT,
-            )
-            show = subprocess.run(
-                ["git", "show", "08ae869:plugin/GuidePage.qml"],
-                capture_output=True,
-                text=True,
-                cwd=PROJECT_ROOT,
-            )
-            self.assertEqual(show.returncode, 0, (show.stderr or "") + (fetched.stderr or ""))
-        self.assertNotIn("import Quickshell.Io", show.stdout)
+        """plugin/GuidePage.qml at 08ae869 used StdioCollector without importing it."""
+        fixture = os.path.join(PROJECT_ROOT, "tests", "fixtures", "GuidePage-08ae869.qml")
+        with open(fixture, encoding="utf-8") as handle:
+            broken_src = handle.read()
+        self.assertNotIn("import Quickshell.Io", broken_src)
+        self.assertIn("StdioCollector", broken_src)
         with tempfile.TemporaryDirectory() as tree:
             plugin = os.path.join(tree, "plugin")
             shutil.copytree(PLUGIN, plugin, ignore=shutil.ignore_patterns("__pycache__"))
             broken = os.path.join(plugin, "GuidePage.qml")
             with open(broken, "w", encoding="utf-8") as handle:
-                handle.write(show.stdout)
+                handle.write(broken_src)
             os.chmod(broken, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
             stubs = os.path.join(tree, "stubs")
             write_stubs(stubs, plugin)
