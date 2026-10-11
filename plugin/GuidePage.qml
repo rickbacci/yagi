@@ -96,7 +96,11 @@ Column {
     textFormat: Text.PlainText
     text: guide.tv.guideSearchActive
           ? "Nothing listed matches. Stations list about the next five hours, so search again closer to air time."
-          : "No listings yet for these channels. Each Guide update adds what the stations send."
+          : (guide.tv.channelFilter === "favorites" && guide.tv.favoriteVisibleCount === 0
+             && (guide.tv.watchableChannels || []).length > 0)
+            ? "No favorites yet. Open All and click ☆ on a channel to add it here."
+            : (guide.tv.guideWaitReason
+               || "No listings yet for these channels. Each Guide update adds what the stations send.")
     color: Color.muted
     font.family: guide.tv.bar.fontFamily
     font.pixelSize: Style.font.heading

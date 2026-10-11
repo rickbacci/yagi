@@ -81,6 +81,8 @@ BarWidget {
   property int cursorIndex: 0
   property bool guideRefreshStarted: false
   property bool guideStatusRunning: false
+  property string guideWaitReason: ""
+  property string guideStatusError: ""
   property int guideStatusTower: 0
   property int guideStatusTowers: 0
   readonly property bool guideRefreshing: root.guideRefreshStarted || root.guideStatusRunning
@@ -185,11 +187,25 @@ BarWidget {
 
   function refreshGuide() {
     if (guideRefreshProc.running || root.guideStatusRunning) return
-    if (root.tunersFree === 0) return
+    if (root.tunersFree === 0) {
+      root.guideWaitReason = root.tunerCount === 1
+        ? "The tuner is busy. The Guide will update when it is free."
+        : "Both tuners are busy. The Guide will update when one is free."
+      return
+    }
+    root.guideWaitReason = ""
     root.guideRefreshStarted = true
     guideRefreshProc.running = false
     guideRefreshProc.command = [root.binPath, "guide", "refresh"]
     guideRefreshProc.running = true
+  }
+
+  function maybeRefreshGuide() {
+    if (Model.guideHasUpcoming(root.guideData, root.gridNow)) {
+      root.guideWaitReason = ""
+      return
+    }
+    root.refreshGuide()
   }
 
   function clockLabel(unixSec) {
@@ -205,6 +221,7 @@ BarWidget {
     if (!root.guideStripOpen) return
     root.showBucket = Model.bucketNow()
     root.loadShows()
+    root.maybeRefreshGuide()
   }
 
   function loadShows() {
@@ -1014,6 +1031,10 @@ BarWidget {
       if (!raw) return
       var p = JSON.parse(raw)
       if (p.library_max_gb !== undefined) root.libraryMaxGb = p.library_max_gb
+      if (p.channel_filter === "favorites" || p.channel_filter === "all" || p.channel_filter === "hidden") {
+        root.channelFilter = p.channel_filter
+        root.filterInitialized = true
+      }
     } catch (e) {
     }
   }
@@ -1514,6 +1535,7 @@ BarWidget {
       root.guideStatusRunning = !!s.running
       root.guideStatusTower = Number(s.tower) || 0
       root.guideStatusTowers = Number(s.towers) || 0
+      root.guideStatusError = String(s.error || "")
     } catch (e) {
       root.guideStatusRunning = false
     }
@@ -1962,10 +1984,12 @@ BarWidget {
             StatusCard {
               tv: root
               width: parent.width
-              message: !root.guideRefreshing ? ""
-                : root.guideStatusTowers > 0
+              message: root.guideRefreshing
+                ? (root.guideStatusTowers > 0
                   ? "Updating the Guide · tower " + root.guideStatusTower + " of " + root.guideStatusTowers
-                  : "Updating the Guide"
+                  : "Updating the Guide")
+                : (root.guideWaitReason
+                  || (Model.guideHasUpcoming(root.guideData, root.gridNow) ? "" : root.guideStatusError))
             }
 
             StatusCard {

@@ -107,7 +107,23 @@ class TestGuide(unittest.TestCase):
 
             refresh_guide(channels=lineup, guide_path=guide_file, grabber=lambda: {}, sessions=[])
             with open(guide_file, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["updated_at"], 1234)
+            status_path = os.path.join(tmp_dir, "guide_status.json")
+            with open(status_path, encoding="utf-8") as f:
+                status = json.load(f)
+            self.assertEqual(status["failures"], 1)
+            self.assertIn("No listings attached", status["error"])
+
+            refresh_guide(
+                channels=lineup,
+                guide_path=guide_file,
+                grabber=lambda: {"3.1": [{"title": "News", "start": "6:00 PM", "end": "6:30 PM", "gps_start": 1, "duration_sec": 1800}]},
+                sessions=[],
+            )
+            with open(guide_file, encoding="utf-8") as f:
                 self.assertGreater(json.load(f)["updated_at"], 1234)
+            with open(status_path, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["failures"], 0)
 
     def test_collapse_repeats_keeps_one_copy(self):
         from engine.guide import collapse_repeats
@@ -600,6 +616,51 @@ class TestGuide(unittest.TestCase):
         self.assertFalse(guide_grab_due(now, now - 100, False))
         self.assertTrue(guide_grab_due(now, now - 6 * 3600, False))
         self.assertTrue(guide_grab_due(now, 0, False))
+
+    def test_a_missed_channel_is_reported_and_does_not_count_as_a_read(self):
+        from engine.guide import refresh_guide
+
+        lineup = [{"channel_number": "8.1", "tune_name": "WJW", "name": "WJW"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            guide_file = os.path.join(tmp, "guide.json")
+            with open(guide_file, "w", encoding="utf-8") as f:
+                json.dump({"updated_at": 50, "channels": {}}, f)
+
+            def grab():
+                return {"9999": [{"title": "Orphan", "gps_start": 5, "duration_sec": 60}]}
+
+            result = refresh_guide(channels=lineup, guide_path=guide_file, grabber=grab, sessions=[])
+            self.assertEqual(result["dropped"], ["9999"])
+            self.assertEqual(result["attached"], 0)
+            self.assertIn("9999", result["error"])
+            with open(guide_file, encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["updated_at"], 50)
+            with open(os.path.join(tmp, "guide_status.json"), encoding="utf-8") as f:
+                status = json.load(f)
+            self.assertEqual(status["failures"], 1)
+            self.assertIn("9999", status["error"])
+
+    def test_backoff_grows_and_an_unfinished_launch_is_counted_once(self):
+        from engine.guide import guide_backoff_active, guide_retry_wait, mark_guide_attempt, settle_unfinished_attempt
+        from engine.psip import read_guide_status
+
+        self.assertEqual(guide_retry_wait(0), 0)
+        self.assertEqual(guide_retry_wait(1), 120)
+        self.assertEqual(guide_retry_wait(3), 480)
+        self.assertLessEqual(guide_retry_wait(20), 3 * 3600)
+        now = 1_000_000.0
+        self.assertFalse(guide_backoff_active({"failures": 1, "failed_at": now - 121}, now))
+        self.assertTrue(guide_backoff_active({"failures": 1, "failed_at": now - 10}, now))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "guide_status.json")
+            mark_guide_attempt(path)
+            self.assertTrue(settle_unfinished_attempt(path))
+            self.assertFalse(settle_unfinished_attempt(path))
+            status = read_guide_status(path)
+            self.assertEqual(status["failures"], 1)
+            self.assertIn("before it recorded a result", status["error"])
+            self.assertTrue(guide_backoff_active(status, status["failed_at"] + 30))
 
 
 if __name__ == "__main__":

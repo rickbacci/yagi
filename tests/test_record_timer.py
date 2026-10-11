@@ -13,7 +13,18 @@ from unittest import mock
 
 from engine.dvr import DvrManager, read_sidecar, write_sidecar
 from engine.guide import GUIDE_GRAB_GAP_SEC, guide_grab_due, run_guide_update
-from engine.paths import LIVE_SLICE, REC_SLICE, TUNER_SLICE, dump_unit, in_unit, own_scope, state_lock, stop_unit
+from engine.paths import (
+    GUIDE_UNIT,
+    LIVE_SLICE,
+    REC_SLICE,
+    TUNER_SLICE,
+    dump_unit,
+    in_unit,
+    own_scope,
+    own_service,
+    state_lock,
+    stop_unit,
+)
 from engine.schedule import next_window, save_schedule
 
 CLI_BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin", "yagi")
@@ -63,6 +74,17 @@ class TestOwnScope(unittest.TestCase):
         with mock.patch("builtins.open", mock.mock_open(read_data=group)):
             self.assertTrue(in_unit(LIVE_SLICE))
             self.assertFalse(in_unit(REC_SLICE))
+
+    def test_a_guide_grab_is_a_service_not_a_scope(self):
+        with mock.patch("engine.paths.systemd_user", return_value=True):
+            cmd = own_service(["python3", "yagi", "guide", "update"])
+        self.assertEqual(cmd[:3], ["systemd-run", "--user", "--quiet"])
+        self.assertNotIn("--scope", cmd)
+        self.assertIn(f"--unit={GUIDE_UNIT}", cmd)
+        self.assertIn("--service-type=exec", cmd)
+        self.assertNotIn("--wait", cmd)
+        self.assertNotIn("--no-block", cmd)
+        self.assertEqual(cmd[cmd.index("--") + 1:], ["python3", "yagi", "guide", "update"])
 
     def test_the_process_leaves_the_callers_cgroup(self):
         cmd = own_scope(["sleep", "2"])
@@ -121,7 +143,13 @@ class TestGuideStepsAside(unittest.TestCase):
         self.assertGreaterEqual(PAD_EARLY_SEC - (60 + slack), 20)
 
     def test_the_timer_starts_the_update_and_returns(self):
+        from engine.psip import GUIDE_STATUS_PATH
+
         cli = _load_cli()
+        try:
+            os.remove(GUIDE_STATUS_PATH)
+        except OSError:
+            pass
         with mock.patch("engine.psip.clear_stale_guide_status"), \
                 mock.patch("engine.psip.guide_update_running", return_value=False), \
                 mock.patch("engine.guide.load_guide", return_value={"updated_at": 0}), \
@@ -133,7 +161,54 @@ class TestGuideStepsAside(unittest.TestCase):
         inline.assert_not_called()
         argv = spawn.call_args[0][0]
         self.assertEqual(argv[-2:], ["guide", "update"])
+        self.assertNotIn("--scope", argv)
         self.assertTrue(spawn.call_args[1].get("start_new_session"))
+
+    def test_a_failed_service_start_backs_off_instead_of_retrying_every_minute(self):
+        from engine.psip import GUIDE_STATUS_PATH, read_guide_status
+
+        cli = _load_cli()
+        try:
+            os.remove(GUIDE_STATUS_PATH)
+        except OSError:
+            pass
+        failed = subprocess.CompletedProcess([], 1, "", "Failed to start transient service")
+        patches = [
+            mock.patch("engine.psip.clear_stale_guide_status"),
+            mock.patch("engine.psip.guide_update_running", return_value=False),
+            mock.patch("engine.paths.unit_active", return_value=False),
+            mock.patch("engine.guide.load_guide", return_value={"updated_at": 0}),
+            mock.patch("engine.guide.guide_tuner_free", return_value=True),
+            mock.patch("engine.pool.free_count", return_value=2),
+            mock.patch("engine.paths.systemd_user", return_value=True),
+        ]
+        with mock.patch.object(cli.subprocess, "run", return_value=failed) as run, \
+                mock.patch.object(cli.subprocess, "Popen") as spawn:
+            for patch in patches:
+                patch.start()
+            try:
+                cli._grab_guide_if_due()
+            finally:
+                for patch in patches:
+                    patch.stop()
+        spawn.assert_not_called()
+        argv = run.call_args[0][0]
+        self.assertNotIn("--scope", argv)
+        self.assertIn(f"--unit={GUIDE_UNIT}", argv)
+        status = read_guide_status()
+        self.assertGreaterEqual(int(status.get("failures") or 0), 1)
+        self.assertIn("Failed to start", status.get("error") or "")
+        with mock.patch.object(cli.subprocess, "run") as again, \
+                mock.patch.object(cli.subprocess, "Popen") as spawn_again:
+            for patch in patches:
+                patch.start()
+            try:
+                cli._grab_guide_if_due()
+            finally:
+                for patch in patches:
+                    patch.stop()
+        again.assert_not_called()
+        spawn_again.assert_not_called()
 
     def test_a_second_update_steps_aside(self):
         key = f"test-guide-update-{os.getpid()}"
@@ -156,7 +231,7 @@ class TestGuideStepsAside(unittest.TestCase):
             release.set()
             other.join()
         with mock.patch("engine.guide.GUIDE_UPDATE_LOCK_KEY", key), \
-                mock.patch("engine.guide.refresh_guide", return_value={"skipped": False}):
+                mock.patch("engine.guide.refresh_guide", return_value={"skipped": False, "attached": 1}):
             self.assertEqual(run_guide_update(grabber=dict), "done")
 
 

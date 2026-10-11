@@ -108,6 +108,66 @@ def own_scope(cmd: List[str], unit: str = "", slice_name: str = "") -> List[str]
     return args + ["--"] + list(cmd)
 
 
+# The Guide grab. A scope is the wrong tool: systemd-run --scope stays in the
+# oneshot's cgroup until it has moved the child, and the oneshot exits in the
+# same breath. KillMode=control-group then signals the child before it can
+# write guide.json. A transient service is forked by the user manager.
+GUIDE_UNIT = "yagi-guide.service"
+_SERVICE_ENV = (
+    "HOME",
+    "PATH",
+    "TZ",
+    "XDG_RUNTIME_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_VIDEOS_DIR",
+)
+
+
+def own_service(cmd: List[str], unit: str = GUIDE_UNIT) -> List[str]:
+    """A transient user service that outlives the record timer.
+
+    systemd-run without --wait returns when the service has started, not when
+    the command finishes. The caller waits for that, then the oneshot may exit.
+    """
+    if not systemd_user():
+        return list(cmd)
+    args = [
+        "systemd-run", "--user", "--quiet", "--collect", "--no-ask-password",
+        f"--unit={unit}",
+        "--description=Yagi Guide update",
+        "--service-type=exec",
+        "-p", "TimeoutStopSec=15",
+        "-p", "RuntimeMaxSec=900",
+        "-p", "StandardOutput=journal",
+        "-p", "StandardError=journal",
+    ]
+    for key in _SERVICE_ENV:
+        val = os.environ.get(key)
+        if val:
+            args.extend(["-E", f"{key}={val}"])
+    return args + ["--"] + list(cmd)
+
+
+def unit_state(unit: str) -> str:
+    """systemctl is-active text, or "" when there is no user manager."""
+    if not systemd_user():
+        return ""
+    try:
+        result = subprocess.run(
+            ["systemctl", "--user", "is-active", unit],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return (result.stdout or "").strip()
+
+
+def unit_active(unit: str) -> bool:
+    """True while unit is starting or running. A finished oneshot is not."""
+    return unit_state(unit) in ("active", "activating", "reloading")
+
+
 def stop_unit(unit: str) -> bool:
     """Stop a scope or slice and wait until everything in it is gone. False without systemd."""
     if not systemd_user():

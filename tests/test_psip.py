@@ -342,6 +342,18 @@ class TestPsip(unittest.TestCase):
                 json.dump(data, f)
             self.assertTrue(clear_stale_guide_status(path))
             self.assertFalse(guide_update_running(path))
+            write_guide_status(True, 1, 4, path=path, failures=3, error="zap failed")
+            with open(path, encoding="utf-8") as f:
+                stale = json.load(f)
+            stale["pid"] = 2 ** 22 + 99
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(stale, f)
+            self.assertTrue(clear_stale_guide_status(path))
+            with open(path, encoding="utf-8") as f:
+                kept = json.load(f)
+            self.assertEqual(kept["failures"], 3)
+            self.assertEqual(kept["error"], "zap failed")
+            self.assertFalse(kept["running"])
 
     def test_description_huffman_roundtrip(self):
         from engine.atsc_huffman import DESCRIPTION, decode_description, encode

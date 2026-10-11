@@ -345,6 +345,22 @@ function programUnix(prog) {
   return gps + 315964800 - 18
 }
 
+// True when any lineup row has a listing that has not ended yet.
+function guideHasUpcoming(guideData, nowUnix) {
+  var now = Number(nowUnix) || (Date.now() / 1000)
+  if (!guideData) return false
+  for (var k in guideData) {
+    var programs = (guideData[k] && guideData[k].programs) || []
+    for (var i = 0; i < programs.length; i++) {
+      var start = programUnix(programs[i])
+      if (start <= 0) continue
+      var dur = Number(programs[i].duration_sec) || 1800
+      if (start + dur > now) return true
+    }
+  }
+  return false
+}
+
 function formatClock(unix) {
   var d = new Date(Number(unix) * 1000)
   var h24 = d.getHours()
