@@ -487,8 +487,11 @@ class TestQmlLoads(unittest.TestCase):
                 os.path.join(plugin, "BarWidget.qml"), stubs, plugin, create=True,
             )
         self.assertFalse(ok, output)
-        self.assertIn("StdioCollector", output)
-        self.assertTrue("not a type" in output or "unavailable" in output)
+        self.assertTrue(
+            "StdioCollector" in output or "Process is not a type" in output,
+            output,
+        )
+        self.assertTrue("not a type" in output or "unavailable" in output, output)
 
 
 if __name__ == "__main__":
