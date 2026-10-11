@@ -1,144 +1,59 @@
-# Yagi (`richardb.yagi`)
+# Yagi
 
-[![Platform](https://img.shields.io/badge/platform-Omarchy%20%7C%20Arch%20Linux-blue)](https://omarchy.org/)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+Watch, pause, and record free over-the-air TV from the Omarchy bar. Yagi scans ATSC 1.0 stations, shows the listings those stations broadcast, and records to your videos folder.
 
-Watch, pause, and record free over-the-air TV from your Omarchy bar with a USB ATSC tuner.
-
-![Yagi guide grid](assets/yagi-guide.png)
+![Guide](assets/yagi-guide.png)
 
 <table>
   <tr>
-    <td width="50%" valign="top"><img src="assets/yagi-channels.png" alt="Yagi channel list"></td>
-    <td width="50%" valign="top"><img src="assets/yagi-recordings.png" alt="Yagi recordings"></td>
+    <td width="50%" valign="top"><img src="assets/yagi-channels.png" alt="Channel list"></td>
+    <td width="50%" valign="top"><img src="assets/yagi-recordings.png" alt="Recordings"></td>
   </tr>
 </table>
 
-## What you need
+## Requirements
 
 - [Omarchy](https://omarchy.org/) (Hyprland and Quickshell on Arch Linux)
-- A Linux-supported ATSC 1.0 USB tuner, such as a Hauppauge WinTV-dualHD
 - An antenna
+- An ATSC 1.0 tuner that Linux shows as `/dev/dvb/adapterN/frontend0` with ATSC in its delivery systems
 
-## Features
-
-- Scan local stations from the bar, then watch in a pinned 16:9 picture.
-- Pause live TV and skip inside that window. Close TV deletes the pause file. It is not a library recording.
-- A Guide built only from what each station broadcasts. Search looks at titles and descriptions.
-- Record one airing, or every airing of a show, into `~/Videos/TV`.
-- Recording the channel you are watching copies the live dump, so it does not take a second tuner. It can start at the top of the show when the pause reaches back that far.
-- A channel on the same tower comes up in about a second. Another tower takes about 3 seconds of tuner lock first.
-- Runs as your user. No root for the app.
-
-## Why not MythTV or Kaffeine
-
-Those are full TV apps. Yagi is the Omarchy bar. It leases tuners so live TV, a recording, and a scan do not grab the same stick. It tunes the ATSC pilot at `+28615` Hz. OTA stations are unencrypted, but many set the PSIP `access_controlled` bit; Kaffeine treats that as scrambled, and Yagi plays the stream. The picture is a Hyprland window of class `yagi`.
-
-Architecture: `DESIGN.md`. Tuners and RF: `HARDWARE_AND_TROUBLESHOOTING.md`.
-
-```
-yagi/
-├── manifest.json
-├── bin/yagi
-├── engine/  player/  plugin/  tests/  markets/
-├── AGENTS.md  DESIGN.md  HARDWARE_AND_TROUBLESHOOTING.md
-└── skills/yagi/SKILL.md
-```
-
-State lives in `~/.config/yagi/`. The library is `~/Videos/TV`.
-
-`markets/cleveland.json` is an example station map: callsigns and network names for one market, typed by hand, because the broadcast does not carry them. Copy it, or a file in the same shape for your market, to `~/.config/yagi/station_map.json`. Without that file, names come from the scan.
-
-## Honesty
-
-Built and tested on one Hauppauge WinTV-dualHD. See Tuners below.
-
-- Two ATSC adapters, shared: live TV, recordings, scans, and Guide updates each take a free one. Recording what you watch shares live TV's tuner; changing to another tower then moves live TV to the free one, or asks you to stop a recording. A one-tuner box can watch, or record, not both. Nothing takes a tuner that is live, recording, or scanning; a Guide update gives way.
-- Ad skipping uses Comskip if installed (`omarchy-pkg-aur-add comskip`), otherwise ffmpeg's black-frame and silence detection, which misses more.
-- First run: no stations until you scan, no Hidden list until you hide one, no Guide titles until `guide refresh` (what the stations send in PSIP). The engine does not ship a canned lineup. `markets/cleveland.json` is only an example you can copy in.
-- Super+K is Omarchy’s keybindings overlay. It does not open this flyout. Use the antenna, or bind `omarchy-shell -q shell toggle richardb.yagi` in your Hyprland config.
-- State JSON is not all `0600`.
-- Version in `manifest.json` is `0.1.1`. Not a published 1.0.
-
-## Tuners
-
-Yagi needs an ATSC 1.0 tuner that Linux drives itself: one that shows up as `/dev/dvb/adapterN/frontend0` and lists ATSC among its delivery systems (`dvb-fe-tool -a N`). It uses every adapter it finds.
-
-| Tuner | Status |
+| Tuner | |
 | --- | --- |
-| Hauppauge WinTV-dualHD, ATSC model (`2040:826d`, LGDT3306A + Si2157) | Tested. Two tuners. `lsusb` may name this ID `Hauppauge 955D`. |
-| Other LGDT3306A + Si2157 USB sticks (Hauppauge WinTV-HVR-955Q, WinTV-quadHD ATSC) | Same chips and kernel driver; untested. |
-| Other ATSC tuners with a Linux DVB driver | Should work; untested. |
-| HDHomeRun and other network tuners | No. They have no `/dev/dvb` device. |
-| ATSC 3.0 / NextGen TV | No. Linux has no drivers, and many stations encrypt it. |
+| Hauppauge WinTV-dualHD, ATSC model (`2040:826d`) | Tested. Two tuners. `lsusb` may call this ID a 955D. |
+| Other ATSC tuners with a Linux DVB driver | Untested. Yagi uses every adapter it finds. |
+| HDHomeRun and other network tuners | Not supported. They have no `/dev/dvb` device. |
+| ATSC 3.0 | Not supported. |
 
-One tuner watches or records, not both at once, except that recording the channel you watch copies it from live TV. Two is what this is built and tested on. More should work, but that is untested.
+One tuner can watch or record, not both, except that recording the station you are already watching copies the live picture and does not need a second tuner. Two tuners can watch and record at the same time.
 
-### Check your tuner
+Check a tuner after the packages below are installed:
 
 ```bash
-lsusb
 dvb-fe-tool -a 0
-dvb-fe-tool -a 1
 ```
 
-A tuner Yagi can use lists `ATSC` in its delivery systems and appears as `/dev/dvb/adapterN/frontend0`.
-
-`lsusb` may print `Hauppauge 955D` for ID `2040:826d`. That string is the vendor ID database label. The stick is the WinTV-dualHD ATSC model.
-
-On the tested dualHD, `dvb-fe-tool -a 0` and `-a 1` both report:
-
-- Device: `LG Electronics LGDT3306A VSB/QAM Frontend`
-- Delivery systems: `ATSC` and `DVBC/ANNEX_B` (US cable QAM)
-- Capabilities: `CAN_8VSB`, `QAM_64`, `QAM_256`
-- Frequency range: 54.0 MHz to 858 MHz
-- DVB API: 5.12
-
-The chip can do US cable QAM. Yagi tunes ATSC 8VSB only.
+The report should list `ATSC`. A second tuner is `-a 1`.
 
 ## Install
 
-Omarchy (Hyprland + Quickshell). Unprivileged `$USER`. No `sudo` for the app. Tuner access is the active seat’s ACL, not the `video` group.
-
 ```bash
 sudo pacman -S --needed mpv v4l-utils psmisc procps-ng python
-```
-
-`dvbv5-scan` and `dvb-fe-tool` come from `v4l-utils`. `fuser` is `psmisc`. `pgrep` is `procps-ng`. The live dump is plain Python on the DVB device files; mpv plays, and records. `femon` is optional troubleshooting, not a runtime dependency.
-
-```bash
-getfacl /dev/dvb/adapter0/frontend0   # expect user:<you>:rw-
-getfacl /dev/dvb/adapter1/frontend0
-loginctl show-session $(loginctl | awk '/seat0/{print $1}') -p Active
-```
-
-If those frontends are `---` for your user, log out and in on seat0. Do not chmod them as root to “fix” it.
-
-A plugin is a git repo with `manifest.json` at the git root (`entryPoints.barWidget` is `plugin/BarWidget.qml`).
-
-```bash
 omarchy plugin add https://github.com/rickbacci/yagi.git
 omarchy plugin enable richardb.yagi
 omarchy bar put richardb.yagi --section right
 omarchy restart shell
-~/.config/omarchy/plugins/richardb.yagi/bin/yagi install
 ```
 
-`install` starts the record timer, which schedules recordings and refreshes the Guide. It runs a copy of the plugin's last commit and picks up each `omarchy plugin update` on its next tick. `yagi status` shows whether it is on. Before `omarchy plugin remove`, run `yagi uninstall`; recordings and settings stay.
-
-Local development (this tree as the plugin dir):
+Then start the record timer, which fills the Guide and starts scheduled recordings. Run it from the plugin directory. `install` uses that copy of the program, not whatever directory you happen to be in:
 
 ```bash
-ln -sfn "$(pwd)" ~/.config/omarchy/plugins/richardb.yagi
-omarchy bar put richardb.yagi --section right
-omarchy restart shell
+cd ~/.config/omarchy/plugins/richardb.yagi
+python3 bin/yagi install
 ```
 
-The bar finds `bin/yagi` next to that plugin dir. Put `bin/` on `PATH` for a terminal and for the HUD (`yagi` from lua).
+`python3 bin/yagi status` should say the record timer is on.
 
-`omarchy plugin validate` the **real** git root. Validating the `~/.config/omarchy/plugins/…` symlink fails: the start path is a symlink.
-
-`~/.config/hypr/hyprland.lua` (same chrome as Omarchy PiP: float, pin, 16:9, bottom-right, height `monitor/3`):
+The picture is a floating window of class `yagi`, pinned at the bottom right. In `~/.config/hypr/hyprland.lua`:
 
 ```lua
 o.window({ class = "^yagi$", fullscreen = false }, {
@@ -151,77 +66,105 @@ o.window({ class = "^yagi$", fullscreen = false }, {
   opacity = "1 1",
   move = { "(monitor_w-(monitor_h*16/27)-40)", "(monitor_h-(monitor_h/3)-40)" },
 })
-o.window("yagi", {
-  no_shortcuts_inhibit = true,
-  tag = "-default-opacity",
-  opacity = "1 1",
-})
 ```
 
 ```bash
-hyprctl reload && hyprctl configerrors
+hyprctl reload
 ```
 
-Scan from the bar (or `yagi scan`), pick a station. Then `yagi guide refresh`, or let the record timer do it.
+If `/dev/dvb/adapter0/frontend0` is not readable by your user, log out and back in on the seat. Do not change its mode as root.
 
-Optional, for the Cleveland example map (or your own file in the same shape):
+## First run
+
+1. Open Yagi from the bar and choose Scan. Nothing is listed until a scan finishes.
+2. Leave a tuner free. The record timer reads the Guide on its own. With a typical set of towers that takes a few minutes. Listings are only what each station sends, usually the next several hours.
+3. The channel list opens on Favorites. Switch to All and star the stations you want. An empty Favorites tab is not an empty scan.
+
+Names and network labels are not in the broadcast. To supply them, copy a station map to `~/.config/yagi/station_map.json`. `markets/cleveland.json` is one example of the file shape. Without that file, Yagi uses the names from the scan.
+
+## Update
 
 ```bash
-mkdir -p ~/.config/yagi
-cp markets/cleveland.json ~/.config/yagi/station_map.json
+omarchy plugin update
+cd ~/.config/omarchy/plugins/richardb.yagi
+python3 bin/yagi install
 ```
 
-## CLI
+`omarchy plugin update` downloads the new plugin. `python3 bin/yagi install` publishes that commit for the record timer. Run install when you want the timer to pick up the update immediately. If you skip it, the timer publishes the new commit on a later tick.
 
-```bash
-yagi status | scan | scan --full | list | guide | guide refresh | guide search Browns
-yagi play "8.1 FOX" | next | prev | stop | sync | pause | live | seek 10 | fullscreen
-yagi record start 8.1 1h | stop | list | play <file> | delete <file>
-yagi series | series add <station> --title "M*A*S*H" --channel 19.2 | series remove <id> | series keep <id> 30
-yagi record keep <file> | unkeep <file> | finish | due
-yagi favorite toggle 8.1
-yagi signal | signal watch | signal check 8.1 --seconds 60
-yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off
-yagi hidden list | hidden hide 19.1 | hidden show 19.1
-```
+An update does not change `~/.config/yagi` or `~/Videos/TV`.
 
-`pause` is throwaway `live.ts`, the whole tower (about 8.7 GB an hour while the TV is open). The writer stops when that file is an hour of air ahead of the playhead. `record` is a keepable file. `live` seeks the dump write head, or retunes after a recording. A channel on the same tower switches tracks in the same picture; another tower retunes the open tuner and reloads the same window.
+## Using it
 
-## Panel keys
+Open the panel from the bar icon. `g` opens the Guide, `v` opens Recordings, `f` is Favorites, `a` is All, and Shift+S scans again. Esc closes the panel.
 
-| Where | Keys |
+On the channel list, Enter watches and `r` records. In the Guide, Enter watches the show that is on now, or records a later one. `r` records the selected airing. `a` records that series every week. `/` searches titles and descriptions.
+
+Pause is not a recording. Close TV deletes the pause file. `y` while paused saves that stretch into Recordings. Recordings are kept in the library. Ad breaks are marked after a recording ends. Comskip is used when it is installed. Otherwise ffmpeg looks for black frames and silence.
+
+The TV window, once it has focus:
+
+| Key | Action |
 | --- | --- |
-| Everywhere | j/k or ↑/↓ move · Enter picks · Esc closes · `g` Guide · `v` Recordings · `f` Favorites · `a` All · Shift+S scan |
-| Channels | Enter watches (the TV window takes focus) · `r` records the station |
-| Guide | arrows move in the grid · Enter opens the card, again watches if on now, else records · `/` search (Enter or ↓ to the first match, then ↑/↓ step) · `s` Grid or Shows · `r` Record · `a` Record series |
-| Recordings | ←/→ Recorded or Scheduled · Enter opens a show, then plays · Esc backs out of the show · `x` twice deletes an episode, or on Scheduled stops or removes · Shift+K locks |
+| Space | Pause or resume |
+| ← / → | Skip 10 seconds. On a recording, an ad break is skipped once |
+| ↑ / ↓ | Skip 1 minute |
+| j / k | Previous or next channel |
+| l | Back to live |
+| r | Record this station |
+| y | Save the paused stretch |
+| Super+F | Fullscreen |
+| c | Captions |
+| m | Mute |
 
-## HUD (the TV window has focus — not the plugin, not Super+K)
-
-| Key | Live TV | Recording |
-| --- | --- | --- |
-| Space | Pause (writer stops an hour ahead); play stays behind until `l` | Pause / resume |
-| ← / → | Skip 10s (inside the last 10s, → is live) | Skip; ad breaks jump once (not in games), ← goes back into one |
-| ↑ / ↓ | Skip 1 minute | same |
-| PgUp / PgDn | ignored | End of the next ad break / start of the last one |
-| j / k | Channel down / up (same tower: the old picture holds about a second) | ignored |
-| l | Live write head (same window) | Return to live (new dump) |
-| r | Record this station | ignored |
-| y | Save the paused stretch to Recordings | ignored |
-| Super+F | Fullscreen (unpins first) | same |
-| c | Captions | same |
-| m / middle-click | Mute this window | same |
-| Wheel | Volume | same |
-| Super+LMB | Move PiP | same |
-
-Until the picture has a frame, the top bar and the bottom line stay up and the middle stays empty. After a frame, they hide on their own. MPEG-TS often has no duration; the HUD uses file size. EOF of a recording retunes live. Channel changes are the flyout list.
-
-## Plugin IPC
+From a terminal, if `yagi` is on your `PATH`:
 
 ```bash
-omarchy-shell shell toggle richardb.yagi
-omarchy-shell shell broadcast richardb.yagi play "8.1 FOX"
-# also: stop next prev live guide scan reloadChannels open close show hide
+yagi status
+yagi scan
+yagi play "8.1"
+yagi guide search News
+yagi record start 8.1 1h
+yagi record list
+yagi series
 ```
 
-Tests: `python3 -m unittest` from the repo root. They run in scratch XDG dirs and never touch your library, config, or a running TV.
+If the shell cannot find `yagi`, call `~/.config/omarchy/plugins/richardb.yagi/bin/yagi` with the same arguments. Durations look like `30m`, `1h`, or `300s`.
+
+## Where things are stored
+
+| | |
+| --- | --- |
+| Channels, Guide, favorites, schedule, recordings index | `~/.config/yagi/` |
+| Recordings | `~/Videos/TV` (`$XDG_VIDEOS_DIR/TV` when that variable is set) |
+| Pause file, removed when you close TV | `~/.cache/yagi/timeshift/live.ts` |
+| Tuner channel table | `~/.config/mpv/channels.conf` |
+
+Updates and `python3 bin/yagi uninstall` do not delete `~/.config/yagi` or `~/Videos/TV`.
+
+## Troubleshooting
+
+**The Guide is empty.** Favorites is the default tab. Choose All if you have not starred any stations. If All has channels but no show titles, the Guide has not been read yet, or the last read failed. A normal read takes a few minutes and needs a free tuner.
+
+```bash
+journalctl --user -u yagi-guide.service -n 80 --no-pager
+~/.config/omarchy/plugins/richardb.yagi/bin/yagi status
+```
+
+`status` should say the record timer is on. The Guide journal should show towers being read, then the service going idle. An error line there is the reason the listings were not saved.
+
+**No channels.** Scan from the bar. `dvb-fe-tool -a 0` should report `ATSC`, and `/dev/dvb/adapter0/frontend0` should be readable by your user.
+
+**Watch and record at once.** That needs two tuners, unless you record the station already on screen.
+
+## Uninstall
+
+Stop the timer before removing the plugin. Recordings and settings stay.
+
+```bash
+cd ~/.config/omarchy/plugins/richardb.yagi
+python3 bin/yagi uninstall
+omarchy plugin remove richardb.yagi
+```
+
+Development notes, tests, and the window-rule details are in [CONTRIBUTING.md](CONTRIBUTING.md).
