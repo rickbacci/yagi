@@ -147,7 +147,11 @@ def _byte_start_source() -> str:
     return src[src.index("local function byte_start"):src.index("apply_virt_seek = function")]
 
 
-@unittest.skipUnless(shutil.which("mpv") and shutil.which("ffmpeg") and shutil.which("lua"), "no mpv, ffmpeg, or lua")
+def _lua():
+    return shutil.which("luajit") or shutil.which("lua")
+
+
+@unittest.skipUnless(shutil.which("mpv") and shutil.which("ffmpeg") and _lua(), "no mpv, ffmpeg, or luajit")
 class TestByteSeekInMpv(unittest.TestCase):
     def test_the_seek_option_lands_on_that_byte(self):
         import json
@@ -167,7 +171,7 @@ class TestByteSeekInMpv(unittest.TestCase):
             script = os.path.join(d, "t.lua")
             with open(script, "w", encoding="utf-8") as f:
                 f.write(_byte_start_source() + f"\nio.write(byte_start({size * 40 // 60}, {size}))\n")
-            start = subprocess.run(["lua", script], capture_output=True, text=True, check=True).stdout
+            start = subprocess.run([_lua(), script], capture_output=True, text=True, check=True).stdout
             self.assertNotIn("#", start)
             sock = os.path.join(d, "m.sock")
             proc = subprocess.Popen(
@@ -197,9 +201,9 @@ class TestByteSeekInMpv(unittest.TestCase):
 
 class TestHudRate(unittest.TestCase):
     def test_hud_reads_the_omarchy_theme(self):
-        lua = shutil.which("lua") or shutil.which("luajit")
+        lua = _lua()
         if not lua:
-            self.skipTest("no lua")
+            self.fail("luajit is required; run scripts/setup-test-env.sh")
         with tempfile.TemporaryDirectory() as d:
             colors = os.path.join(d, "colors.toml")
             with open(colors, "w", encoding="utf-8") as f:
@@ -211,9 +215,9 @@ class TestHudRate(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
 
     def test_skip_ads_once(self):
-        lua = shutil.which("lua") or shutil.which("luajit")
+        lua = _lua()
         if not lua:
-            self.skipTest("no lua")
+            self.fail("luajit is required; run scripts/setup-test-env.sh")
         with tempfile.TemporaryDirectory() as d:
             script = os.path.join(d, "t.lua")
             with open(script, "w", encoding="utf-8") as f:
@@ -222,9 +226,9 @@ class TestHudRate(unittest.TestCase):
         self.assertEqual(res.returncode, 0, res.stderr)
 
     def test_library_rate(self):
-        lua = shutil.which("lua") or shutil.which("luajit") or shutil.which("lua5.4")
+        lua = _lua()
         if not lua:
-            self.skipTest("no lua")
+            self.fail("luajit is required; run scripts/setup-test-env.sh")
         with tempfile.TemporaryDirectory() as d:
             media = os.path.join(d, "show.ts")
             with open(os.path.join(d, "show.json"), "w", encoding="utf-8") as f:

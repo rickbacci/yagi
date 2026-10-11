@@ -11,6 +11,7 @@ KeyboardPanel. This walks every plugin QML file instead.
 """
 
 import os
+import re
 import unittest
 
 
@@ -108,6 +109,10 @@ def _tokenize(text):
             yield (ch, ch, line)
             i += 1
             continue
+        if ch == ".":
+            yield ("dot", ".", line)
+            i += 1
+            continue
         i += 1
 
 
@@ -148,8 +153,98 @@ def item_only_problems(text, path=""):
             if len(stack) > 1:
                 stack.pop()
             continue
+        if kind == "dot":
+            continue
         pending = None
         awaiting_value = False
+    return problems
+
+
+# Qt Quick editable controls. A live one, even read-only until the first
+# key, is still a TextInput once readOnly is false. These must not be
+# created until a Loader with active false (or a bool that starts false)
+# turns on.
+EDITABLE_INPUTS = {"TextField", "TextInput", "TextEdit", "TextArea"}
+
+
+def _is_property(tokens, index):
+    """True when tokens[index] begins `name` or `name.member` and then a colon."""
+    if index >= len(tokens) or tokens[index][0] != "ident":
+        return False
+    j = index + 1
+    while j + 1 < len(tokens) and tokens[j][0] == "dot" and tokens[j + 1][0] == "ident":
+        j += 2
+    return j < len(tokens) and tokens[j][0] == ":"
+
+
+def _binding_starts_false(parts, false_bools):
+    if parts == ["false"]:
+        return True
+    if len(parts) == 1 and parts[0] in false_bools:
+        return True
+    if len(parts) == 2 and parts[1] in false_bools:
+        return True
+    return False
+
+
+def editable_input_problems(text, path=""):
+    """Editable fields must sit in a Loader that is inactive by default.
+
+    `active` has to appear before the field in the file so the check can
+    see it. `property bool name: false` counts as inactive when `active`
+    is `name` or `id.name`.
+    """
+    false_bools = set(re.findall(r"property\s+bool\s+(\w+)\s*:\s*false\b", text))
+    tokens = list(_tokenize(text))
+    problems = []
+    stack = [{"type": None, "inactive": False}]
+    i = 0
+    n = len(tokens)
+    while i < n:
+        kind, value, line = tokens[i]
+        if kind == "ident" and i + 1 < n and tokens[i + 1][0] == "{":
+            type_name = value if value[:1].isupper() else None
+            if type_name in EDITABLE_INPUTS:
+                if not any(frame["type"] == "Loader" and frame["inactive"] for frame in stack):
+                    where = f"{path}:{line}" if path else str(line)
+                    problems.append(
+                        f"{where}: {type_name} is editable and is not inside a Loader that is inactive by default"
+                    )
+            stack.append({"type": type_name, "inactive": False})
+            i += 2
+            continue
+        if kind == "{":
+            stack.append({"type": None, "inactive": False})
+            i += 1
+            continue
+        if kind == "}":
+            if len(stack) > 1:
+                stack.pop()
+            i += 1
+            continue
+        if (
+            kind == "ident"
+            and value == "active"
+            and stack[-1]["type"] == "Loader"
+            and i + 1 < n
+            and tokens[i + 1][0] == ":"
+        ):
+            i += 2
+            parts = []
+            while i < n and tokens[i][0] == "ident":
+                if parts and _is_property(tokens, i):
+                    break
+                if i + 1 < n and tokens[i + 1][0] == "{":
+                    break
+                parts.append(tokens[i][1])
+                i += 1
+                if i < n and tokens[i][0] == "dot":
+                    i += 1
+                    continue
+                break
+            stack[-1]["inactive"] = _binding_starts_false(parts, false_bools)
+            continue
+        i += 1
     return problems
 
 
@@ -177,6 +272,42 @@ class TestQmlItems(unittest.TestCase):
             path = os.path.join(PLUGIN, name)
             with open(path, encoding="utf-8") as handle:
                 found.extend(item_only_problems(handle.read(), path))
+        self.assertEqual(found, [])
+
+    def test_a_bare_text_field_is_rejected(self):
+        src = "Item {\n  TextField { text: \"hi\" }\n}\n"
+        found = editable_input_problems(src)
+        self.assertEqual(len(found), 1)
+        self.assertIn("TextField", found[0])
+
+    def test_a_loader_that_starts_active_is_rejected(self):
+        src = "Loader {\n  active: true\n  sourceComponent: Component {\n    TextInput {}\n  }\n}\n"
+        self.assertTrue(editable_input_problems(src))
+
+    def test_a_loader_inactive_by_default_may_hold_a_field(self):
+        src = (
+            "Loader {\n  active: false\n  sourceComponent: Component {\n    TextEdit {}\n  }\n}\n"
+        )
+        self.assertEqual(editable_input_problems(src), [])
+
+    def test_a_bool_that_starts_false_keeps_the_loader_inactive(self):
+        src = (
+            "Item {\n  property bool searchOpen: false\n"
+            "  Loader {\n    active: guide.searchOpen\n"
+            "    sourceComponent: Component { TextField { readOnly: true } }\n  }\n}\n"
+        )
+        self.assertEqual(editable_input_problems(src), [])
+        missing = "Loader {\n  active: guide.searchOpen\n  TextArea {}\n}\n"
+        self.assertTrue(editable_input_problems(missing))
+
+    def test_plugin_qml_keeps_editable_fields_inside_an_inactive_loader(self):
+        found = []
+        for name in sorted(os.listdir(PLUGIN)):
+            if not name.endswith(".qml"):
+                continue
+            path = os.path.join(PLUGIN, name)
+            with open(path, encoding="utf-8") as handle:
+                found.extend(editable_input_problems(handle.read(), path))
         self.assertEqual(found, [])
 
 

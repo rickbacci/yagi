@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "richardb.yagi",
   "name": "Yagi",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "author": "Richard Bacci",
   "license": "MIT",
   "description": "OTA live TV: scan, watch, guide, record, and pause-live on a dual tuner.",

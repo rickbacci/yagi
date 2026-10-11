@@ -392,7 +392,7 @@ BarWidget {
     }
     root.libraryModalOpen = false
     root.guideSearchText = ""
-    guidePage.searchField.text = ""
+    guidePage.closeSearch()
     root.guideClockMin = Model.minutesNow()
     root.gridCardOpen = false
     root.cursorActive = false
@@ -413,6 +413,7 @@ BarWidget {
     root.guideCursor = 0
     if (root.guideTab === "grid") root.gridHome()
     Qt.callLater(root.revealCursor)
+    Qt.callLater(function() { guidePage.closeSearch() })
   }
 
   function gridBlocksAt(r) {
@@ -1897,7 +1898,7 @@ BarWidget {
         onHoveredChanged: if (!hovered) root.cursorActive = false
       }
 
-      blocked: guidePage.searchField.activeFocus
+      blocked: guidePage.searchFocused
       onCloseRequested: {
         if (root.gridCardOpen) root.gridCardOpen = false
         else if (root.guideStripOpen) root.guideStripOpen = false
@@ -1927,7 +1928,7 @@ BarWidget {
       onTextKey: function(t) {
         if (root.guideStripOpen && !root.libraryModalOpen && (t === "/" || t === "r" || t === "a" || t === "s")) {
           if (t === "/") {
-            guidePage.searchField.forceActiveFocus()
+            guidePage.openSearch()
           } else if (t === "s") {
             root.showGuideTab(root.guideTab === "grid" ? "shows" : "grid")
           } else if (t === "r") {
