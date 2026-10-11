@@ -3,6 +3,7 @@
 ## 0.1.5
 
 - A missing `fuser` is treated as busy. The library size cap will not delete the recording you are watching when it cannot tell which files are open.
+- Theme colors stay the shell colors on Qt 6.12. QtQuick is imported as 6.4, so its new Color helper does not replace them.
 - Tests: the bar is instantiated with Qt 6 against a checked-in Omarchy stub, and that load fails on the 0.1.1 widget that put a hover handler in the keyboard panel.
 
 ## 0.1.4

@@ -1,4 +1,4 @@
-import QtQuick
+import QtQuick 6.4
 import qs.Ui
 import qs.Commons
 import "Model.js" as Model

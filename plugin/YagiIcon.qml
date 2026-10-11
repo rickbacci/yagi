@@ -1,4 +1,4 @@
-import QtQuick
+import QtQuick 6.4
 import QtQuick.Effects
 import QtQuick.Window
 

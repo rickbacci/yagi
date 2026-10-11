@@ -1,4 +1,4 @@
-import QtQuick
+import QtQuick 6.4
 import Quickshell
 import Quickshell.Io
 import qs.Ui

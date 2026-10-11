@@ -1,5 +1,5 @@
 // plugin/GuidePage.qml at 08ae869fd205f2324606e54807228849031b2dec
-import QtQuick
+import QtQuick 6.4
 import qs.Ui
 import qs.Commons
 
