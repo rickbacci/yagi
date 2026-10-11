@@ -1889,6 +1889,10 @@ BarWidget {
     contentHeight: popup.fittedContentHeight(mainCol.implicitHeight)
     margin: Style.gapsOut * 2
 
+    HoverHandler {
+      onHoveredChanged: if (!hovered) root.cursorActive = false
+    }
+
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent

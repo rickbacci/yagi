@@ -15,12 +15,17 @@ CursorSurface {
   hasCursor: schedRow.tv.libraryModalOpen && schedRow.tv.cursorActive && schedRow.tv.schedCursorIndex === schedRow.pickIndex
 
   MouseArea {
+    id: rowHover
     anchors.fill: parent
     hoverEnabled: true
     onEntered: {
       schedRow.tv.cursorActive = true
       schedRow.tv.schedCursorIndex = schedRow.pickIndex
     }
+    onExited: Qt.callLater(function() {
+      if (!rowHover.containsMouse && schedRow.tv.schedCursorIndex === schedRow.pickIndex)
+        schedRow.tv.cursorActive = false
+    })
   }
 
   Column {

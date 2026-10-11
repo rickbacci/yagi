@@ -33,6 +33,18 @@ from engine.timeshift import Timeshift
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 LUA_HUD = os.path.join(PROJECT_ROOT, "player", "scripts", "tv_hud.lua")
+
+
+def _popen_argv(mock_popen, argv0):
+    """The launch under test. A pin thread may also Popen hyprctl.
+
+    own_scope puts systemd-run in front of the program when a user bus exists.
+    """
+    for call in mock_popen.call_args_list:
+        args = call.args[0] if call.args else None
+        if args and argv0 in args:
+            return list(args)
+    raise AssertionError(f"no {argv0} process")
 CLI_BIN = os.path.join(PROJECT_ROOT, "bin", "yagi")
 
 
@@ -345,7 +357,7 @@ class TestMpvPlayerController(unittest.TestCase):
             self.controller.launch(channel_name="53.1 Daystar", adapter_id=None)
 
         mock_dump.assert_called_once()
-        cmd = mock_popen.call_args[0][0]
+        cmd = _popen_argv(mock_popen, "mpv")
         self.assertIn("--force-window=immediate", cmd)
         self.assertIn("--window-dragging=no", cmd)
         self.assertIn("--keepaspect-window=no", cmd)
@@ -786,10 +798,13 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
         with patch("os.path.exists", return_value=True):
             with patch("player.controller.update_player_state"):
                 self.assertTrue(self.controller.launch_file(rec))
-        cmd = mock_popen.call_args[0][0]
+        cmd = _popen_argv(mock_popen, "mpv")
         self.assertFalse(any(str(arg).startswith("--dvbin-") for arg in cmd))
         self.assertIn("--hwdec=auto-safe", cmd)
         self.assertNotIn("--hwdec=no", cmd)
+        self.assertIn("--deinterlace=auto", cmd)
+        self.assertIn("--scale=lanczos", cmd)
+        self.assertNotIn("--profile=high-quality", cmd)
         self.assertIn("--force-seekable=yes", cmd)
         self.assertTrue(os.path.samefile(cmd[-1], rec))
         self.assertNotEqual(os.path.basename(cmd[-1]), os.path.basename(rec))
@@ -1110,8 +1125,13 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertNotIn("timeshift_skip", src)
         self.assertNotIn("open_dump_at", src)
         self.assertNotIn('mp.command("cycle fullscreen")', src)
-        self.assertNotIn("tv_fs_key", src)
-        self.assertNotIn("MBTN_LEFT_DBL", src)
+        self.assertIn("MBTN_LEFT_DBL", src)
+        self.assertIn('cli_async({"fullscreen", "--player"})', src)
+        self.assertIn('cli_async({"fullscreen", "--player", "--exit"})', src)
+        self.assertIn("display-stats-toggle", src)
+        self.assertIn("video-frame-info/interlaced", src)
+        self.assertIn("@yagi-deint:bwdif", src)
+        self.assertIn("video-params/h", src)
         self.assertIn("Super+F", src)
         self.assertIn("function program_on_now", src)
         self.assertIn("function picture_ready", src)
@@ -1202,6 +1222,72 @@ class TestOmarchyFullscreen(unittest.TestCase):
             if call.args[0][:2] == ["hyprctl", "dispatch"]
         ]
         self.assertEqual(dispatched, [OMARCHY_FULLSCREEN_LUA])
+
+    @patch("player.controller.subprocess.run")
+    def test_exit_only_leaves_fullscreen_and_pins_again(self, mock_run):
+        tv = {
+            "class": "yagi",
+            "address": "0xabc",
+            "pinned": False,
+            "fullscreen": 2,
+        }
+        after = {**tv, "fullscreen": 0}
+
+        def fake_run(cmd, capture_output=True, text=True):
+            m = MagicMock()
+            m.returncode = 0
+            m.stderr = ""
+            if cmd[:3] == ["hyprctl", "activewindow", "-j"]:
+                m.stdout = json.dumps(tv)
+            elif cmd[:3] == ["hyprctl", "clients", "-j"]:
+                m.stdout = json.dumps([after])
+            else:
+                m.stdout = "ok"
+            return m
+
+        mock_run.side_effect = fake_run
+        _toggle_omarchy_fullscreen(target_tv=True, exit_only=True)
+        dispatched = [
+            call.args[0][2]
+            for call in mock_run.call_args_list
+            if call.args[0][:2] == ["hyprctl", "dispatch"]
+        ]
+        self.assertEqual(dispatched[0], 'hl.dsp.window.fullscreen({ mode = "fullscreen", window = "address:0xabc" })')
+        self.assertEqual(dispatched[1], 'hl.dsp.window.pin({ window = "address:0xabc" })')
+
+    @patch("player.controller.subprocess.run")
+    def test_exit_only_does_nothing_when_the_picture_is_small(self, mock_run):
+        tv = {"class": "yagi", "address": "0xabc", "pinned": True, "fullscreen": 0}
+
+        def fake_run(cmd, capture_output=True, text=True):
+            m = MagicMock()
+            m.returncode = 0
+            m.stderr = ""
+            m.stdout = json.dumps(tv if "activewindow" in cmd or "clients" in cmd else "ok")
+            if cmd[:2] == ["hyprctl", "clients"]:
+                m.stdout = json.dumps([tv])
+            return m
+
+        mock_run.side_effect = fake_run
+        _toggle_omarchy_fullscreen(target_tv=True, exit_only=True)
+        dispatched = [
+            call.args[0][2]
+            for call in mock_run.call_args_list
+            if call.args[0][:2] == ["hyprctl", "dispatch"]
+        ]
+        self.assertEqual(dispatched, [])
+
+    def test_list_hover_clears_when_the_pointer_leaves(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for name in ("ChannelRow.qml", "ShowRow.qml", "RecordingRow.qml", "LibraryShowRow.qml", "ScheduledRow.qml"):
+            with open(os.path.join(root, "plugin", name), encoding="utf-8") as f:
+                src = f.read()
+            self.assertIn("onExited:", src)
+            self.assertIn("cursorActive = false", src)
+        with open(os.path.join(root, "plugin", "BarWidget.qml"), encoding="utf-8") as f:
+            panel = f.read()
+        self.assertIn("HoverHandler", panel)
+        self.assertIn("root.cursorActive = false", panel)
 
 
 class TestCliNextPrev(unittest.TestCase):

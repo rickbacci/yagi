@@ -53,13 +53,14 @@ python3 bin/yagi install
 
 `python3 bin/yagi status` should say the record timer is on.
 
-The picture is a floating window of class `yagi`, pinned at the bottom right. In `~/.config/hypr/hyprland.lua`:
+The picture is a floating window of class `yagi`, at the bottom right. Do not pin it in this rule. A pin here is put back the moment the window is not fullscreen, and fullscreen never sticks. Yagi pins the small picture itself, and pins it again when you leave fullscreen.
+
+Replace any older `yagi` rule, including one that sets `pin = true`, with this block. Then reload. Until you do, `f` unpins the window and the rule pins it again before fullscreen can stick.
 
 ```lua
 o.window({ class = "^yagi$", fullscreen = false }, {
   tag = "-default-opacity",
   float = true,
-  pin = true,
   keep_aspect_ratio = true,
   border_size = 0,
   size = { "(monitor_h*16/27)", "(monitor_h/3)" },
@@ -71,6 +72,8 @@ o.window({ class = "^yagi$", fullscreen = false }, {
 ```bash
 hyprctl reload
 ```
+
+In the picture, `f` or a double-click fullscreens. `f`, double-click, or Esc returns to the small pinned window. Super+F does not unpin, so it still does nothing while the picture is pinned. `i` shows player stats (resolution, codec, hardware decode).
 
 If `/dev/dvb/adapter0/frontend0` is not readable by your user, log out and back in on the seat. Do not change its mode as root.
 
@@ -113,7 +116,8 @@ The TV window, once it has focus:
 | l | Back to live |
 | r | Record this station |
 | y | Save the paused stretch |
-| Super+F | Fullscreen |
+| f or double-click | Fullscreen. Again, or Esc, returns to the small picture |
+| i | Picture stats |
 | c | Captions |
 | m | Mute |
 

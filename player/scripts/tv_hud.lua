@@ -1627,8 +1627,69 @@ mp.add_forced_key_binding("MBTN_MID", "tv_mute_mid", function()
     show_hud()
 end)
 
--- Fullscreen is Omarchy Super+F only (see yagi fullscreen). Do not
--- bind `f` or double-click — stock mpv fullscreen is also off.
+-- Hyprland fullscreen, not mpv's. Super+F does not unpin a pinned window.
+-- f and double-click do. Esc only leaves fullscreen.
+local function toggle_fullscreen()
+    cli_async({"fullscreen", "--player"})
+end
+local function exit_fullscreen()
+    cli_async({"fullscreen", "--player", "--exit"})
+end
+mp.add_forced_key_binding("f", "tv_fullscreen", toggle_fullscreen)
+mp.add_forced_key_binding("MBTN_LEFT_DBL", "tv_fullscreen_click", toggle_fullscreen)
+mp.add_forced_key_binding("ESC", "tv_fullscreen_exit", exit_fullscreen)
+mp.add_forced_key_binding("i", "tv_stats", function()
+    mp.command("script-binding stats/display-stats-toggle")
+end)
+mp.add_forced_key_binding("I", "tv_stats_page", function()
+    mp.command("script-binding stats/display-page-1")
+end)
+
+-- 1080i and 480i stay combed under hardware decode. bwdif runs only then.
+-- The displayed frame goes progressive once bwdif is on, so that flag is not
+-- a reason to remove the filter. A resolution change is a new stream.
+local bwdif_on = false
+local deint_on = false
+local stream_h = nil
+local function clear_bwdif()
+    if bwdif_on then
+        mp.commandv("vf", "remove", "@yagi-deint")
+        bwdif_on = false
+    end
+end
+local function set_deint(_, interlaced)
+    if interlaced then
+        deint_on = true
+        local hw = mp.get_property("hwdec-current") or "no"
+        if hw ~= "no" and hw ~= "" then
+            mp.set_property("deinterlace", "no")
+            if not bwdif_on then
+                mp.commandv("vf", "add", "@yagi-deint:bwdif")
+                bwdif_on = true
+            end
+        else
+            clear_bwdif()
+            mp.set_property("deinterlace", "yes")
+        end
+        return
+    end
+    -- A deinterlaced frame is progressive. That is not a new stream.
+    if deint_on or bwdif_on then return end
+    if interlaced == false and mp.get_property_native("video-params/h") then
+        mp.set_property("deinterlace", "no")
+    end
+end
+mp.observe_property("video-frame-info/interlaced", "bool", set_deint)
+mp.observe_property("video-params/h", "number", function(_, h)
+    if h == nil or h == stream_h then return end
+    local first = stream_h == nil
+    stream_h = h
+    if first then return end
+    deint_on = false
+    clear_bwdif()
+    mp.set_property("deinterlace", "auto")
+    set_deint(nil, mp.get_property_native("video-frame-info/interlaced"))
+end)
 mp.add_forced_key_binding("c", "tv_sub_cycle", function()
     mp.command("cycle sub")
     show_hud()

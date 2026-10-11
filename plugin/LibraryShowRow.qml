@@ -15,6 +15,7 @@ CursorSurface {
   hasCursor: showRow.tv.libraryModalOpen && showRow.tv.cursorActive && showRow.tv.recCursorIndex === showRow.recIndex
 
   MouseArea {
+    id: rowHover
     anchors.fill: parent
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
@@ -22,6 +23,10 @@ CursorSurface {
       showRow.tv.cursorActive = true
       showRow.tv.recCursorIndex = showRow.recIndex
     }
+    onExited: Qt.callLater(function() {
+      if (!rowHover.containsMouse && showRow.tv.recCursorIndex === showRow.recIndex)
+        showRow.tv.cursorActive = false
+    })
     onClicked: {
       showRow.tv.cursorActive = true
       showRow.tv.recCursorIndex = showRow.recIndex

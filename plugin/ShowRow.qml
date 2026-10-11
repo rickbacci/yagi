@@ -24,6 +24,20 @@ Item {
     color: Style.hoverFillFor(showRow.tv.bar.foreground, Color.accent)
   }
 
+  MouseArea {
+    id: rowHover
+    anchors.fill: parent
+    hoverEnabled: true
+    onEntered: {
+      showRow.tv.cursorActive = true
+      showRow.tv.guideCursor = showRow.index
+    }
+    onExited: Qt.callLater(function() {
+      if (!rowHover.containsMouse && showRow.tv.guideCursor === showRow.index)
+        showRow.tv.cursorActive = false
+    })
+  }
+
   Rectangle {
     visible: showRow.willRecord || showRow.onNow
     anchors.left: parent.left

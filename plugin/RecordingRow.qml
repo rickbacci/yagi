@@ -27,6 +27,7 @@ CursorSurface {
   }
 
   MouseArea {
+    id: rowHover
     anchors.left: parent.left
     anchors.top: parent.top
     anchors.bottom: parent.bottom
@@ -37,6 +38,10 @@ CursorSurface {
       recRow.tv.cursorActive = true
       recRow.tv.recCursorIndex = recRow.recIndex
     }
+    onExited: Qt.callLater(function() {
+      if (!rowHover.containsMouse && recRow.tv.recCursorIndex === recRow.recIndex)
+        recRow.tv.cursorActive = false
+    })
     onClicked: recRow.tv.playRecording(recRow.rec.path || recRow.rec.name, recRow.rec.playable)
   }
 

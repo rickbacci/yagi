@@ -546,7 +546,10 @@ def cmd_pause(args):
 
 
 def cmd_fullscreen(args):
-    MpvController().toggle_fullscreen(target_tv=bool(getattr(args, "player", False)))
+    MpvController().toggle_fullscreen(
+        target_tv=bool(getattr(args, "player", False)),
+        exit_only=bool(getattr(args, "exit", False)),
+    )
 
 
 def cmd_focus(args):
@@ -1093,6 +1096,11 @@ def main():
         "--player",
         action="store_true",
         help="Target the yagi window even if it is not focused",
+    )
+    p_fs.add_argument(
+        "--exit",
+        action="store_true",
+        help="Leave fullscreen and pin the small picture. Does nothing if it is already small.",
     )
     p_fs.set_defaults(func=cmd_fullscreen)
 

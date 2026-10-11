@@ -35,7 +35,6 @@ The same rule as in the README, plus the opacity line the rest of the window rul
 o.window({ class = "^yagi$", fullscreen = false }, {
   tag = "-default-opacity",
   float = true,
-  pin = true,
   keep_aspect_ratio = true,
   border_size = 0,
   size = { "(monitor_h*16/27)", "(monitor_h/3)" },

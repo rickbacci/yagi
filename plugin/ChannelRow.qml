@@ -36,6 +36,7 @@ CursorSurface {
   }
 
   MouseArea {
+    id: rowHover
     anchors.fill: parent
     hoverEnabled: true
     cursorShape: Qt.PointingHandCursor
@@ -43,6 +44,10 @@ CursorSurface {
       chItem.tv.cursorActive = true
       chItem.tv.cursorIndex = chItem.index
     }
+    onExited: Qt.callLater(function() {
+      if (!rowHover.containsMouse && chItem.tv.cursorIndex === chItem.index)
+        chItem.tv.cursorActive = false
+    })
     onClicked: chItem.tv.useListedChannel(chItem.tv.listedKey(chItem.modelData))
     onWheel: function(wheel) { wheel.accepted = false }
   }
