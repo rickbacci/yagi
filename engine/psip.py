@@ -657,17 +657,24 @@ def collect_guide_events(
             if not raw:
                 notes.append(f"{freq} Hz: empty dump")
                 continue
-            sections = collect_sections(raw)
+            try:
+                sections = collect_sections(raw)
+                parsed = parse_atsc_ts(raw, lineup_programs(channels, freq), sections)
+            except Exception as exc:
+                notes.append(f"{freq} Hz: {exc}")
+                if live:
+                    print(f"EPG mux {freq} Hz failed: {exc}", flush=True)
+                continue
             if live:
                 time.sleep(0.3)
-                learned = parse_pmt_pids(raw, sections)
-                if learned:
-                    from engine.timeshift import Timeshift
-                    try:
+                try:
+                    learned = parse_pmt_pids(raw, sections)
+                    if learned:
+                        from engine.timeshift import Timeshift
                         Timeshift._write_learned_pids(learned, freq, trust=True)
-                    except OSError:
-                        pass
-            parsed = parse_atsc_ts(raw, lineup_programs(channels, freq), sections)
+                except Exception as exc:
+                    notes.append(f"{freq} Hz: PID update skipped: {exc}")
+                    print(f"EPG mux {freq} Hz PID update skipped: {exc}", flush=True)
             if not parsed:
                 notes.append(f"{freq} Hz: no EIT in the dump")
             for number, programs in parsed.items():
