@@ -49,6 +49,27 @@ class TestScannerParser(unittest.TestCase):
             if os.path.exists(temp_path):
                 os.unlink(temp_path)
 
+    def test_audio_pid_keeps_the_first_of_several(self):
+        scanner = AtscScanner()
+        text = """
+[8.1 WJW]
+  DELIVERY_SYSTEM = ATSC
+  FREQUENCY = 503028615
+  MODULATION = VSB/8
+  SERVICE_ID = 3
+  VIDEO_PID = 49
+  AUDIO_PID = 52 53
+"""
+        with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as f:
+            f.write(text)
+            path = f.name
+        try:
+            channels = scanner._parse_scan_output(path)
+        finally:
+            os.unlink(path)
+        self.assertEqual(channels[0]["audio_pid"], 52)
+        self.assertIsInstance(channels[0]["audio_pid"], int)
+
     def test_write_scan_status_atomic(self):
         test_status = {
             "is_scanning": True,

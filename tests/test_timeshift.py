@@ -1217,6 +1217,29 @@ class TestTimeshift(unittest.TestCase):
             self.assertEqual(by_name["WUAB"]["video_pid"], 113)
             self.assertEqual(by_name["Quest"]["video_pid"], 65)
 
+    def test_a_multi_value_audio_pid_does_not_abort_the_update(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            conf = os.path.join(tmp_dir, "channels.conf")
+            listed = os.path.join(tmp_dir, "channels.json")
+            with open(conf, "w", encoding="utf-8") as f:
+                f.write("WJW:503028615:8VSB:49:52:3\n")
+            with open(listed, "w", encoding="utf-8") as f:
+                json.dump({"channels": [{
+                    "name": "WJW",
+                    "frequency": 503028615,
+                    "service_id": 3,
+                    "video_pid": 49,
+                    "audio_pid": "52 53",
+                }]}, f)
+            with patch("engine.timeshift.MPV_CHANNELS_CONF", conf), \
+                 patch("engine.timeshift.CHANNELS_JSON_PATH", listed):
+                Timeshift._write_learned_pids({3: (49, 52)}, 503028615, trust=True)
+            with open(listed, encoding="utf-8") as f:
+                saved = json.load(f)["channels"][0]
+            self.assertEqual(saved["audio_pid"], 52)
+            self.assertIsInstance(saved["audio_pid"], int)
+            self.assertEqual(saved["video_pid"], 49)
+
 
 if __name__ == "__main__":
     unittest.main()

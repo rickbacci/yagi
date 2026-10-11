@@ -1110,17 +1110,22 @@ class Timeshift:
             if frequency is not None and ch_freq != frequency:
                 continue
             video, audio = learned[sid]
-            old_video = int(ch.get("video_pid") or 0)
-            old_audio = int(ch.get("audio_pid") or 0)
+            from engine.scanner import first_pid
+            old_video = first_pid(ch.get("video_pid"))
+            old_audio = first_pid(ch.get("audio_pid"))
             copied = (
                 ch_freq is not None
                 and old_video > 0
                 and sid != lowest.get((ch_freq, old_video))
             )
-            if (trust or old_video <= 0 or old_audio <= 0 or copied) and (old_video, old_audio) != (video, audio):
-                ch["video_pid"] = video
-                ch["audio_pid"] = audio
-                touched = True
+            if trust or old_video <= 0 or old_audio <= 0 or copied:
+                new_video, new_audio = (video, audio)
+                if (old_video, old_audio) == (video, audio):
+                    new_video, new_audio = old_video, old_audio
+                if ch.get("video_pid") != new_video or ch.get("audio_pid") != new_audio:
+                    ch["video_pid"] = new_video
+                    ch["audio_pid"] = new_audio
+                    touched = True
         if not touched:
             return
         tmp = f"{CHANNELS_JSON_PATH}.tmp.{os.getpid()}"

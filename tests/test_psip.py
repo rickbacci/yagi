@@ -167,6 +167,33 @@ class TestPsip(unittest.TestCase):
         self.assertEqual(events["8.1"][0]["title"], "FOX Primetime")
         self.assertEqual(events["8.1"][0]["start"], "8:00 PM")
 
+    def test_one_bad_tower_does_not_drop_the_rest(self):
+        from engine.psip import collect_guide_events, pack_eit_section, pack_tvct_section, section_to_ts
+
+        gps = gps_for_eastern(2026, 9, 21, 20, 0)
+        tvct = pack_tvct_section([{"short_name": "WJW", "major": 8, "minor": 1, "source_id": 3, "program_number": 1}])
+        eit = pack_eit_section(3, [{"title": "FOX Primetime", "gps_start": gps, "duration_sec": 3600}])
+        blob = section_to_ts(tvct) + section_to_ts(eit)
+        real = parse_atsc_ts
+        seen = {"n": 0}
+
+        def parse(raw, lineup=None, sections=None):
+            seen["n"] += 1
+            if seen["n"] == 1:
+                raise ValueError("invalid literal for int() with base 10: '52 53'")
+            return real(raw, lineup, sections)
+
+        channels = [
+            {"frequency": 503028615, "channel_number": "8.1", "service_id": 1},
+            {"frequency": 479028615, "channel_number": "3.1", "service_id": 1},
+        ]
+        with patch("engine.psip.parse_atsc_ts", side_effect=parse):
+            events = collect_guide_events(channels=channels, dump_fn=lambda _a, _f: blob, sessions=[])
+        self.assertEqual(seen["n"], 2)
+        self.assertNotIn("8.1", events)
+        self.assertEqual(events["3.1"][0]["title"], "FOX Primetime")
+        self.assertTrue(any("52 53" in note for note in collect_guide_events.last_notes))
+
     def test_dump_mux_records_all_pids(self):
         import inspect
         from engine.psip import dump_mux

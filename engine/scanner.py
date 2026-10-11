@@ -39,6 +39,17 @@ def _write_text_atomic(path: str, text: str) -> None:
     os.replace(tmp, path)
 
 
+def first_pid(value: Any) -> int:
+    """First PID in a dvbv5 field. AUDIO_PID is often several, like '52 53'."""
+    text = str("" if value is None else value).strip()
+    if not text:
+        return 0
+    try:
+        return int(text.split()[0])
+    except ValueError:
+        return 0
+
+
 # North American ATSC Standard Frequencies
 def get_atsc_frequencies(quick_mode: bool = False) -> List[Dict[str, Any]]:
     """
@@ -362,9 +373,9 @@ class AtscScanner:
                     elif k == "DELIVERY_SYSTEM":
                         current["delivery_system"] = v
                     elif k == "VIDEO_PID":
-                        current["video_pid"] = int(v) if v.isdigit() else v
+                        current["video_pid"] = first_pid(v)
                     elif k == "AUDIO_PID":
-                        current["audio_pid"] = int(v) if v.isdigit() else v
+                        current["audio_pid"] = first_pid(v)
 
         if current and "name" in current:
             channels.append(current)
@@ -396,10 +407,8 @@ class AtscScanner:
             tune_name = ch.get("tune_name") or ch.get("name", "Unknown")
             freq = ch.get("frequency", 0)
             sid = ch.get("service_id", 1)
-            vpid_raw = ch.get("video_pid", 0)
-            apid_raw = ch.get("audio_pid", 0)
-            vpid = int(str(vpid_raw).split()[0]) if vpid_raw else 0
-            apid = int(str(apid_raw).split()[0]) if apid_raw else 0
+            vpid = first_pid(ch.get("video_pid"))
+            apid = first_pid(ch.get("audio_pid"))
             conf_lines.append(f"{tune_name}:{freq}:8VSB:{vpid}:{apid}:{sid}\n")
             ch_num = ch.get("channel_number")
             if ch_num and ch_num != tune_name:
