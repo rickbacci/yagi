@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 
 Item {
   id: list
@@ -51,13 +52,13 @@ Item {
     anchors.margins: 2
     width: 4
     radius: 2
-    color: Style.normalFillFor(list.tv.bar.foreground, Color.accent)
+    color: Style.normalFillFor(list.tv.bar.foreground, C.Color.accent)
     visible: channelFlickable.contentHeight > channelFlickable.height
 
     Rectangle {
       width: parent.width
       radius: 2
-      color: Color.accent
+      color: C.Color.accent
       height: Math.max(16, channelFlickable.height * (channelFlickable.height / Math.max(1, channelFlickable.contentHeight)))
       y: (channelFlickable.contentHeight > channelFlickable.height) ? ((channelFlickable.contentY / (channelFlickable.contentHeight - channelFlickable.height)) * (parent.height - height)) : 0
     }

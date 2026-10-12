@@ -84,9 +84,9 @@ class TestCliE2E(unittest.TestCase):
             text=True,
             env=self.env
         )
-        # Even if pointing to default paths, command must exit 0 and not throw unhandled exception
         self.assertEqual(res.returncode, 0)
-        self.assertFalse("Traceback" in res.stderr)
+        self.assertNotIn("Traceback", res.stderr)
+        self.assertIn("No channels found. Run `yagi scan` first!", res.stdout)
 
     def test_cli_channels_with_data(self):
         """yagi channels must format channel list when channels.json exists."""

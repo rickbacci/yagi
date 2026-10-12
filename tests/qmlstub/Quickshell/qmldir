@@ -1,0 +1,4 @@
+module Quickshell
+singleton Quickshell 1.0 Quickshell.qml
+BarWidget 1.0 BarWidget.qml
+IpcHandler 1.0 IpcHandler.qml

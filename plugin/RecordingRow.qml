@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 import "Model.js" as Model
 
 CursorSurface {
@@ -16,14 +17,14 @@ CursorSurface {
 
   height: Math.max(Style.space(64), recInfo.implicitHeight + Style.space(16))
   foreground: recRow.tv.bar.foreground
-  accent: Color.accent
+  accent: C.Color.accent
   hasCursor: recRow.tv.libraryModalOpen && recRow.tv.cursorActive && recRow.tv.recCursorIndex === recRow.recIndex
 
   Rectangle {
     visible: recRow.live
     anchors.fill: parent
     radius: recRow.radius
-    color: Style.selectedFillFor(recRow.tv.bar.foreground, Color.urgent)
+    color: Style.selectedFillFor(recRow.tv.bar.foreground, C.Color.urgent)
   }
 
   MouseArea {
@@ -58,7 +59,7 @@ CursorSurface {
       width: parent.width
       textFormat: Text.PlainText
       text: recRow.titleText
-      color: recRow.rec.playable === false && !recRow.live ? Color.muted : recRow.tv.bar.foreground
+      color: recRow.rec.playable === false && !recRow.live ? C.Color.muted : recRow.tv.bar.foreground
       font.family: recRow.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       font.bold: true
@@ -69,7 +70,7 @@ CursorSurface {
       width: parent.width
       textFormat: Text.PlainText
       text: recRow.detailText
-      color: recRow.live ? Color.urgent : Color.muted
+      color: recRow.live ? C.Color.urgent : C.Color.muted
       font.family: recRow.tv.bar.fontFamily
       font.pixelSize: Style.font.title
       elide: Text.ElideRight
@@ -80,7 +81,7 @@ CursorSurface {
       width: parent.width
       textFormat: Text.PlainText
       text: recRow.blurb
-      color: Color.muted
+      color: C.Color.muted
       font.family: recRow.tv.bar.fontFamily
       font.pixelSize: Style.font.title
       wrapMode: Text.Wrap
@@ -98,7 +99,7 @@ CursorSurface {
     fontSize: Style.font.heading
     iconText: recRow.rec.keep ? "\uf023" : "\uf09c"
     tooltipText: recRow.rec.keep ? "Locked. The size limit won't delete it. Click to unlock" : "Lock it so the size limit never deletes it"
-    foreground: recRow.rec.keep ? Color.accent : Color.muted
+    foreground: recRow.rec.keep ? C.Color.accent : C.Color.muted
     hoverColor: recRow.tv.bar.foreground
     fontFamily: recRow.tv.bar.fontFamily
     onClicked: recRow.tv.setRecordingKept(recRow.rec, !recRow.rec.keep)
@@ -114,8 +115,8 @@ CursorSurface {
     fontSize: Style.font.heading
     iconText: "󰅙"
     tooltipText: armed ? "Click again to delete" : "Delete"
-    foreground: armed ? Color.urgent : recRow.tv.bar.foreground
-    hoverColor: armed ? Color.urgent : recRow.tv.bar.foreground
+    foreground: armed ? C.Color.urgent : recRow.tv.bar.foreground
+    hoverColor: armed ? C.Color.urgent : recRow.tv.bar.foreground
     fontFamily: recRow.tv.bar.fontFamily
     onClicked: recRow.tv.deleteWithConfirm(recRow.rec)
   }

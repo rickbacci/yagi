@@ -225,11 +225,14 @@ class TestTimeshiftStop(unittest.TestCase):
             with patch("engine.timeshift.TIMESHIFT_ACTIVE_PATH", state):
                 Timeshift._write_state({"follow_socket": sock})
 
+                ready = threading.Event()
+
                 def serve():
                     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                     server.bind(sock)
                     server.listen(1)
                     server.settimeout(2)
+                    ready.set()
                     conn, _ = server.accept()
                     with conn:
                         conn.recv(16)
@@ -237,6 +240,7 @@ class TestTimeshiftStop(unittest.TestCase):
                     server.close()
 
                 threading.Thread(target=serve, daemon=True).start()
+                self.assertTrue(ready.wait(2), "follow socket did not start listening")
                 self.assertEqual(Timeshift.follow_pos(), 1880)
             with patch("engine.timeshift.subprocess.check_output", return_value="12 mpv --stream-dump=/x yagi/timeshift/live.ts\nbad\n1 mpv --stream-dump=/x yagi/timeshift/live.ts\n"), \
                  patch.object(Timeshift, "_kill_pid") as kill:

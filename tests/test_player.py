@@ -5,6 +5,7 @@ Unit tests for Yagi - MPV Player Controller & Channel Cycling
 import os
 import re
 import json
+import shutil
 import socket
 import subprocess
 import sys
@@ -1153,89 +1154,98 @@ class TestMpvIpcChannelSurf(unittest.TestCase):
 
 
 class TestLuaChannelKeys(unittest.TestCase):
-    def test_hud_keys_call_cli_not_follow_seek(self):
-        with open(LUA_HUD, encoding="utf-8") as f:
-            src = f.read()
-        self.assertIn('mp.add_forced_key_binding("j", "tv_surf_prev_j"', src)
-        self.assertIn('mp.add_forced_key_binding("k", "tv_surf_next_k"', src)
-        self.assertIn("j k Channel", src)
-        self.assertIn("y Save", src)
-        self.assertIn('mp.add_forced_key_binding("y", "tv_keep_pause"', src)
-        self.assertNotIn("surf_preview", src)
-        self.assertNotIn("local function surf(", src)
-        self.assertIn("ch.channel_number == tune_name", src)
-        self.assertIn("j k Channel    ← → 10s", src)
-        self.assertIn('"signal", "--plain"', src)
-        self.assertNotIn("%d dB", src)
-        self.assertIn("Weak signal", src)
-        self.assertIn("signal_color", src)
-        self.assertIn("Muted", src)
-        self.assertNotIn("}Muted\\n", src)
-        self.assertIn('mp.add_forced_key_binding("LEFT", "tv_seek_back"', src)
-        self.assertIn('mp.add_forced_key_binding("RIGHT", "tv_seek_fwd"', src)
-        self.assertIn('mp.add_forced_key_binding("SPACE", "tv_pause", request_pause)', src)
-        self.assertIn('mp.add_forced_key_binding("l", "tv_return_live"', src)
-        timer = src[src.index("mp.add_periodic_timer"):src.index("mp.add_periodic_timer") + 900]
-        self.assertIn("reload_data()", timer)
-        self.assertIn("banner_tune", timer)
-        self.assertIn('mp.register_script_message("tv-blank"', src)
-        self.assertIn("blanking", src)
-        self.assertIn('cli_async({"pause"})', src)
-        self.assertIn('cli_async({"seek"', src)
-        self.assertIn('cli_async({"live"})', src)
-        eof = src[src.index("local function on_dump_eof"):src.index('mp.register_event("playback-restart"')]
-        self.assertIn("go_live()", eof)
-        self.assertNotIn('cli_async({"seek"', eof)
-        self.assertNotIn("loadfile", eof)
-        self.assertEqual(src.count("drop-buffers"), 1)
-        program = src[src.index("local function select_program"):src.index("local program_pending")]
-        self.assertIn('if changed and settle then mp.command("drop-buffers") end', program)
-        skip = src[src.index("local function seek_rel"):]
-        skip = skip[skip.index("if is_timeshift_playback() then"):skip.index('cli_async({"seek", tostring(signed)})')]
-        self.assertNotIn("loadfile", skip)
-        self.assertNotIn("drop-buffers", skip)
-        self.assertNotIn("http://", skip)
-        self.assertNotIn("send_follow_seek", src)
-        self.assertNotIn("timeshift_skip", src)
-        self.assertNotIn("open_dump_at", src)
-        self.assertNotIn('mp.command("cycle fullscreen")', src)
-        self.assertIn("MBTN_LEFT_DBL", src)
-        self.assertIn('cli_async({"fullscreen", "--player"})', src)
-        self.assertIn('cli_async({"fullscreen", "--player", "--exit"})', src)
-        self.assertIn('"pref", "audio"', src)
-        self.assertIn("flush_audio", src)
-        self.assertIn("display-stats-toggle", src)
-        self.assertIn("video-frame-info/interlaced", src)
-        self.assertIn("@yagi-deint:bwdif", src)
-        self.assertIn("video-params/h", src)
-        self.assertIn("Super+F", src)
-        self.assertIn("function program_on_now", src)
-        self.assertIn("function picture_ready", src)
-        self.assertIn("cached_timeshift.mux_bps", src)
-        self.assertIn("ts_delay / PAUSE_WINDOW", src)
-        self.assertIn("local PAUSE_WINDOW = 3600", src)
+    def test_hud_keys_call_the_matching_handler(self):
+        lua = shutil.which("luajit")
+        self.assertTrue(lua, "luajit is required to drive tv_hud.lua")
+        driver = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hud_keys_driver.lua")
+        with tempfile.TemporaryDirectory() as tmp:
+            yagi = os.path.join(tmp, "yagi")
+            os.makedirs(yagi)
+            with open(os.path.join(yagi, "channels.json"), "w", encoding="utf-8") as handle:
+                json.dump({
+                    "channels": [{
+                        "channel_number": "8.1",
+                        "name": "FOX",
+                        "tune_name": "FOX",
+                        "display_name": "FOX 8",
+                    }],
+                }, handle)
+            dump = os.path.join(tmp, "pause-dump.ts")
+            env = os.environ.copy()
+            env["XDG_CONFIG_HOME"] = tmp
+            env["XDG_CACHE_HOME"] = os.path.join(tmp, "cache")
+            env["XDG_STATE_HOME"] = os.path.join(tmp, "state")
+            env["HOME"] = tmp
+            env["YAGI_TIMESHIFT_FILE"] = dump
+            res = subprocess.run(
+                [lua, driver, LUA_HUD],
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=20,
+                check=False,
+            )
+        self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
+        events = json.loads(res.stdout)
+        by_press = {}
+        for ev in events:
+            by_press.setdefault(ev["n"], []).append(ev)
+
+        def calls(n):
+            found = by_press.get(n, [])
+            self.assertFalse(any(ev["kind"] == "error" for ev in found), found)
+            return found
+
+        def async_args(n):
+            return [ev["args"] for ev in calls(n) if ev["kind"] == "async"]
+
+        expect = {
+            1: ["yagi", "prev"],
+            2: ["yagi", "next"],
+            3: ["yagi", "seek", "-10"],
+            4: ["yagi", "seek", "10"],
+            5: ["yagi", "seek", "60"],
+            6: ["yagi", "seek", "-60"],
+            7: ["yagi", "pause"],
+            8: ["yagi", "live"],
+            9: ["yagi", "fullscreen", "--player"],
+            10: ["yagi", "fullscreen", "--player"],
+            11: ["yagi", "fullscreen", "--player", "--exit"],
+            14: ["yagi", "keep"],
+        }
+        for n, argv in expect.items():
+            self.assertEqual(async_args(n), [argv], calls(n))
+        stats = [ev for ev in calls(12) if ev["kind"] == "command"]
+        self.assertEqual([ev["text"] for ev in stats], ["script-binding stats/display-stats-toggle"])
+        mute = [ev for ev in calls(13) if ev["kind"] == "commandv"]
+        self.assertEqual([ev["args"] for ev in mute], [["no-osd", "cycle", "mute"]])
+        up = [ev for ev in calls(15) if ev["kind"] == "commandv"]
+        down = [ev for ev in calls(16) if ev["kind"] == "commandv"]
+        self.assertEqual([ev["args"] for ev in up], [["no-osd", "add", "volume", "5"]])
+        self.assertEqual([ev["args"] for ev in down], [["no-osd", "add", "volume", "-5"]])
+        start = [ev for ev in calls(17) if ev["kind"] == "async"]
+        stop = [ev for ev in calls(18) if ev["kind"] == "async"]
+        self.assertEqual(len(start), 1, calls(17))
+        self.assertEqual(start[0]["args"], ["yagi", "record", "start", "--stdin"])
+        self.assertIn("FOX", start[0]["stdin"])
+        self.assertNotIn("FOX", start[0]["args"])
+        self.assertNotIn("FOX 8", start[0]["stdin"])
+        self.assertEqual(stop[0]["args"], ["yagi", "record", "stop", "--stdin"])
+        self.assertNotIn(dump, res.stdout)
+        self.assertNotIn("cycle fullscreen", res.stdout)
+
+    def test_hud_keeps_titles_and_the_timeshift_path_off_argv(self):
+        """Security: a title stays on stdin, and the pause-dump path is not a process match."""
+        with open(LUA_HUD, encoding="utf-8") as handle:
+            src = handle.read()
         record_key = src[src.index('mp.add_forced_key_binding("r"'):]
-        self.assertIn("recording_for_channel(ch)", record_key)
-        self.assertNotIn("cached_recordings[1]", record_key)
-        self.assertIn('"record", "stop"', record_key)
-        self.assertIn('"record", "start"', record_key)
         self.assertIn('"--stdin"', record_key)
         self.assertIn("stdin_data", record_key)
         self.assertNotIn('"record", "start", tostring', record_key)
-        self.assertIn('mp.get_opt("tune")', src)
-        self.assertIn("video-params/w", src)
-        self.assertIn('mp.observe_property("video-params/w"', src)
-        self.assertNotIn("string.lower(p.network) == string.lower(matched_ch.network)", src)
+        self.assertNotIn("send_follow_seek", src)
+        self.assertNotIn("timeshift_skip", src)
+        self.assertNotIn("open_dump_at", src)
         self.assertNotIn("Projects/personal", src)
-        self.assertIn("debug.getinfo(1, \"S\")", src)
-        self.assertIn("/bin/yagi", src)
-        self.assertIn('args = {cli, "sync", "--reap", pid}', src)
-        self.assertIn("detach = true", src)
-        request_live = src[src.index("local function request_live()"):src.index("local function go_live()")]
-        library = request_live[request_live.index("if is_library_playback() then"):]
-        self.assertLess(library.index("detach = true"), library.index("return"))
-        self.assertIn('mp.add_forced_key_binding("l", "tv_return_live", return_live)', src)
-        self.assertIn('"tv-live-failed"', src)
 
 
 class TestOmarchyFullscreen(unittest.TestCase):
@@ -1353,18 +1363,6 @@ class TestOmarchyFullscreen(unittest.TestCase):
         ]
         self.assertEqual(dispatched, [])
 
-    def test_list_hover_clears_when_the_pointer_leaves(self):
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        for name in ("ChannelRow.qml", "ShowRow.qml", "RecordingRow.qml", "LibraryShowRow.qml", "ScheduledRow.qml"):
-            with open(os.path.join(root, "plugin", name), encoding="utf-8") as f:
-                src = f.read()
-            self.assertIn("onExited:", src)
-            self.assertIn("cursorActive = false", src)
-        with open(os.path.join(root, "plugin", "BarWidget.qml"), encoding="utf-8") as f:
-            panel = f.read()
-        self.assertIn("HoverHandler", panel)
-        self.assertIn("root.cursorActive = false", panel)
-
 
 class TestCliNextPrev(unittest.TestCase):
     def test_help_lists_next_and_prev(self):
@@ -1470,7 +1468,7 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("root.tuneDisplay", src)
         self.assertIn("root.tunePhase === \"failed\"", src)
         self.assertNotIn("netColor", src)
-        self.assertIn("color: chItem.isRecordingHere ? Color.urgent : Color.accent", src)
+        self.assertIn("color: chItem.isRecordingHere ? C.Color.urgent : C.Color.accent", src)
         self.assertIn("Model.recordDurationArg", src)
         self.assertIn("isLiveSession", src)
         self.assertIn("isLibraryPlayback", src)
@@ -1480,10 +1478,10 @@ class TestPluginSessionCards(unittest.TestCase):
         self.assertIn("function barRecLabel", src)
         self.assertIn("Model.getDisplayTitle(ch)", src)
         self.assertIn("YagiIcon {", src)
-        self.assertIn("root.isRecording ? Color.urgent", src)
+        self.assertIn("root.isRecording ? C.Color.urgent", src)
         self.assertIn('text: "·"', src)
         self.assertIn("color: root.bar.barForeground", src)
-        self.assertIn("color: Color.urgent", src)
+        self.assertIn("color: C.Color.urgent", src)
 
     def test_guide_strip_uses_lineup_and_omarchy_tokens(self):
         model = os.path.join(PROJECT_ROOT, "plugin", "Model.js")

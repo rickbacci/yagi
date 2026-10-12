@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 
 BorderSurface {
   id: card
@@ -9,8 +10,8 @@ BorderSurface {
 
   implicitHeight: recRow.implicitHeight + Style.space(12)
   radius: Style.spacing.labelGap
-  color: Style.selectedFillFor(card.tv.bar.foreground, Color.urgent)
-  borderSpec: Border.controlSpec("normal", card.tv.bar.foreground, Color.urgent)
+  color: Style.selectedFillFor(card.tv.bar.foreground, C.Color.urgent)
+  borderSpec: Border.controlSpec("normal", card.tv.bar.foreground, C.Color.urgent)
 
   Item {
     id: recRow
@@ -27,7 +28,7 @@ BorderSurface {
       anchors.verticalCenter: parent.verticalCenter
       text: "Stop"
       tooltipText: "Stop this recording"
-      foreground: Color.urgent
+      foreground: C.Color.urgent
       fontSize: Style.font.heading
       onClicked: card.tv.toggleRecord(card.tv.recordingIdent(card.modelData))
     }
@@ -56,7 +57,7 @@ BorderSurface {
         visible: !!(card.modelData && card.modelData.program_title)
         textFormat: Text.PlainText
         text: "·"
-        color: Color.accent
+        color: C.Color.accent
         font.family: card.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         anchors.verticalCenter: parent.verticalCenter
@@ -67,7 +68,7 @@ BorderSurface {
         width: Math.max(0, recLine.width - recChannel.width - recDot.width - recLine.spacing * 2)
         textFormat: Text.PlainText
         text: card.modelData && card.modelData.program_title ? card.modelData.program_title : ""
-        color: Color.urgent
+        color: C.Color.urgent
         font.family: card.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         elide: Text.ElideRight

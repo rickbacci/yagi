@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 
 CursorSurface {
   id: schedRow
@@ -11,7 +12,7 @@ CursorSurface {
 
   height: Math.max(Style.space(64), schedInfo.implicitHeight + Style.space(16))
   foreground: schedRow.tv.bar.foreground
-  accent: Color.accent
+  accent: C.Color.accent
   hasCursor: schedRow.tv.libraryModalOpen && schedRow.tv.cursorActive && schedRow.tv.schedCursorIndex === schedRow.pickIndex
 
   MouseArea {
@@ -66,14 +67,14 @@ CursorSurface {
         radius: Style.spacing.xs
         color: "transparent"
         border.width: 1
-        border.color: Color.muted
+        border.color: C.Color.muted
 
         Text {
           id: seriesText
           anchors.centerIn: parent
           textFormat: Text.PlainText
           text: "series"
-          color: Color.muted
+          color: C.Color.muted
           font.family: schedRow.tv.bar.fontFamily
           font.pixelSize: Style.font.heading
         }
@@ -83,7 +84,7 @@ CursorSurface {
     Text {
       textFormat: Text.PlainText
       text: schedRow.row.line || ""
-      color: schedRow.row.live || schedRow.row.missed ? Color.urgent : Color.muted
+      color: schedRow.row.live || schedRow.row.missed ? C.Color.urgent : C.Color.muted
       font.family: schedRow.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       elide: Text.ElideRight
@@ -113,7 +114,7 @@ CursorSurface {
                    : schedRow.row.kind === "series" ? "Stop recording this series. Its recordings stay"
                    : "Don't record this"
       fontSize: Style.font.heading
-      foreground: schedRow.armed ? Color.urgent : schedRow.tv.bar.foreground
+      foreground: schedRow.armed ? C.Color.urgent : schedRow.tv.bar.foreground
       onClicked: {
         schedRow.tv.deleteArmed = schedRow.row.key
         schedRow.tv.dropScheduled(schedRow.row)

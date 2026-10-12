@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 import "Model.js" as Model
 
 // Channels down, half hours across from the half hour now is in. The channel
@@ -40,7 +41,7 @@ Item {
     width: grid.width - grid.chanWidth
     height: grid.headHeight
     radius: Style.spacing.labelGap
-    color: Style.normalFillFor(grid.fg, Color.accent)
+    color: Style.normalFillFor(grid.fg, C.Color.accent)
   }
 
   Flickable {
@@ -64,7 +65,7 @@ Item {
         y: grid.headHeight - height
         width: 1
         height: Style.space(6)
-        color: Color.muted
+        color: C.Color.muted
       }
     }
 
@@ -76,7 +77,7 @@ Item {
         y: (grid.headHeight - implicitHeight) / 2
         textFormat: Text.PlainText
         text: Model.formatClock(grid.t0 + index * 1800)
-        color: Color.muted
+        color: C.Color.muted
         font.family: grid.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
       }
@@ -90,14 +91,14 @@ Item {
       width: nowText.implicitWidth + Style.space(10)
       height: nowText.implicitHeight + Style.space(2)
       radius: Style.space(4)
-      color: Color.accent
+      color: C.Color.accent
 
       Text {
         id: nowText
         anchors.centerIn: parent
         textFormat: Text.PlainText
         text: "now"
-        color: Color.popups.background
+        color: C.Color.popups.background
         font.family: grid.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         font.bold: true
@@ -152,7 +153,7 @@ Item {
               width: Math.max(0, parent.width - chanNum.width - parent.spacing)
               textFormat: Text.PlainText
               text: grid.tv.channelFilter === "favorites" ? "not a favorite" : "not in this list"
-              color: Color.accent
+              color: C.Color.accent
               font.family: grid.tv.bar.fontFamily
               font.pixelSize: Style.font.heading
               elide: Text.ElideRight
@@ -164,7 +165,7 @@ Item {
             width: parent.width
             textFormat: Text.PlainText
             text: Model.getDisplayTitle(chanRow.modelData.channel)
-            color: Color.muted
+            color: C.Color.muted
             font.family: grid.tv.bar.fontFamily
             font.pixelSize: Style.font.heading
             elide: Text.ElideRight
@@ -210,7 +211,7 @@ Item {
       x: at - 1
       width: 2
       height: body.contentHeight
-      color: Color.accent
+      color: C.Color.accent
     }
   }
 
@@ -229,9 +230,9 @@ Item {
     width: Math.max(4, grid.xOf(modelData.x1) - grid.xOf(modelData.x0) - 4)
     height: grid.rowHeight - 6
     radius: Style.spacing.labelGap
-    color: isCursor ? Style.selectedFillFor(grid.fg, Color.accent) : Style.normalFillFor(grid.fg, Color.accent)
+    color: isCursor ? Style.selectedFillFor(grid.fg, C.Color.accent) : Style.normalFillFor(grid.fg, C.Color.accent)
     border.width: isCursor || (searching && modelData.match) ? 1 : 0
-    border.color: searching && modelData.maybe && !isCursor ? Color.muted : Color.accent
+    border.color: searching && modelData.maybe && !isCursor ? C.Color.muted : C.Color.accent
     opacity: searching && !modelData.match ? 0.3 : 1
 
     Rectangle {
@@ -239,7 +240,7 @@ Item {
       width: 3
       height: parent.height
       radius: 1.5
-      color: cell.willRecord ? Color.urgent : Color.accent
+      color: cell.willRecord ? C.Color.urgent : C.Color.accent
     }
 
     Text {
@@ -248,7 +249,7 @@ Item {
       width: parent.width - Style.space(12)
       textFormat: Text.PlainText
       text: (cell.modelData.began_before ? "‹ " : "") + cell.modelData.title
-      color: cell.modelData.on_now || cell.isCursor ? grid.fg : Color.muted
+      color: cell.modelData.on_now || cell.isCursor ? grid.fg : C.Color.muted
       font.family: grid.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       font.bold: cell.modelData.on_now || cell.isCursor
@@ -263,7 +264,7 @@ Item {
       textFormat: Text.PlainText
       text: cell.searching && cell.modelData.maybe ? "no teams listed"
             : cell.modelData.on_now ? "until " + Model.formatClock(cell.modelData.end) : Model.formatClock(cell.modelData.start)
-      color: Color.muted
+      color: C.Color.muted
       font.family: grid.tv.bar.fontFamily
       font.pixelSize: Style.font.heading
       elide: Text.ElideRight
@@ -299,8 +300,8 @@ Item {
       return below + height > grid.height ? Math.max(0, below - grid.rowHeight - height) : below
     }
     radius: Style.spacing.labelGap
-    color: Color.popups.background
-    borderSpec: Border.controlSpec("focus", grid.fg, Color.accent)
+    color: C.Color.popups.background
+    borderSpec: Border.controlSpec("focus", grid.fg, C.Color.accent)
 
     Column {
       id: cardCol
@@ -325,7 +326,7 @@ Item {
         textFormat: Text.PlainText
         text: card.block ? (Model.formatClock(card.block.start) + " – " + Model.formatClock(card.block.end)
                             + " · " + card.block.channel_number + " " + card.block.display_name) : ""
-        color: Color.muted
+        color: C.Color.muted
         font.family: grid.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         elide: Text.ElideRight
@@ -336,7 +337,7 @@ Item {
         width: parent.width
         textFormat: Text.PlainText
         text: !card.block ? "" : (card.block.synopsis || "The station lists no teams for this game, so it might not be the one you searched for.")
-        color: Color.muted
+        color: C.Color.muted
         font.family: grid.tv.bar.fontFamily
         font.pixelSize: Style.font.title
         wrapMode: Text.Wrap

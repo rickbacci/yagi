@@ -1,6 +1,7 @@
 import QtQuick
 import qs.Ui
 import qs.Commons
+import qs.Commons as C
 import "Model.js" as Model
 
 BorderSurface {
@@ -10,8 +11,8 @@ BorderSurface {
   visible: card.tv.isScanning
   height: Style.space(110)
   radius: Style.spacing.labelGap
-  color: Style.selectedFillFor(card.tv.bar.foreground, Color.accent)
-  borderSpec: Border.controlSpec("focus", card.tv.bar.foreground, Color.accent)
+  color: Style.selectedFillFor(card.tv.bar.foreground, C.Color.accent)
+  borderSpec: Border.controlSpec("focus", card.tv.bar.foreground, C.Color.accent)
 
   Column {
     anchors.fill: parent
@@ -27,7 +28,7 @@ BorderSurface {
         anchors.verticalCenter: parent.verticalCenter
         textFormat: Text.PlainText
         text: "Scanning for channels"
-        color: Color.accent
+        color: C.Color.accent
         font.family: card.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         font.bold: true
@@ -38,7 +39,7 @@ BorderSurface {
         anchors.verticalCenter: parent.verticalCenter
         textFormat: Text.PlainText
         text: card.tv.scanTotalFound + " found"
-        color: Color.accent
+        color: C.Color.accent
         font.family: card.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         font.bold: true
@@ -58,7 +59,7 @@ BorderSurface {
           width: Style.space(56)
           height: Style.space(22)
           radius: 4
-          color: Style.normalFillFor(card.tv.bar.foreground, Color.accent)
+          color: Style.normalFillFor(card.tv.bar.foreground, C.Color.accent)
 
           Text {
             anchors.centerIn: parent
@@ -87,7 +88,7 @@ BorderSurface {
           Text {
             textFormat: Text.PlainText
             text: Model.formatFreq(card.tv.scanFreq)
-            color: Color.muted
+            color: C.Color.muted
             font.family: card.tv.bar.fontFamily
             font.pixelSize: Style.font.heading
           }
@@ -103,7 +104,7 @@ BorderSurface {
           anchors.right: parent.right
           textFormat: Text.PlainText
           text: card.tv.scanSignal === null ? "Listening…" : (card.tv.scanSignal > -55 ? "Strong signal" : "Signal found")
-          color: card.tv.scanSignal !== null && card.tv.scanSignal > -55 ? Color.accent : (card.tv.scanSignal !== null ? card.tv.bar.foreground : Color.muted)
+          color: card.tv.scanSignal !== null && card.tv.scanSignal > -55 ? C.Color.accent : (card.tv.scanSignal !== null ? card.tv.bar.foreground : C.Color.muted)
           font.family: card.tv.bar.fontFamily
           font.pixelSize: Style.font.heading
           font.bold: true
@@ -113,7 +114,7 @@ BorderSurface {
           anchors.right: parent.right
           textFormat: Text.PlainText
           text: card.tv.scanSignal !== null ? (card.tv.scanSignal.toFixed(1) + " dBm") : ""
-          color: Color.muted
+          color: C.Color.muted
           font.family: card.tv.bar.fontFamily
           font.pixelSize: Style.font.heading
         }
@@ -133,7 +134,7 @@ BorderSurface {
           anchors.verticalCenter: parent.verticalCenter
           textFormat: Text.PlainText
           text: "Progress"
-          color: Color.muted
+          color: C.Color.muted
           font.family: card.tv.bar.fontFamily
           font.pixelSize: Style.font.heading
         }
@@ -143,7 +144,7 @@ BorderSurface {
           anchors.verticalCenter: parent.verticalCenter
           textFormat: Text.PlainText
           text: card.tv.scanPercent + "%"
-          color: Color.accent
+          color: C.Color.accent
           font.family: card.tv.bar.fontFamily
           font.pixelSize: Style.font.heading
           font.bold: true
@@ -154,13 +155,13 @@ BorderSurface {
         width: parent.width
         height: Style.space(8)
         radius: 4
-        color: Style.normalFillFor(card.tv.bar.foreground, Color.accent)
+        color: Style.normalFillFor(card.tv.bar.foreground, C.Color.accent)
 
         Rectangle {
           height: parent.height
           width: parent.width * (Math.max(1, card.tv.scanPercent) / 100.0)
           radius: 4
-          color: Color.accent
+          color: C.Color.accent
 
           Behavior on width {
             NumberAnimation { duration: 250; easing.type: Easing.OutQuad }

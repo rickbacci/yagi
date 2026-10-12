@@ -1,0 +1,7 @@
+module qs.Commons
+singleton Color 1.0 Color.qml
+singleton Style 1.0 Style.qml
+singleton Border 1.0 Border.qml
+Popups 1.0 Popups.qml
+FontTokens 1.0 FontTokens.qml
+SpacingTokens 1.0 SpacingTokens.qml

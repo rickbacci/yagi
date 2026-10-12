@@ -16,6 +16,8 @@ fi
   qml6-module-qtquick-controls \
   qml6-module-qtquick-layouts \
   qml6-module-qtquick-window \
+  qml6-module-qtquick-templates \
+  libqt6svg6 \
   qml6-module-qtqml \
   qml6-module-qtqml-workerscript \
   dbus-user-session
@@ -42,6 +44,10 @@ if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
     fi
     sleep 0.2
   done
+  if [ ! -S "/run/user/${uid}/systemd/private" ]; then
+    echo "systemd is pid 1 but user@${uid}.service has no manager socket" >&2
+    exit 1
+  fi
   if [ -n "${GITHUB_ENV:-}" ]; then
     echo "XDG_RUNTIME_DIR=/run/user/${uid}" >> "$GITHUB_ENV"
   fi
