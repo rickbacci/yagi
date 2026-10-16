@@ -22,6 +22,23 @@ SPOT_SLACK_SEC = 1.5
 SAME_CUT_SEC = 2.0
 DETECT_TIMEOUT_SEC = 3 * 3600
 
+# Why the last comskip run gave nothing, so the log can say "crashed" instead of "found no breaks".
+last_comskip_failure = ""
+
+
+def comskip_failure(returncode: int) -> str:
+    if returncode < 0:
+        import signal
+
+        try:
+            name = signal.Signals(-returncode).name
+        except ValueError:
+            name = f"signal {-returncode}"
+        return f"crashed ({name}), likely a damaged recording"
+    if returncode > 0:
+        return f"failed (exit {returncode})"
+    return ""
+
 _BLACK = re.compile(r"black_start:\s*([\d.]+)\s+black_end:\s*([\d.]+)")
 _SIL_START = re.compile(r"silence_start:\s*(-?[\d.]+)")
 _SIL_END = re.compile(r"silence_end:\s*(-?[\d.]+)")
@@ -175,11 +192,13 @@ def comskip_ads(exe: str, path: str, side: Optional[Dict[str, Any]] = None) -> L
         edl = ""
         try:
             seen = shield.hide(source)
-            subprocess.run(
+            res = subprocess.run(
                 ["nice", "-n", "19", exe, f"--ini={ini}", f"--output={out}", "--quiet", seen],
                 capture_output=True, timeout=DETECT_TIMEOUT_SEC, pass_fds=tuple(shield.fds),
             )
             edl = os.path.join(out, os.path.splitext(os.path.basename(seen))[0] + ".edl")
+            global last_comskip_failure
+            last_comskip_failure = comskip_failure(getattr(res, "returncode", 0) or 0)
         finally:
             shield.release()
         try:
@@ -214,11 +233,15 @@ def believable(breaks: List[List[float]], seconds: float) -> bool:
 def find_ads(path: str, side: Dict[str, Any]) -> Tuple[List[List[float]], str]:
     exe = comskip_path()
     if exe:
+        global last_comskip_failure
+        last_comskip_failure = ""
         # A game's halftime reads as one long break. Drop that one, keep the rest.
         breaks = [span for span in comskip_ads(exe, path, side) if span[1] - span[0] <= MAX_BREAK_SEC]
         if breaks and believable(breaks, media_seconds(path)):
             return breaks, "comskip"
         why = "found no breaks" if not breaks else "marked most of it"
+        if not breaks and last_comskip_failure:
+            why = last_comskip_failure
         print(f"Comskip {why} in {os.path.basename(path)}; using ffmpeg.", flush=True)
     return ffmpeg_ads(path, side), "ffmpeg"
 

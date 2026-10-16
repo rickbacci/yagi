@@ -182,3 +182,60 @@ class TestFfmpegDetector(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestComskipCrashMessage(unittest.TestCase):
+    def test_a_crash_is_named_not_called_no_breaks(self):
+        from engine import ads
+
+        self.assertEqual(ads.comskip_failure(-11), "crashed (SIGSEGV), likely a damaged recording")
+        self.assertEqual(ads.comskip_failure(2), "failed (exit 2)")
+        self.assertEqual(ads.comskip_failure(0), "")
+
+    def test_comskip_ads_remembers_the_crash(self):
+        from unittest import mock
+
+        from engine import ads
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "show.ts")
+            with open(path, "wb") as f:
+                f.write(b"\x47" * 188)
+            with mock.patch.object(ads, "_with_program_table", return_value=None), \
+                    mock.patch.object(ads.subprocess, "run", return_value=subprocess.CompletedProcess([], -11)):
+                self.assertEqual(ads.comskip_ads("/usr/bin/comskip", path), [])
+            self.assertIn("SIGSEGV", ads.last_comskip_failure)
+
+    def test_find_ads_logs_the_crash(self):
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        from engine import ads
+
+        def crashed(*_a, **_k):
+            ads.last_comskip_failure = "crashed (SIGSEGV), likely a damaged recording"
+            return []
+
+        out = io.StringIO()
+        with mock.patch.object(ads, "comskip_path", return_value="/usr/bin/comskip"), \
+                mock.patch.object(ads, "comskip_ads", side_effect=crashed), \
+                mock.patch.object(ads, "ffmpeg_ads", return_value=[]), redirect_stdout(out):
+            self.assertEqual(ads.find_ads("show.ts", {}), ([], "ffmpeg"))
+        self.assertIn("Comskip crashed (SIGSEGV)", out.getvalue())
+        self.assertNotIn("found no breaks", out.getvalue())
+
+    def test_find_ads_still_says_no_breaks_when_comskip_ran_clean(self):
+        import io
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        from engine import ads
+
+        ads.last_comskip_failure = "crashed (SIGSEGV), likely a damaged recording"
+        out = io.StringIO()
+        with mock.patch.object(ads, "comskip_path", return_value="/usr/bin/comskip"), \
+                mock.patch.object(ads, "comskip_ads", return_value=[]), \
+                mock.patch.object(ads, "ffmpeg_ads", return_value=[]), redirect_stdout(out):
+            ads.find_ads("show.ts", {})
+        self.assertIn("found no breaks", out.getvalue())
