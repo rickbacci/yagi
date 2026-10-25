@@ -969,7 +969,8 @@ class MpvController:
             next_idx = (found + delta) % len(pool)
         self.current_channel_index = next_idx
         ch = pool[next_idx]
-        self.tune(ch.get("tune_name") or ch.get("name", ""))
+        # A shared tune name is only the first row. 19.1 and 19.10 are both WOIO-HD.
+        self.tune(Timeshift.conf_name(ch) or ch.get("name", ""))
 
     def _mpv_path(self) -> Optional[str]:
         res = self.send_command(["get_property", "path"])

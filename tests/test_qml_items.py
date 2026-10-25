@@ -461,6 +461,27 @@ class TestQmlItems(unittest.TestCase):
                 found.extend(editable_input_problems(handle.read(), path))
         self.assertEqual(found, [])
 
+    def test_guide_search_fills_the_tab_row(self):
+        path = os.path.join(PLUGIN, "GuidePage.qml")
+        with open(path, encoding="utf-8") as handle:
+            src = handle.read()
+        self.assertNotIn("height: searchPlaceholder.implicitHeight", src)
+        self.assertIn("anchors.top: parent.top", src)
+        self.assertIn("verticalPadding: 0", src)
+
+    def test_guide_shows_build_only_the_visible_rows(self):
+        path = os.path.join(PLUGIN, "GuidePage.qml")
+        with open(path, encoding="utf-8") as handle:
+            src = handle.read()
+        self.assertIn("ListView {", src)
+        self.assertIn("model: guide.onGrid ? [] : guide.tv.guideShowRows", src)
+        self.assertNotIn("showsRepeater", src)
+        bar = os.path.join(PLUGIN, "BarWidget.qml")
+        with open(bar, encoding="utf-8") as handle:
+            widget = handle.read()
+        self.assertIn("positionViewAtIndex(root.guideCursor, ListView.Contain)", widget)
+        self.assertNotIn("showsList", widget)
+
 
 if __name__ == "__main__":
     unittest.main()
