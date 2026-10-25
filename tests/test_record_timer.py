@@ -293,7 +293,7 @@ class TestGuideStepsAside(unittest.TestCase):
                     top = line.strip().removeprefix("## ").strip()
                     break
         self.assertEqual(version, top)
-        self.assertEqual(version, "0.1.5")
+        self.assertEqual(version, "0.1.6")
 
     def test_a_second_finish_steps_aside_without_dropping_the_lock(self):
         from engine.episodes import FINISH_LOCK_KEY, finish_recordings

@@ -249,6 +249,31 @@ class TestMpvPlayerController(unittest.TestCase):
         self.assertEqual(self.controller.current_channel_index, 0)
 
     @patch.object(MpvController, "tune")
+    @patch.object(MpvController, "get_active_channel_name", return_value="19.1")
+    def test_channel_up_on_favorites_leaves_19_1_for_the_drt(self, _active, mock_tune):
+        rows = [
+            {"channel_number": "8.1", "tune_name": "FOX", "name": "FOX"},
+            {"channel_number": "19.1", "tune_name": "WOIO-HD", "name": "WOIO-HD"},
+            {"channel_number": "19.2", "tune_name": "MeTV", "name": "MeTV"},
+            {"channel_number": "19.10", "tune_name": "WOIO-HD", "name": "WOIO-HD"},
+            {"channel_number": "3.1", "tune_name": "WKYC-HD", "name": "WKYC-HD"},
+        ]
+        self.controller._load_channels = MagicMock(return_value=rows)
+        conf = os.path.join(self.tmp_dir.name, "channels.conf")
+        with open(conf, "w", encoding="utf-8") as handle:
+            handle.write(
+                "WOIO-HD:195028615:8VSB:49:52:2\n"
+                "19.1:195028615:8VSB:49:52:2\n"
+                "WOIO-HD:509028615:8VSB:65:68:4\n"
+                "19.10:509028615:8VSB:65:68:4\n"
+            )
+        with patch("player.controller.load_surf_prefs", return_value={"channel_filter": "favorites"}), \
+             patch("player.controller.load_favorites_list", return_value=["8.1", "19.1", "19.10", "3.1"]), \
+             patch("engine.timeshift.MPV_CHANNELS_CONF", conf):
+            self.controller.channel_up()
+        mock_tune.assert_called_with("19.10")
+
+    @patch.object(MpvController, "tune")
     @patch.object(MpvController, "get_active_channel_name")
     def test_channel_down_stateless_cycling(self, mock_active, mock_tune):
         mock_active.return_value = "53.1 Daystar"

@@ -654,7 +654,8 @@ BarWidget {
   function revealCursor() {
     if (root.libraryModalOpen) libraryPage.revealCursor()
     else if (root.guideStripOpen && root.guideTab === "grid") guidePage.grid.reveal(root.gridRow, root.gridCurrent())
-    else if (root.guideStripOpen) root.revealIn(guidePage.showsFlick, guidePage.showsList, root.guideCursor)
+    else if (root.guideStripOpen && guidePage.showsFlick.count > 0)
+      guidePage.showsFlick.positionViewAtIndex(root.guideCursor, ListView.Contain)
     else root.revealIn(channelList.flick, channelList.rows, root.cursorIndex)
   }
 

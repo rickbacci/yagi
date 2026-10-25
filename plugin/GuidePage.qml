@@ -11,7 +11,6 @@ Column {
   required property Item keyTarget
   property alias grid: guideGrid
   property alias showsFlick: stripFlick
-  property alias showsList: showsRepeater
   // False until the user opens search. The field is a Loader child, so it
   // does not exist while this stays false.
   property bool searchOpen: false
@@ -88,19 +87,22 @@ Column {
       }
     }
 
+    // Same height as Grid and Shows. The bare text line has no padding, and
+    // the field's dialog padding scales with the text size and clips the glyphs.
     Item {
       id: searchBox
       anchors.left: tabRow.right
       anchors.leftMargin: Style.space(10)
       anchors.right: matchCount.visible ? matchCount.left : parent.right
       anchors.rightMargin: matchCount.visible ? Style.space(8) : 0
-      anchors.verticalCenter: parent.verticalCenter
-      height: searchPlaceholder.implicitHeight
+      anchors.top: parent.top
+      anchors.bottom: parent.bottom
 
       Text {
         id: searchPlaceholder
         visible: !guide.searchOpen
         width: parent.width
+        anchors.verticalCenter: parent.verticalCenter
         textFormat: Text.PlainText
         text: guide.tv.guideSearchText.length
               ? guide.tv.guideSearchText
@@ -109,11 +111,12 @@ Column {
         font.family: guide.tv.bar.fontFamily
         font.pixelSize: Style.font.heading
         elide: Text.ElideRight
+      }
 
-        MouseArea {
-          anchors.fill: parent
-          onClicked: guide.openSearch()
-        }
+      MouseArea {
+        anchors.fill: parent
+        enabled: !guide.searchOpen
+        onClicked: guide.openSearch()
       }
 
       // Inactive until search is open. Qt 6.12 connects every TextInput to
@@ -130,6 +133,7 @@ Column {
             placeholderText: guide.onGrid ? "Search shows and teams" : "Filter shows"
             font.family: guide.tv.bar.fontFamily
             font.pixelSize: Style.font.heading
+            verticalPadding: 0
             anchors.fill: parent
             Component.onCompleted: {
               text = guide.tv.guideSearchText
@@ -263,30 +267,29 @@ Column {
     wrapMode: Text.Wrap
   }
 
-  Flickable {
+  // The saved history is thousands of shows. A repeater would build every row.
+  // This view builds only the rows on screen, and nothing while the grid is up.
+  ListView {
     id: stripFlick
     width: parent.width
-    height: Math.min(stripShowsCol.implicitHeight, guide.tv.guideListRoom())
-    contentWidth: width
-    contentHeight: stripShowsCol.implicitHeight
+    visible: count > 0
+    readonly property int rowHeight: Style.font.heading * 2 + Style.spacing.controlPaddingY * 2 + Style.space(8)
+    height: {
+      if (count === 0) return 0
+      var full = count * rowHeight + Math.max(0, count - 1) * spacing
+      return Math.min(full, guide.tv.guideListRoom())
+    }
+    model: guide.onGrid ? [] : guide.tv.guideShowRows
     clip: true
-    visible: !guide.onGrid && guide.tv.guideShowRows.length > 0
-    flickableDirection: Flickable.VerticalFlick
+    spacing: Style.space(6)
     boundsBehavior: Flickable.StopAtBounds
+    reuseItems: true
+    cacheBuffer: rowHeight * 4
 
-    Column {
-      id: stripShowsCol
+    delegate: ShowRow {
       width: stripFlick.width
-      spacing: Style.space(6)
-
-      Repeater {
-        id: showsRepeater
-        model: guide.tv.guideShowRows
-        delegate: ShowRow {
-          tv: guide.tv
-          width: stripShowsCol.width
-        }
-      }
+      height: stripFlick.rowHeight
+      tv: guide.tv
     }
   }
 }

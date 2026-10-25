@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6
+
+- Guide search is as tall as the Grid and Shows buttons. The field was only the text line, so its padding clipped the glyphs once the text size was larger than the default.
+- The Shows list builds only the rows on screen. A month of history is a few thousand shows, and building every row made search slow.
+- Channel up tunes 19.10 by its own name. 19.1 and 19.10 share the tune name WOIO-HD, and channel up was staying on the first one.
+
 ## 0.1.5
 
 - A missing `fuser` is treated as busy. The library size cap will not delete the recording you are watching when it cannot tell which files are open.
