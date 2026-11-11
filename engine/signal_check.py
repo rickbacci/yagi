@@ -7,14 +7,12 @@ else it takes a free tuner under that tuner's lock, as a scan does, and lets go.
 """
 
 import os
-import select
 import statistics
-import subprocess
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from engine import pool
-from engine.paths import CHANNELS_JSON_PATH, TIMESHIFT_FILE, get_runtime_socket, state_lock
+from engine.paths import CHANNELS_JSON_PATH, TIMESHIFT_FILE, state_lock
 
 TS_PACKET = 188
 SYNC = 0x47
@@ -82,20 +80,6 @@ def _follow(path: str) -> Callable[[], bytes]:
     return read
 
 
-def _pipe(proc: subprocess.Popen) -> Callable[[], bytes]:
-    fd = proc.stdout.fileno()
-
-    def read() -> bytes:
-        out = []
-        while select.select([fd], [], [], 0)[0]:
-            chunk = os.read(fd, READ_CHUNK)
-            if not chunk:
-                break
-            out.append(chunk)
-        return b"".join(out)
-    return read
-
-
 def _watch(adapter: int, read: Callable[[], bytes], seconds: int, say: Callable[[str], None]) -> Dict[str, Any]:
     from engine.tuner import TunerManager
 
@@ -157,25 +141,31 @@ def check(query: str, seconds: int = 30, say: Callable[[str], None] = print,
                 if not named:
                     raise RuntimeError(pool.busy_text())
                 raise RuntimeError(f"Tuner {adapter} is busy{JOB_TEXT.get(job, '')}.")
-            conf = get_runtime_socket("yagi-signal.conf")
-            with open(conf, "w", encoding="utf-8") as f:
-                f.write(f"[CHECK]\n\tDELIVERY_SYSTEM = ATSC\n\tFREQUENCY = {freq}\n\tMODULATION = VSB/8\n")
-            proc = subprocess.Popen(["dvbv5-zap", "-a", str(adapter), "-c", conf, "-P", "-o", "-", "CHECK"],
-                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            from engine.tower_dump import LOCK_TIMEOUT_SEC, Tuner
+
+            tuner = Tuner(int(adapter))
             try:
+                if not tuner.tune(freq, LOCK_TIMEOUT_SEC):
+                    raise RuntimeError(f"No lock at {freq} Hz")
+                tuner.start()
+
+                def read() -> bytes:
+                    parts = []
+                    while True:
+                        chunk = tuner.read()
+                        if not chunk:
+                            break
+                        parts.append(chunk)
+                    return b"".join(parts)
+
                 say(f"{name}: tuner {adapter} for {seconds} s. Ctrl+C stops.")
-                result = _watch(adapter, _pipe(proc), seconds, say)
+                result = _watch(adapter, read, seconds, say)
             finally:
-                proc.terminate()
                 try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-                try:
-                    os.remove(conf)
+                    tuner.stop()
                 except OSError:
                     pass
+                tuner.close()
 
     snr = result["snr"]
     if snr:

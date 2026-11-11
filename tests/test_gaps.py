@@ -40,41 +40,47 @@ def _pkt(payload_start=True, afc=1, body=b""):
 
 
 class TestTunerFakes(unittest.TestCase):
-    def test_inspect_and_busy_never_open_the_stick(self):
-        tool = MagicMock()
-        tool.stdout = "Device DualHD (Frontend)\nCurrent v5 delivery system: ATSC\nATSC\n[DVBT]\n"
-        tool.returncode = 0
+    def test_inspect_and_busy_use_the_frontend_open(self):
+        info = bytearray(168)
+        info[:6] = b"DualHD"
+
+        def ioctl(_fd, req, buf, _mutate=False):
+            from engine.tuner import _FE_GET_INFO
+            if req == _FE_GET_INFO:
+                buf[:168] = info
+
         with patch("engine.tuner.os.path.exists", return_value=True), \
-             patch("engine.tuner.subprocess.run", return_value=tool):
+             patch("engine.tuner.os.open", return_value=11), \
+             patch("engine.tuner.os.close"), \
+             patch("engine.tuner.fcntl.ioctl", side_effect=ioctl), \
+             patch("engine.tuner._delivery_systems", return_value=["ATSC", "DVBT"]), \
+             patch("engine.tuner._current_system", return_value="ATSC"):
             tuner = TunerAdapter(7)
         self.assertEqual(tuner.name, "DualHD")
         self.assertTrue(tuner.supports_atsc)
         self.assertIn("DVBT", tuner.delivery_systems)
 
-        missing = MagicMock()
+        opened = MagicMock()
         with patch("engine.tuner.os.path.exists", return_value=False), \
-             patch("engine.tuner.subprocess.run", missing):
+             patch("engine.tuner.os.open", opened):
             quiet = TunerAdapter(8)
-        missing.assert_not_called()
+        opened.assert_not_called()
         self.assertTrue(quiet.is_busy)
 
-        fuser = MagicMock(returncode=0, stdout="")
         with patch("engine.tuner.os.path.exists", return_value=True), \
-             patch("engine.tuner.subprocess.run", return_value=fuser):
+             patch("engine.tuner.os.open", side_effect=OSError(16, "busy")):
             self.assertTrue(TunerAdapter(7).is_busy)
-        fuser.returncode = 1
         with patch("engine.tuner.os.path.exists", return_value=True), \
-             patch("engine.tuner.subprocess.run", return_value=fuser):
+             patch("engine.tuner.os.open", return_value=11), \
+             patch("engine.tuner.os.close") as close, \
+             patch("engine.tuner.fcntl.ioctl", side_effect=ioctl), \
+             patch("engine.tuner._delivery_systems", return_value=["ATSC"]), \
+             patch("engine.tuner._current_system", return_value="ATSC"):
             self.assertFalse(TunerAdapter(7).is_busy)
+        close.assert_called()
         with patch("engine.tuner.os.path.exists", return_value=True), \
-             patch("engine.tuner.subprocess.run", side_effect=subprocess.TimeoutExpired("fuser", 1)):
+             patch("engine.tuner.os.open", side_effect=OSError("no frontend")):
             self.assertTrue(TunerAdapter(7).is_busy)
-        with patch("engine.tuner.os.path.exists", return_value=True), \
-             patch("engine.tuner.subprocess.run", side_effect=OSError):
-            self.assertTrue(TunerAdapter(7).is_busy)
-        with patch("engine.tuner.os.path.exists", return_value=True), \
-             patch("engine.tuner.subprocess.run", side_effect=FileNotFoundError):
-            self.assertFalse(TunerAdapter(7).is_busy)
 
     def test_allocation_skips_busy_and_excluded(self):
         free = MagicMock(adapter_id=0, supports_atsc=True, is_busy=False)

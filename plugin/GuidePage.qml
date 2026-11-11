@@ -85,6 +85,14 @@ Column {
         foreground: guide.tv.bar.foreground
         onClicked: guide.tv.showGuideTab("shows")
       }
+
+      Button {
+        text: "Refresh"
+        tooltipText: "Read the listings from the stations once"
+        fontSize: Style.font.heading
+        foreground: guide.tv.bar.foreground
+        onClicked: guide.tv.refreshGuide()
+      }
     }
 
     // Same height as Grid and Shows. The bare text line has no padding, and
@@ -225,7 +233,7 @@ Column {
              && (guide.tv.watchableChannels || []).length > 0)
             ? "No favorites yet. Open All and click ☆ on a channel to add it here."
             : (guide.tv.guideWaitReason
-               || "No listings yet for these channels. Each Guide update adds what the stations send.")
+               || "No listings yet for these channels. The first time you open the Guide, it reads them once.")
     color: C.Color.muted
     font.family: guide.tv.bar.fontFamily
     font.pixelSize: Style.font.heading
@@ -260,7 +268,7 @@ Column {
     width: parent.width
     textFormat: Text.PlainText
     text: guide.tv.showsLoading ? "Reading the Guide…"
-          : (guide.tv.guideSearchActive ? "No show here matches." : "Nothing listed for this time yet. Each Guide update adds what the stations send.")
+          : (guide.tv.guideSearchActive ? "No show here matches." : "Nothing listed for this time yet.")
     color: C.Color.muted
     font.family: guide.tv.bar.fontFamily
     font.pixelSize: Style.font.heading

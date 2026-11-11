@@ -1128,6 +1128,100 @@ def refresh_guide(
     }
 
 
+def _once_path(guide_path: Optional[str] = None) -> str:
+    target = guide_path or GUIDE_JSON_PATH
+    return os.path.join(os.path.dirname(target) or ".", "guide_once.json")
+
+
+def guide_once_claimed(guide_path: Optional[str] = None) -> bool:
+    try:
+        with open(_once_path(guide_path), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return bool(isinstance(data, dict) and data.get("claimed"))
+
+
+def _mark_guide_once(guide_path: Optional[str] = None) -> None:
+    path = _once_path(guide_path)
+    ensure_private_dir(os.path.dirname(path) or ".")
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"claimed": True, "at": time.time()}, f)
+    chmod_private_file(tmp)
+    os.replace(tmp, path)
+    chmod_private_file(path)
+
+
+def listings_are_fresh(guide: Optional[Dict[str, Any]], now: float) -> bool:
+    """True when a lineup row still has a show that has not ended."""
+    from engine.psip import GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
+
+    channels = (guide or {}).get("channels") or {}
+    if not isinstance(channels, dict):
+        return False
+    for row in channels.values():
+        if not isinstance(row, dict):
+            continue
+        for prog in row.get("programs") or []:
+            if not isinstance(prog, dict):
+                continue
+            try:
+                start = int(prog.get("gps_start") or 0) + GPS_UNIX_OFFSET - GPS_LEAP_SECONDS
+                dur = int(prog.get("duration_sec") or 1800)
+            except (TypeError, ValueError):
+                continue
+            if start > GPS_UNIX_OFFSET and start + dur > float(now):
+                return True
+    return False
+
+
+def claim_first_guide_open(
+    channels: Optional[List[Dict[str, Any]]],
+    guide: Optional[Dict[str, Any]],
+    now: Optional[float] = None,
+    guide_path: Optional[str] = None,
+) -> str:
+    """'read' once, the first time the Guide is opened with channels and no fresh listings.
+
+    Later opens return 'skip', including after the shell starts again. Opening
+    the Guide before a scan does not claim, so the first open after the scan
+    can still read. This does not enable the record timer.
+    """
+    moment = time.time() if now is None else float(now)
+    with state_lock("guide-once"):
+        if guide_once_claimed(guide_path):
+            return "skip"
+        if not channels:
+            return "skip"
+        _mark_guide_once(guide_path)
+        if listings_are_fresh(guide, moment):
+            return "skip"
+        return "read"
+
+
+def open_guide_once(
+    grabber: Optional[Callable[[], Dict[str, List[Dict[str, Any]]]]] = None,
+    channels_path: Optional[str] = None,
+    guide_path: Optional[str] = None,
+    now: Optional[float] = None,
+) -> str:
+    """The automatic read on first Guide open, or 'skip'. Never starts the record timer."""
+    target = guide_path or GUIDE_JSON_PATH
+    channels = _read_channels_file(channels_path or CHANNELS_JSON_PATH)
+    guide: Dict[str, Any] = {}
+    try:
+        with open(target, encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            guide = loaded
+    except (OSError, ValueError):
+        guide = {}
+    if claim_first_guide_open(channels, guide, now=now, guide_path=target) != "read":
+        return "skip"
+    return run_guide_update(grabber=grabber)
+
+
 GUIDE_UPDATE_LOCK_KEY = "guide-update"
 
 

@@ -663,5 +663,97 @@ class TestGuide(unittest.TestCase):
             self.assertTrue(guide_backoff_active(status, status["failed_at"] + 30))
 
 
+class TestFirstGuideOpen(unittest.TestCase):
+    def _channels(self, path):
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"channels": [{"channel_number": "8.1", "frequency": 183028615, "name": "FOX"}]}, handle)
+
+    def test_the_first_open_reads_once_and_a_later_open_does_not(self):
+        from unittest.mock import patch
+        from engine.guide import guide_once_claimed, open_guide_once
+
+        with tempfile.TemporaryDirectory() as tmp:
+            channels = os.path.join(tmp, "channels.json")
+            guide = os.path.join(tmp, "guide.json")
+            calls = {"n": 0}
+
+            def grabber():
+                calls["n"] += 1
+                return {}
+
+            with patch("engine.guide.guide_tuner_free", return_value=True):
+                empty = open_guide_once(grabber=grabber, channels_path=channels, guide_path=guide)
+                self.assertEqual(empty, "skip")
+                self.assertFalse(guide_once_claimed(guide))
+                self.assertEqual(calls["n"], 0)
+
+                self._channels(channels)
+                first = open_guide_once(grabber=grabber, channels_path=channels, guide_path=guide)
+                second = open_guide_once(grabber=grabber, channels_path=channels, guide_path=guide)
+            self.assertNotEqual(first, "skip")
+            self.assertEqual(second, "skip")
+            self.assertEqual(calls["n"], 1)
+            self.assertTrue(guide_once_claimed(guide))
+            self.assertEqual([name for name in os.listdir(tmp) if ".tmp." in name], [])
+
+    def test_fresh_listings_claim_without_another_read(self):
+        from unittest.mock import patch
+        from engine.guide import guide_once_claimed, listings_are_fresh, open_guide_once
+        from engine.psip import GPS_LEAP_SECONDS, GPS_UNIX_OFFSET
+
+        now = 1_762_000_000.0
+        gps = int(now) - 60 - GPS_UNIX_OFFSET + GPS_LEAP_SECONDS
+        with tempfile.TemporaryDirectory() as tmp:
+            channels = os.path.join(tmp, "channels.json")
+            guide = os.path.join(tmp, "guide.json")
+            self._channels(channels)
+            with open(guide, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "channels": {
+                        "8.1": {"programs": [{"gps_start": gps, "duration_sec": 1800, "title": "News"}]},
+                    },
+                }, handle)
+            with open(guide, encoding="utf-8") as handle:
+                self.assertTrue(listings_are_fresh(json.load(handle), now))
+            calls = {"n": 0}
+
+            def grabber():
+                calls["n"] += 1
+                return {}
+
+            with patch("engine.guide.guide_tuner_free", return_value=True):
+                first = open_guide_once(grabber=grabber, channels_path=channels, guide_path=guide, now=now)
+                later = open_guide_once(grabber=grabber, channels_path=channels, guide_path=guide, now=now + 86400)
+            self.assertEqual(first, "skip")
+            self.assertEqual(later, "skip")
+            self.assertEqual(calls["n"], 0)
+            self.assertTrue(guide_once_claimed(guide))
+
+    def test_refresh_reads_again_without_the_record_timer(self):
+        from unittest.mock import patch
+        from engine.guide import open_guide_once, run_guide_update
+        import inspect
+        from engine import guide as guide_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            channels = os.path.join(tmp, "channels.json")
+            guide = os.path.join(tmp, "guide.json")
+            self._channels(channels)
+            calls = {"n": 0}
+
+            def grabber():
+                calls["n"] += 1
+                return {}
+
+            with patch("engine.guide.guide_tuner_free", return_value=True):
+                open_guide_once(grabber=grabber, channels_path=channels, guide_path=guide)
+                self.assertEqual(calls["n"], 1)
+                run_guide_update(grabber=grabber)
+            self.assertEqual(calls["n"], 2)
+        src = inspect.getsource(guide_mod.open_guide_once) + inspect.getsource(guide_mod.run_guide_update)
+        self.assertNotIn("install", src)
+        self.assertNotIn("yagi-record.timer", src)
+
+
 if __name__ == "__main__":
     unittest.main()

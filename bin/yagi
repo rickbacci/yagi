@@ -85,7 +85,10 @@ def cmd_status(args):
     except OSError:
         on = False
     sha = current_sha()
-    print(f"Record timer: on, runs {sha}" if on and sha else "Record timer: off. Run `yagi install` to record.")
+    if on and sha:
+        print(f"Record timer: on, runs {sha}")
+    else:
+        print("Record timer: off. Watch, pause, and record-now still work. `yagi install` starts scheduled recordings.")
 
 
 def cmd_install(args):
@@ -243,6 +246,14 @@ def cmd_guide(args):
     if action == "update":
         from engine.guide import run_guide_update
         done = run_guide_update(grabber=collect_guide_events)
+        print(_guide_update_line(done), flush=True)
+        return
+    if action == "once":
+        from engine.guide import open_guide_once
+        done = open_guide_once(grabber=collect_guide_events)
+        if done == "skip":
+            print("Guide left as it is.", flush=True)
+            return
         print(_guide_update_line(done), flush=True)
         return
     if action == "shows":
@@ -1066,7 +1077,7 @@ def main():
     p_status.add_argument("--count", action="store_true", help=argparse.SUPPRESS)
     p_status.set_defaults(func=cmd_status)
 
-    subparsers.add_parser("install", help="Start the record timer (after plugin add)").set_defaults(func=cmd_install)
+    subparsers.add_parser("install", help="Optional: keep the Guide fresh and start scheduled recordings").set_defaults(func=cmd_install)
     subparsers.add_parser("uninstall", help="Stop the record timer (before plugin remove)").set_defaults(func=cmd_uninstall)
 
     p_signal = subparsers.add_parser("signal", help="Show SNR and strength for the picture tuner")
@@ -1097,7 +1108,7 @@ def main():
 
     # guide / epg
     p_guide = subparsers.add_parser("guide", aliases=["epg"], help="Show electronic program guide schedules")
-    p_guide.add_argument("action", nargs="?", choices=["refresh", "update", "search", "shows", "slots", "forget", "slot"], help="Refresh, update quietly (the timer), search, list shows (JSON), or edit the repeated-show list")
+    p_guide.add_argument("action", nargs="?", choices=["refresh", "once", "update", "search", "shows", "slots", "forget", "slot"], help="Read listings once, the first Guide open, search, list shows (JSON), or edit the repeated-show list")
     p_guide.add_argument("query", nargs="*", help="Search words, or a slot command")
     p_guide.add_argument("--title", default="", help="Show title")
     p_guide.add_argument("--clock", default="", help="Start clock, e.g. 8:15 PM")

@@ -26,61 +26,36 @@ Watch, pause, and record free over-the-air TV from the Omarchy bar. Yagi scans A
 
 One tuner can watch or record, not both, except that recording the station you are already watching copies the live picture and does not need a second tuner. Two tuners can watch and record at the same time.
 
-Check a tuner after the packages below are installed:
-
-```bash
-dvb-fe-tool -a 0
-```
-
-The report should list `ATSC`. A second tuner is `-a 1`.
+`yagi status` names each adapter it can open. One that supports ATSC is ready to scan.
 
 ## Install
 
+mpv, ffmpeg, and Python are already on Omarchy. Yagi does not need another package.
+
 ```bash
-sudo pacman -S --needed mpv v4l-utils psmisc procps-ng python
 omarchy plugin add https://github.com/rickbacci/yagi.git
 omarchy plugin enable richardb.yagi
 omarchy bar put richardb.yagi --section right
 omarchy restart shell
 ```
 
-Then start the record timer, which fills the Guide and starts scheduled recordings. Run it from the plugin directory. `install` uses that copy of the program, not whatever directory you happen to be in:
+That is the whole install. Scan, watch, pause, record the station that is on, and the Guide all work from the bar. The first time you open the Guide, and a scan has already found channels, Yagi reads the listings once. Refresh reads them again when you ask. Neither of those starts the record timer.
+
+Scheduled recordings and series recordings stay off until you turn that timer on. From the plugin directory:
 
 ```bash
 cd ~/.config/omarchy/plugins/richardb.yagi
 python3 bin/yagi install
 ```
 
-`python3 bin/yagi status` should say the record timer is on.
-
-The picture is a floating window of class `yagi`, at the bottom right. Do not pin it in this rule. A pin here is put back the moment the window is not fullscreen, and fullscreen never sticks. Yagi pins the small picture itself, and pins it again when you leave fullscreen.
-
-Replace any older `yagi` rule, including one that sets `pin = true`, with this block. Then reload. Until you do, `f` unpins the window and the rule pins it again before fullscreen can stick.
-
-```lua
-o.window({ class = "^yagi$", fullscreen = false }, {
-  tag = "-default-opacity",
-  float = true,
-  keep_aspect_ratio = true,
-  border_size = 0,
-  size = { "(monitor_h*16/27)", "(monitor_h/3)" },
-  opacity = "1 1",
-  move = { "(monitor_w-(monitor_h*16/27)-40)", "(monitor_h-(monitor_h/3)-40)" },
-})
-```
-
-```bash
-hyprctl reload
-```
-
-In the picture, `f` or a double-click fullscreens. `f`, double-click, or Esc returns to the small pinned window. Super+F does not unpin, so it still does nothing while the picture is pinned. `i` shows player stats (resolution, codec, hardware decode).
+`yagi status` then says the record timer is on. Skip this if you only watch, pause, and record what is on now.
 
 If `/dev/dvb/adapter0/frontend0` is not readable by your user, log out and back in on the seat. Do not change its mode as root.
 
 ## First run
 
 1. Open Yagi from the bar and choose Scan. Nothing is listed until a scan finishes.
-2. Leave a tuner free. The record timer reads the Guide on its own. With a typical set of towers that takes a few minutes. Listings are only what each station sends, usually the next several hours.
+2. Open the Guide. The first time, with channels and no listings, Yagi reads each tower once. That takes a few minutes and needs a free tuner. Listings are only what each station sends, usually the next several hours. Opening the Guide again does not start another read. Refresh does, when you want a new one.
 3. The channel list opens on Favorites. Switch to All and star the stations you want. An empty Favorites tab is not an empty scan.
 
 Names and network labels are not in the broadcast. To supply them, copy a station map to `~/.config/yagi/station_map.json`. `markets/cleveland.json` is one example of the file shape. Without that file, Yagi uses the names from the scan.
@@ -89,11 +64,9 @@ Names and network labels are not in the broadcast. To supply them, copy a statio
 
 ```bash
 omarchy plugin update
-cd ~/.config/omarchy/plugins/richardb.yagi
-python3 bin/yagi install
 ```
 
-`omarchy plugin update` downloads the new plugin. `python3 bin/yagi install` publishes that commit for the record timer. Run install when you want the timer to pick up the update immediately. If you skip it, the timer publishes the new commit on a later tick.
+`omarchy plugin update` downloads the new plugin. If the record timer is already on, its next tick publishes that commit.
 
 An update does not change `~/.config/yagi` or `~/Videos/TV`.
 
@@ -101,7 +74,7 @@ An update does not change `~/.config/yagi` or `~/Videos/TV`.
 
 Open the panel from the bar icon. `g` opens the Guide, `v` opens Recordings, `f` is Favorites, `a` is All, and Shift+S scans again. Esc closes the panel.
 
-On the channel list, Enter watches and `r` records. In the Guide, Enter watches the show that is on now, or records a later one. `r` records the selected airing. `a` records that series every week. `/` searches titles and descriptions.
+On the channel list, Enter watches and `r` records. In the Guide, Grid and Shows switch the list. Refresh reads the listings once, even when titles are already on screen, and does not start the record timer. Enter watches the show that is on now, or records a later one. `r` records the selected airing. `a` records that series every week, once the record timer is on. `/` searches titles and descriptions.
 
 Pause is not a recording. Close TV deletes the pause file. `y` while paused saves that stretch into Recordings. Recordings are kept in the library. Ad breaks are marked after a recording ends. Comskip is used when it is installed. Otherwise ffmpeg looks for black frames and silence.
 
@@ -148,22 +121,21 @@ Updates and `python3 bin/yagi uninstall` do not delete `~/.config/yagi` or `~/Vi
 
 ## Troubleshooting
 
-**The Guide is empty.** Favorites is the default tab. Choose All if you have not starred any stations. If All has channels but no show titles, the Guide has not been read yet, or the last read failed. A normal read takes a few minutes and needs a free tuner.
+**The Guide is empty.** Favorites is the default tab. Choose All if you have not starred any stations. If All has channels but no show titles, open the Guide once and leave a tuner free. The first open reads the listings. Refresh asks for another read. A read takes a few minutes. While it runs, the panel says which tower it is on.
 
 ```bash
-journalctl --user -u yagi-guide.service -n 80 --no-pager
 ~/.config/omarchy/plugins/richardb.yagi/bin/yagi status
 ```
 
-`status` should say the record timer is on. The Guide journal should show towers being read, then the service going idle. An error line there is the reason the listings were not saved.
+`status` names the tuners. The record timer can be off. Watch, pause, and record-now still work. An error on the Guide line is the reason the listings were not saved.
 
-**No channels.** Scan from the bar. `dvb-fe-tool -a 0` should report `ATSC`, and `/dev/dvb/adapter0/frontend0` should be readable by your user.
+**No channels.** Scan from the bar. `yagi status` should list an ATSC adapter, and `/dev/dvb/adapter0/frontend0` should be readable by your user.
 
 **Watch and record at once.** That needs two tuners, unless you record the station already on screen.
 
 ## Uninstall
 
-Stop the timer before removing the plugin. Recordings and settings stay.
+Recordings and settings stay. If you turned the record timer on, stop it before removing the plugin. If you never did, plugin remove is enough.
 
 ```bash
 cd ~/.config/omarchy/plugins/richardb.yagi
@@ -171,4 +143,10 @@ python3 bin/yagi uninstall
 omarchy plugin remove richardb.yagi
 ```
 
-Development notes, tests, and the window-rule details are in [CONTRIBUTING.md](CONTRIBUTING.md).
+## Picture window
+
+The picture is a floating window of class `yagi`, at the bottom right, about a third of the monitor tall. Yagi pins that small window itself. You do not need a Hyprland rule to watch. In the picture, `f` or a double-click fullscreens. `f`, double-click, or Esc returns to the small window. Super+F does not unpin, so it still does nothing while the picture is pinned. `i` shows player stats (resolution, codec, hardware decode).
+
+If an older rule pins class `yagi`, fullscreen will not stick: the rule pins the window again the moment it leaves fullscreen. The optional rule that leaves pinning to Yagi is in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Development notes and tests are in that same file.

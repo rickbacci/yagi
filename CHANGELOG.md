@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7
+
+- Scan, the Guide read, and the adapter check talk to the tuner directly. A new install is plugin add, enable, put it on the bar, and restart the shell.
+- The first time you open the Guide with channels and no listings, it reads once. Refresh, next to Grid and Shows, reads again. Neither starts the record timer.
+- `yagi install` stays optional. It keeps the Guide fresh and starts scheduled and series recordings. Watch, pause, and record-now work without it.
+
 ## 0.1.6
 
 - Guide search is as tall as the Grid and Shows buttons. The field was only the text line, so its padding clipped the glyphs once the text size was larger than the default.

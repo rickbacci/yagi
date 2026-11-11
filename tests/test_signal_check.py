@@ -44,26 +44,27 @@ class TestNamedTuner(unittest.TestCase):
              patch("engine.signal_check.os.path.exists", return_value=True), \
              patch("engine.signal_check.pool.claims", return_value=claims or {}), \
              patch("engine.tuner.TunerManager.adapter_is_free", return_value=free), \
-             patch("engine.signal_check.get_runtime_socket", return_value="/x/c.conf"), \
-             patch("builtins.open"), patch("engine.signal_check.os.remove"), \
-             patch("engine.signal_check.subprocess.Popen") as popen:
+             patch("engine.tower_dump.Tuner") as tuner:
+            tuner.return_value.tune.return_value = True
+            tuner.return_value.read.return_value = b""
             result = check("8.1", seconds=2, say=lambda _: None, adapter=adapter)
-        return result, popen
+        return result, tuner
 
     def test_no_tuner_named_reads_live_tv(self, watch, *_):
-        result, popen = self.run_check(None)
+        result, tuner = self.run_check(None)
         self.assertEqual((result["adapter"], result["live"]), (0, True))
-        popen.assert_not_called()
+        tuner.assert_not_called()
 
     def test_live_tvs_tuner_reads_live_tv(self, watch, *_):
-        result, popen = self.run_check(0)
+        result, tuner = self.run_check(0)
         self.assertTrue(result["live"])
-        popen.assert_not_called()
+        tuner.assert_not_called()
 
     def test_the_other_tuner_tunes_it(self, watch, *_):
-        result, popen = self.run_check(1)
+        result, tuner = self.run_check(1)
         self.assertEqual((result["adapter"], result["live"]), (1, False))
-        self.assertEqual(popen.call_args[0][0][:3], ["dvbv5-zap", "-a", "1"])
+        self.assertEqual(tuner.call_args[0][0], 1)
+        tuner.return_value.tune.assert_called()
 
     def test_a_busy_tuner_is_never_taken(self, watch, *_):
         with self.assertRaisesRegex(RuntimeError, "^Tuner 1 is busy recording.$"):

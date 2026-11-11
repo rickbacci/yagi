@@ -194,12 +194,56 @@ class TestPsip(unittest.TestCase):
         self.assertEqual(events["3.1"][0]["title"], "FOX Primetime")
         self.assertTrue(any("52 53" in note for note in collect_guide_events.last_notes))
 
-    def test_dump_mux_records_all_pids(self):
+    def test_dump_mux_reads_the_tuner_and_yields_it_back(self):
         import inspect
-        from engine.psip import dump_mux
-        src = inspect.getsource(dump_mux)
-        self.assertIn('"-r"', src)
-        self.assertIn('"-P"', src)
+        from engine.psip import GuideYield, dump_mux
+
+        class Fake:
+            def __init__(self, adapter):
+                self.adapter = adapter
+                self.freq = None
+                self.closed = False
+                self.stopped = False
+
+            def tune(self, freq, _timeout):
+                self.freq = freq
+                return True
+
+            def start(self):
+                return None
+
+            def read(self):
+                return b"\x47" + b"\x00" * 187
+
+            def stop(self):
+                self.stopped = True
+
+            def close(self):
+                self.closed = True
+
+        made = []
+
+        def factory(adapter):
+            tuner = Fake(adapter)
+            made.append(tuner)
+            return tuner
+
+        with patch("engine.timeshift.Timeshift._wait_frontend_free"), \
+             patch("engine.tower_dump.Tuner", side_effect=factory), \
+             patch("engine.pool.guide_must_yield", return_value=False):
+            data = dump_mux(1, 177028615, dwell_sec=0.25)
+        self.assertTrue(data.startswith(b"\x47"))
+        self.assertEqual(made[0].freq, 177028615)
+        self.assertTrue(made[0].stopped)
+        self.assertTrue(made[0].closed)
+        self.assertNotIn("dvbv5", inspect.getsource(dump_mux))
+
+        with patch("engine.timeshift.Timeshift._wait_frontend_free"), \
+             patch("engine.tower_dump.Tuner", side_effect=factory), \
+             patch("engine.pool.guide_must_yield", return_value=True):
+            with self.assertRaises(GuideYield):
+                dump_mux(1, 177028615, dwell_sec=1.0)
+        self.assertTrue(made[-1].closed)
 
     def test_ett_description_attaches_to_matching_event(self):
         from engine.psip import pack_ett_section

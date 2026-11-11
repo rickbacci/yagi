@@ -16,6 +16,8 @@ getfacl /dev/dvb/adapter1/frontend0
 loginctl show-session $(loginctl | awk '/seat0/{print $1}') -p Active
 ```
 
+Yagi reads the frontend with `FE_GET_INFO` and the same ioctls the live dump uses for SNR. `yagi status` lists the adapters. A busy frontend is the open that returns `EBUSY`. Scan, the Guide, and `yagi signal check` tune that way. They do not call `dvb-fe-tool`, `dvbv5-scan`, or `dvbv5-zap`.
+
 `femon` is optional and may not be installed. SNR while a tune runs is on the flyout watch row. The live dump logs lock times and `SNR:` lines to `~/.cache/yagi/timeshift/dump.log`.
 
 ## Signal

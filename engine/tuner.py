@@ -3,21 +3,77 @@ Yagi - Tuner Hardware Manager
 Detects, queries, and allocates Linux DVB adapters for ATSC OTA television.
 """
 
+import ctypes
 import fcntl
 import glob
 import os
-import subprocess
+import struct
 from typing import List, Dict, Optional, Any, Set
 
 # linux/dvb/frontend.h _IOR('o', nr, size). SNR on this stick is tenths of a dB.
 _FE_READ_STATUS = (2 << 30) | (4 << 16) | (ord("o") << 8) | 69
 _FE_READ_SIGNAL_STRENGTH = (2 << 30) | (2 << 16) | (ord("o") << 8) | 71
 _FE_READ_SNR = (2 << 30) | (2 << 16) | (ord("o") << 8) | 72
+_FE_GET_INFO = (2 << 30) | (168 << 16) | (ord("o") << 8) | 61
+_FE_GET_PROPERTY = (2 << 30) | (16 << 16) | (ord("o") << 8) | 83
+_DTV_DELIVERY_SYSTEM = 17
+_DTV_ENUM_DELSYS = 44
+_FE_ATSC = 3
+_INFO_LEN = 168
 _FE_HAS_LOCK = 0x10
+
+# Names the rest of the app already checks. SYS_ATSC is 11.
+_DELIVERY_NAMES = {
+    1: "DVBC/ANNEX_A",
+    2: "DVBC/ANNEX_B",
+    3: "DVBT",
+    5: "DVBS",
+    6: "DVBS2",
+    8: "ISDBT",
+    11: "ATSC",
+    16: "DVBT2",
+    18: "DVBC/ANNEX_C",
+    19: "DVBC2",
+}
 
 # DualHD jobs: 0 is the picture, 1 is scan / Guide / library record.
 LIVE_ADAPTER = 0
 WORK_ADAPTER = 1
+
+
+def _dtv_property(cmd: int) -> bytes:
+    """struct dtv_property, packed the same way the live dump packs a tune."""
+    return struct.pack("<I12xI52xi", int(cmd), 0, 0)
+
+
+def _get_property(fd: int, cmd: int) -> Optional[bytes]:
+    raw = ctypes.create_string_buffer(_dtv_property(cmd))
+    try:
+        fcntl.ioctl(fd, _FE_GET_PROPERTY, struct.pack("<I4xQ", 1, ctypes.addressof(raw)))
+    except OSError:
+        return None
+    return raw.raw
+
+
+def _delivery_systems(fd: int) -> List[str]:
+    blob = _get_property(fd, _DTV_ENUM_DELSYS)
+    if not blob or len(blob) < 52:
+        return []
+    count = max(0, min(8, struct.unpack_from("<I", blob, 48)[0]))
+    names: List[str] = []
+    for i in range(count):
+        value = struct.unpack_from("<I", blob, 16 + i * 4)[0]
+        name = _DELIVERY_NAMES.get(value)
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _current_system(fd: int) -> str:
+    blob = _get_property(fd, _DTV_DELIVERY_SYSTEM)
+    if not blob or len(blob) < 20:
+        return ""
+    return _DELIVERY_NAMES.get(struct.unpack_from("<I", blob, 16)[0], "")
 
 
 def decode_frontend(status: int, strength: Optional[int], snr_raw: Optional[int]) -> Dict[str, Any]:
@@ -45,35 +101,35 @@ class TunerAdapter:
         self._inspect()
 
     def _inspect(self):
-        """Query frontend capabilities using dvb-fe-tool."""
+        """Name and delivery systems from FE_GET_INFO and DTV_ENUM_DELSYS."""
         if not os.path.exists(self.frontend_path):
             return
-
         try:
-            res = subprocess.run(
-                ["dvb-fe-tool", "-a", str(self.adapter_id)],
-                capture_output=True,
-                text=True,
-                timeout=3
-            )
-            for line in res.stdout.splitlines():
-                line_s = line.strip()
-                if "Device " in line and "Frontend" in line:
-                    # Extract device name
-                    parts = line_s.split("Device ", 1)[-1].split(" (", 1)
-                    if parts:
-                        self.name = parts[0].strip()
-                elif "Current v5 delivery system:" in line:
-                    self.current_system = line.split(":", 1)[-1].strip()
-                elif line_s in ("ATSC", "DVBC/ANNEX_B", "DVBT", "DVBT2", "ISDBT"):
-                    if line_s not in self.delivery_systems:
-                        self.delivery_systems.append(line_s)
-                elif line_s.startswith("[") and line_s.endswith("]"):
-                    sys_name = line_s.strip("[] ")
-                    if sys_name not in self.delivery_systems:
-                        self.delivery_systems.append(sys_name)
-        except Exception:
-            pass
+            fd = os.open(self.frontend_path, os.O_RDWR | os.O_NONBLOCK)
+        except OSError:
+            return
+        try:
+            info = bytearray(_INFO_LEN)
+            try:
+                fcntl.ioctl(fd, _FE_GET_INFO, info, True)
+            except OSError:
+                info = b""
+            if info:
+                name = bytes(info[:128]).split(b"\x00", 1)[0].decode("utf-8", "replace").strip()
+                if name:
+                    self.name = name
+            systems = _delivery_systems(fd)
+            for name in systems:
+                if name not in self.delivery_systems:
+                    self.delivery_systems.append(name)
+            current = _current_system(fd)
+            if current:
+                self.current_system = current
+            elif info and struct.unpack_from("<I", info, 128)[0] == _FE_ATSC and "ATSC" not in self.delivery_systems:
+                self.delivery_systems.append("ATSC")
+                self.current_system = "ATSC"
+        finally:
+            os.close(fd)
 
     @property
     def supports_atsc(self) -> bool:
@@ -81,21 +137,20 @@ class TunerAdapter:
 
     @property
     def is_busy(self) -> bool:
-        """Check if frontend device is currently opened by another process."""
+        """True when opening the frontend returns EBUSY, or it cannot be opened.
+
+        fuser is not used here. The library size cap is what still asks fuser,
+        and a missing fuser there still means the file is treated as busy.
+        """
         if not os.path.exists(self.frontend_path):
             return True
         try:
-            res = subprocess.run(
-                ["fuser", self.frontend_path],
-                capture_output=True,
-                timeout=1
-            )
-            # fuser returns returncode 0 if files are open
-            return res.returncode == 0
-        except FileNotFoundError:
-            return False
-        except Exception:
+            fd = os.open(self.frontend_path, os.O_RDWR | os.O_NONBLOCK)
+        except OSError:
+            # EBUSY is a frontend someone else holds. Any other open failure is not a free tuner.
             return True
+        os.close(fd)
+        return False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -167,7 +222,7 @@ class TunerManager:
 
     @classmethod
     def adapter_is_free(cls, adapter_id: int, require_atsc: bool = True) -> bool:
-        """True when that numbered frontend exists, is ATSC, and fuser is clear."""
+        """True when that numbered frontend exists, is ATSC, and opens without EBUSY."""
         path = f"/dev/dvb/adapter{adapter_id}/frontend0"
         if not os.path.exists(path):
             return False

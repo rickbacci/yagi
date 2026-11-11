@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -22,7 +20,6 @@ from engine.guide import LOCAL_TZ, epg_tuner_held
 from engine.paths import (
     CHANNELS_JSON_PATH,
     GUIDE_STATUS_PATH,
-    TIMESHIFT_DIR,
     chmod_private_file,
     state_lock,
 )
@@ -281,6 +278,45 @@ def pack_ett_section(source_id: int, event_id: int, text: str, section_number: i
     return _private_section(TABLE_ETT, body.to_bytes())
 
 
+def pack_pat_section(programs: List[tuple]) -> bytes:
+    """PAT. programs is (program_number, pmt_pid)."""
+    body = BitWriter()
+    body.u(1, 16)
+    body.u(3, 2)
+    body.u(1, 5)
+    body.u(1, 1)
+    body.u(0, 8)
+    body.u(0, 8)
+    for program, pid in programs:
+        body.u(int(program), 16)
+        body.u(7, 3)
+        body.u(int(pid), 13)
+    return _private_section(0x00, body.to_bytes())
+
+
+def pack_pmt_section(program: int, streams: List[tuple], pcr_pid: int = 0) -> bytes:
+    """PMT. streams is (stream_type, elementary_pid). The first audio pid is the one a scan keeps."""
+    body = BitWriter()
+    body.u(int(program), 16)
+    body.u(3, 2)
+    body.u(1, 5)
+    body.u(1, 1)
+    body.u(0, 8)
+    body.u(0, 8)
+    pcr = int(pcr_pid or (streams[0][1] if streams else 0))
+    body.u(7, 3)
+    body.u(pcr, 13)
+    body.u(0xF, 4)
+    body.u(0, 12)
+    for kind, pid in streams:
+        body.u(int(kind), 8)
+        body.u(7, 3)
+        body.u(int(pid), 13)
+        body.u(0xF, 4)
+        body.u(0, 12)
+    return _private_section(0x02, body.to_bytes())
+
+
 def section_to_ts(section: bytes, pid: int = PSIP_PID) -> bytes:
     packets = bytearray()
     remaining = bytes([0]) + section
@@ -383,8 +419,13 @@ def parse_tvct_rows(section: bytes) -> Dict[int, Dict[str, Any]]:
         r.u(6)
         dlen = r.u(10)
         r.raw(dlen)
-        mapping[source_id] = {"number": f"{major}.{minor}", "program": program_number}
-        _ = short
+        mapping[source_id] = {
+            "number": f"{major}.{minor}",
+            "program": program_number,
+            "short_name": short,
+            "major": major,
+            "minor": minor,
+        }
     return mapping
 
 
@@ -514,68 +555,36 @@ class GuideYield(Exception):
 
 
 def dump_mux(adapter_id: int, frequency: int, dwell_sec: float = EPG_DWELL_SECS) -> bytes:
+    """Tune one tower and copy its transport stream. Live TV can take the tuner back mid-read."""
+    from engine import pool
     from engine.timeshift import Timeshift
+    from engine.tower_dump import LOCK_TIMEOUT_SEC, Tuner
+
     Timeshift._wait_frontend_free(timeout=0.8, adapter_id=adapter_id)
-    os.makedirs(os.path.dirname(TIMESHIFT_DIR) or ".", exist_ok=True)
-    epg_dir = os.path.join(os.path.dirname(TIMESHIFT_DIR), "epg")
-    os.makedirs(epg_dir, mode=0o700, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=epg_dir) as tmp:
-        conf_path = os.path.join(tmp, "epg.conf")
-        dest = os.path.join(tmp, "psip.ts")
-        with open(conf_path, "w", encoding="utf-8") as f:
-            f.write("[EPG]\n")
-            f.write("  DELIVERY_SYSTEM = ATSC\n")
-            f.write(f"  FREQUENCY = {int(frequency)}\n")
-            f.write("  MODULATION = VSB/8\n")
-        cmd = [
-            "dvbv5-zap",
-            "-a", str(adapter_id),
-            "-c", conf_path,
-            "-I", "dvbv5",
-            "-r",
-            "-P",
-            "-t", str(max(2, int(dwell_sec))),
-            "-o", dest,
-            "EPG",
-        ]
-        err_path = os.path.join(tmp, "zap.err")
-        err_f = open(err_path, "w", encoding="utf-8")
-        proc = None
+    # The Hz value is the ATSC pilot. Do not round it to 000000.
+    freq = int(frequency)
+    tuner = Tuner(int(adapter_id))
+    try:
+        if not tuner.tune(freq, max(LOCK_TIMEOUT_SEC, float(dwell_sec))):
+            raise RuntimeError(f"No lock at {freq} Hz")
+        tuner.start()
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=err_f,
-            )
-            from engine import pool
-            deadline = time.time() + max(20, int(dwell_sec) + 12)
-            while proc.poll() is None and time.time() < deadline:
+            deadline = time.monotonic() + max(0.2, float(dwell_sec))
+            chunks: List[bytes] = []
+            while time.monotonic() < deadline:
                 if pool.guide_must_yield(adapter_id):
                     raise GuideYield()
-                time.sleep(0.2)
+                data = tuner.read()
+                if data:
+                    chunks.append(data)
+                time.sleep(0.02)
         finally:
-            err_f.close()
-            if proc is not None and proc.poll() is None:
-                proc.kill()
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    pass
-        data = b""
-        if os.path.isfile(dest):
-            with open(dest, "rb") as f:
-                data = f.read()
-        if data:
-            return data
-        err = ""
-        try:
-            with open(err_path, encoding="utf-8", errors="replace") as f:
-                err = f.read().strip()
-        except OSError:
-            err = ""
-        line = err.splitlines()[-1].strip()[:300] if err else "dvbv5-zap produced no data"
-        raise RuntimeError(line)
-    return b""
+            tuner.stop()
+        if not chunks:
+            raise RuntimeError("Guide read produced no data")
+        return b"".join(chunks)
+    finally:
+        tuner.close()
 
 
 def _guide_tuner(sessions: Optional[List[Any]], preferred: Optional[int]) -> Optional[int]:

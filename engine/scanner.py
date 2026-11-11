@@ -1,16 +1,13 @@
 """
 Yagi - ATSC Frequency Scanner & Channel Discovery Engine
-Performs fast, intelligent OTA broadcast scanning with real-time JSON progress.
+Tunes each physical channel and reads PAT, PMT, and the virtual channel table.
 """
 
 import contextlib
 import os
-import sys
 import json
 import time
-import tempfile
-import subprocess
-from typing import List, Dict, Generator, Any, Optional
+from typing import List, Dict, Generator, Any, Optional, Callable, Tuple
 from engine import pool
 from engine.tuner import TunerManager
 from engine.paths import CHANNELS_JSON_PATH, MPV_CHANNELS_CONF, SCAN_STATUS_PATH, state_lock
@@ -39,8 +36,14 @@ def _write_text_atomic(path: str, text: str) -> None:
     os.replace(tmp, path)
 
 
+# A locked tower is read at least this long, so PAT, PMT, and the virtual channel table are in the capture.
+SCAN_DWELL_SEC = 1.2
+# The first tune after the frontend opens, then each later lock, fits in this.
+SCAN_LOCK_SEC = 4.0
+
+
 def first_pid(value: Any) -> int:
-    """First PID in a dvbv5 field. AUDIO_PID is often several, like '52 53'."""
+    """First PID when a field lists several, like '52 53'."""
     text = str("" if value is None else value).strip()
     if not text:
         return 0
@@ -89,16 +92,88 @@ def get_atsc_frequencies(quick_mode: bool = False) -> List[Dict[str, Any]]:
     return channels
 
 
-def generate_scan_conf(channels: List[Dict[str, Any]]) -> str:
-    """Generate DVBv5 initial configuration file content."""
-    lines = []
-    for ch in channels:
-        lines.append(f"[CH_{ch['channel']}]")
-        lines.append("  DELIVERY_SYSTEM = ATSC")
-        lines.append(f"  FREQUENCY = {ch['frequency']}")
-        lines.append("  MODULATION = VSB/8")
-        lines.append("")
-    return "\n".join(lines)
+def _pat_programs(sections: List[bytes]) -> Dict[int, int]:
+    """Program number to its PMT pid, from the PAT."""
+    found: Dict[int, int] = {}
+    for section in sections:
+        if not section or section[0] != 0x00 or len(section) < 12:
+            continue
+        for i in range(8, len(section) - 7, 4):
+            program = (section[i] << 8) | section[i + 1]
+            pid = ((section[i + 2] & 0x1F) << 8) | section[i + 3]
+            if program > 0 and pid > 0:
+                found[program] = pid
+    return found
+
+
+def _virtual_by_program(sections: List[bytes]) -> Dict[int, Dict[str, Any]]:
+    from engine.psip import TABLE_TVCT, parse_tvct_rows
+
+    found: Dict[int, Dict[str, Any]] = {}
+    for section in sections:
+        if not section or section[0] != TABLE_TVCT:
+            continue
+        for row in parse_tvct_rows(section).values():
+            try:
+                program = int(row.get("program") or 0)
+            except (TypeError, ValueError):
+                continue
+            if program > 0:
+                found[program] = row
+    return found
+
+
+def parse_scan_transport(ts_data: bytes, channel: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Channel records from one tower's PAT, PMT, and virtual channel table.
+
+    The frequency is the tuned pilot, kept as given. The first audio PID is the one stored.
+    """
+    from engine.psip import collect_sections, parse_pmt_pids
+
+    if not ts_data:
+        return []
+    sections = collect_sections(ts_data)
+    pat = _pat_programs(sections)
+    pids = parse_pmt_pids(ts_data, sections)
+    virtual = _virtual_by_program(sections)
+    programs = sorted(set(pat) | set(pids) | set(virtual))
+    # The Hz value is already the ATSC pilot. Do not round it.
+    freq = int(channel.get("frequency") or 0)
+    records: List[Dict[str, Any]] = []
+    for program in programs:
+        if program not in pids and program not in virtual:
+            continue
+        video, audio = pids.get(program, (0, 0))
+        row = virtual.get(program) or {}
+        short = str(row.get("short_name") or "").strip()
+        number = str(row.get("number") or "").strip()
+        if number and short:
+            name = f"{number} {short}"
+        elif number or short:
+            name = number or short
+        else:
+            name = str(program)
+        record: Dict[str, Any] = {
+            "name": name,
+            "raw_name": name,
+            "service_id": int(program),
+            "frequency": freq,
+            "modulation": "VSB/8",
+            "delivery_system": "ATSC",
+            "video_pid": int(video or 0),
+            "audio_pid": int(audio or 0),
+            "physical_channel": channel.get("channel"),
+            "band": channel.get("band") or "",
+        }
+        if number:
+            record["id"] = number
+        if short:
+            record["callsign"] = short
+        if row.get("major") is not None:
+            record["major"] = int(row["major"])
+            record["minor"] = int(row["minor"])
+        records.append(record)
+    return records
 
 
 class AtscScanner:
@@ -118,10 +193,40 @@ class AtscScanner:
             return False
         return TunerManager.adapter_is_free(adapter)
 
-    def scan(self, quick_mode: bool = False, timeout_multiplier: float = 1.0) -> Generator[Dict[str, Any], None, List[Dict[str, Any]]]:
+    def _read_channel(self, tuner, freq: int, timeout_multiplier: float) -> Tuple[bytes, Optional[float]]:
+        """Lock one pilot and read the tower. The frequency is not rounded."""
+        lock_for = max(SCAN_DWELL_SEC, SCAN_LOCK_SEC * float(timeout_multiplier or 1))
+        dwell = max(SCAN_DWELL_SEC, SCAN_DWELL_SEC * float(timeout_multiplier or 1))
+        if not tuner.tune(int(freq), lock_for):
+            return b"", None
+        tuner.start()
+        try:
+            deadline = time.monotonic() + dwell
+            chunks: List[bytes] = []
+            snr = None
+            while time.monotonic() < deadline:
+                data = tuner.read()
+                if data:
+                    chunks.append(data)
+                else:
+                    time.sleep(0.01)
+                raw = tuner.snr()
+                if raw is not None:
+                    snr = round(raw / 10.0, 1)
+            return b"".join(chunks), snr
+        finally:
+            tuner.stop()
+            tuner.drain()
+
+    def scan(
+        self,
+        quick_mode: bool = False,
+        timeout_multiplier: float = 1.0,
+        read_tower: Optional[Callable[[int, Dict[str, Any]], Tuple[bytes, Optional[float]]]] = None,
+    ) -> Generator[Dict[str, Any], None, List[Dict[str, Any]]]:
         """
-        Runs ATSC scan, yielding real-time progress events.
-        Yields dicts with keys: phase, percent, channel, frequency, band, signal_dbm, channels_found
+        Runs an ATSC scan, yielding real-time progress events.
+        Yields dicts with keys: status, percent, channel, frequency, band, signal_dbm, total_found.
         """
         adapter = self._resolve_adapter()
         freq_list = get_atsc_frequencies(quick_mode=quick_mode)
@@ -160,227 +265,74 @@ class AtscScanner:
         write_scan_status(ev_start)
         yield ev_start
 
-        # Write temp initial config file
-        with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as f_in:
-            f_in.write(generate_scan_conf(freq_list))
-            in_conf_path = f_in.name
-
-        with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False) as f_out:
-            out_conf_path = f_out.name
-
-        cmd = [
-            "dvbv5-scan",
-            "-v",
-            "-a", str(adapter),
-            "-T", str(timeout_multiplier),
-            "-o", out_conf_path,
-            in_conf_path
-        ]
-
         discovered_channels: List[Dict[str, Any]] = []
-        current_freq_index = 0
-        current_signal: Optional[float] = None
         scan_completed = False
-        proc = None
-
+        tuner = None
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1
-            )
-
-            for line in proc.stdout:
-                line_s = line.strip()
-                if not line_s:
-                    continue
-
-                # Parse frequency transition: "Scanning frequency #X YYYYY"
-                if "Scanning frequency #" in line_s:
-                    try:
-                        parts = line_s.split("Scanning frequency #", 1)[-1].split()
-                        current_freq_index = int(parts[0]) - 1
-                    except (ValueError, IndexError):
-                        pass
-
-                    cur_info = freq_list[min(current_freq_index, total_freqs - 1)]
-                    percent = int(((current_freq_index + 1) / total_freqs) * 100)
-                    ev_scan = {
-                        "status": "scanning",
+            if read_tower is None:
+                from engine.tower_dump import Tuner
+                tuner = Tuner(adapter)
+            for index, info in enumerate(freq_list):
+                percent = int(((index + 1) / total_freqs) * 100)
+                ev_scan = {
+                    "status": "scanning",
+                    "is_scanning": True,
+                    "index": index + 1,
+                    "total": total_freqs,
+                    "percent": percent,
+                    "channel": info["channel"],
+                    "frequency": info["frequency"],
+                    "band": info["band"],
+                    "signal_dbm": None,
+                    "total_found": len(discovered_channels),
+                    "channels": discovered_channels,
+                }
+                write_scan_status(ev_scan)
+                if read_tower is not None:
+                    data, snr = read_tower(adapter, info)
+                else:
+                    data, snr = self._read_channel(tuner, info["frequency"], timeout_multiplier)
+                ev_scan["signal_dbm"] = snr
+                write_scan_status(ev_scan)
+                yield ev_scan
+                found = parse_scan_transport(data or b"", info) if data else []
+                for ch_entry in found:
+                    discovered_channels.append(ch_entry)
+                    ev_found = {
+                        "status": "channel_found",
                         "is_scanning": True,
-                        "index": current_freq_index + 1,
-                        "total": total_freqs,
-                        "percent": percent,
-                        "channel": cur_info["channel"],
-                        "frequency": cur_info["frequency"],
-                        "band": cur_info["band"],
-                        "signal_dbm": current_signal,
+                        "channel": ch_entry,
                         "total_found": len(discovered_channels),
-                        "channels": discovered_channels
+                        "percent": percent,
+                        "channels": discovered_channels,
                     }
-                    write_scan_status(ev_scan)
-                    yield ev_scan
+                    write_scan_status(ev_found)
+                    yield ev_found
 
-                # Parse Signal strength: "Signal= -XX.XXdBm"
-                if "Signal=" in line_s:
-                    try:
-                        sig_part = line_s.split("Signal=", 1)[-1].split("dBm")[0].strip()
-                        current_signal = float(sig_part)
-                    except ValueError:
-                        pass
-
-                # Parse ATSC virtual channel: "Virtual channel 53.1, name = Daystar"
-                if "Virtual channel " in line_s:
-                    try:
-                        parts = line_s.split("Virtual channel ", 1)[-1].split(",", 1)
-                        vch_num = parts[0].strip()
-                        vch_name = parts[1].split("name =", 1)[-1].strip() if len(parts) > 1 and "name =" in parts[1] else vch_num
-                        full_name = f"{vch_num} {vch_name}" if vch_name != vch_num else vch_num
-                        if not any(c.get("id") == vch_num or c.get("name") == full_name for c in discovered_channels):
-                            cur_info = freq_list[min(current_freq_index, total_freqs - 1)]
-                            ch_entry = {
-                                "id": vch_num,
-                                "name": full_name,
-                                "callsign": vch_name,
-                                "physical_channel": cur_info["channel"],
-                                "frequency": cur_info["frequency"],
-                                "band": cur_info["band"]
-                            }
-                            discovered_channels.append(ch_entry)
-                            ev_found = {
-                                "status": "channel_found",
-                                "is_scanning": True,
-                                "channel": ch_entry,
-                                "total_found": len(discovered_channels),
-                                "percent": int(((current_freq_index + 1) / total_freqs) * 100),
-                                "channels": discovered_channels
-                            }
-                            write_scan_status(ev_found)
-                            yield ev_found
-                    except Exception:
-                        pass
-
-                # Parse generic found service: "Service NAME, Provider PROVIDER"
-                if "Service " in line_s and "," in line_s:
-                    try:
-                        name_part = line_s.split("Service ", 1)[-1].split(",")[0].strip()
-                        if name_part and not any(c.get("name") == name_part for c in discovered_channels):
-                            cur_info = freq_list[min(current_freq_index, total_freqs - 1)]
-                            ch_entry = {
-                                "id": name_part,
-                                "name": name_part,
-                                "callsign": name_part,
-                                "physical_channel": cur_info["channel"],
-                                "frequency": cur_info["frequency"],
-                                "band": cur_info["band"]
-                            }
-                            discovered_channels.append(ch_entry)
-                            ev_found = {
-                                "status": "channel_found",
-                                "is_scanning": True,
-                                "channel": ch_entry,
-                                "total_found": len(discovered_channels),
-                                "percent": int(((current_freq_index + 1) / total_freqs) * 100),
-                                "channels": discovered_channels
-                            }
-                            write_scan_status(ev_found)
-                            yield ev_found
-                    except Exception:
-                        pass
-
-            proc.wait()
-
-            # Only dvbv5-scan's finished output has service ids and PIDs. The
-            # progress lines above are stubs, and an empty result must not
-            # erase a lineup already saved.
-            discovered_channels = self._parse_scan_output(out_conf_path)
             self.commit_discovered(discovered_channels)
-
             ev_done = {
                 "status": "complete",
                 "is_scanning": False,
                 "percent": 100,
                 "total_found": len(discovered_channels),
-                "channels": discovered_channels
+                "channels": discovered_channels,
             }
             write_scan_status(ev_done)
             yield ev_done
             scan_completed = True
-
             return discovered_channels
-
         finally:
-            if not scan_completed and proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=3)
-                except Exception:
-                    try:
-                        proc.kill()
-                        proc.wait(timeout=3)
-                    except Exception:
-                        pass
+            if tuner is not None:
+                tuner.close()
             if not scan_completed:
                 write_scan_status({
                     "status": "idle",
                     "is_scanning": False,
                     "percent": 0,
                     "total_found": len(discovered_channels),
-                    "channels": discovered_channels
+                    "channels": discovered_channels,
                 })
-            if os.path.exists(in_conf_path):
-                try:
-                    os.unlink(in_conf_path)
-                except OSError:
-                    pass
-            if os.path.exists(out_conf_path):
-                try:
-                    os.unlink(out_conf_path)
-                except OSError:
-                    pass
             tuner_lock.close()
-
-    def _parse_scan_output(self, conf_path: str) -> List[Dict[str, Any]]:
-        """Parses DVBv5 channel scan output into structured channel records."""
-        if not os.path.exists(conf_path):
-            return []
-
-        channels = []
-        current = None
-
-        with open(conf_path, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                line_s = line.strip()
-                if not line_s:
-                    continue
-                if line_s.startswith("[") and line_s.endswith("]"):
-                    if current and "name" in current:
-                        channels.append(current)
-                    name = line_s.strip("[]")
-                    current = {"name": name, "raw_name": name}
-                elif "=" in line_s and current is not None:
-                    k, v = line_s.split("=", 1)
-                    k = k.strip().upper()
-                    v = v.strip()
-                    if k == "SERVICE_ID":
-                        current["service_id"] = int(v) if v.isdigit() else v
-                    elif k == "FREQUENCY":
-                        current["frequency"] = int(v) if v.isdigit() else v
-                    elif k == "MODULATION":
-                        current["modulation"] = v
-                    elif k == "DELIVERY_SYSTEM":
-                        current["delivery_system"] = v
-                    elif k == "VIDEO_PID":
-                        current["video_pid"] = first_pid(v)
-                    elif k == "AUDIO_PID":
-                        current["audio_pid"] = first_pid(v)
-
-        if current and "name" in current:
-            channels.append(current)
-
-        return channels
 
     @classmethod
     def save_channels(cls, channels: List[Dict[str, Any]], json_path: Optional[str] = None, mpv_path: Optional[str] = None) -> None:
@@ -444,7 +396,7 @@ if __name__ == "__main__":
     print("Starting fast ATSC scan...")
     for event in scanner.scan(quick_mode=True):
         if event["status"] == "scanning":
-            sig = f"{event['signal_dbm']:.1f} dBm" if event['signal_dbm'] else "No Lock"
+            sig = f"{event['signal_dbm']:.1f} dB" if event['signal_dbm'] else "No Lock"
             print(f"[{event['percent']:3d}%] Ch {event['channel']:2d} ({event['band']:8s}) - Signal: {sig} (Found: {event['total_found']})")
         elif event["status"] == "channel_found":
             print(f"  >>> FOUND CHANNEL: {event['channel']['name']}")

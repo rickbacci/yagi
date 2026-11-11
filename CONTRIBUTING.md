@@ -28,11 +28,13 @@ omarchy restart shell
 
 `omarchy plugin validate` the git root itself. Validating the symlink under `~/.config/omarchy/plugins/` fails because that path is a symlink.
 
-The bar and the picture overlay run the command `yagi`, so `bin/` needs to be on `PATH` for a terminal and for the overlay. `python3 bin/yagi` always uses the script you name. `install` publishes `HEAD` of the directory that contains that script to `~/.local/share/yagi/current`. The record timer runs that copy, not the working tree.
+The bar and the picture overlay run the command `yagi`, so `bin/` needs to be on `PATH` for a terminal and for the overlay. `python3 bin/yagi` always uses the script you name. Watch, pause, record-now, scan, and the Guide do not need `install`. `install` is optional: it publishes `HEAD` of the directory that contains that script to `~/.local/share/yagi/current` and starts the record timer. That timer runs the published copy, not the working tree, and it is what starts scheduled and series recordings. If it is already on, a plugin update is enough. The timer publishes the new commit on a later tick.
 
 ## Picture window
 
-The same rule as in the README, plus the opacity line the rest of the window rules expect:
+This rule is optional. Yagi pins the small picture itself, and a stock install does not need it. Use it when an older rule pins class `yagi` and fullscreen will not stick. Do not set `pin = true` here. A pin is put back the moment the window leaves fullscreen.
+
+The opacity line is what the rest of the window rules expect:
 
 ```lua
 o.window({ class = "^yagi$", fullscreen = false }, {

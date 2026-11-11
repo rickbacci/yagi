@@ -202,11 +202,12 @@ BarWidget {
   }
 
   function maybeRefreshGuide() {
-    if (Model.guideHasUpcoming(root.guideData, root.gridNow)) {
-      root.guideWaitReason = ""
+    // The first open of an empty Guide reads once. Later opens do not.
+    if (guideOnceProc.running || root.guideRefreshStarted || root.guideStatusRunning)
       return
-    }
-    root.refreshGuide()
+    guideOnceProc.running = false
+    guideOnceProc.command = [root.binPath, "guide", "once"]
+    guideOnceProc.running = true
   }
 
   function clockLabel(unixSec) {
@@ -1828,6 +1829,18 @@ BarWidget {
         root.tuneNow(watch)
         root.close()
       }
+    }
+  }
+
+  Process {
+    id: guideOnceProc
+    command: []
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: guideFile.reload()
+    }
+    onExited: function(code) {
+      guideFile.reload()
     }
   }
 

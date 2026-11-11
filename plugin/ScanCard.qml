@@ -103,8 +103,8 @@ BorderSurface {
         Text {
           anchors.right: parent.right
           textFormat: Text.PlainText
-          text: card.tv.scanSignal === null ? "Listening…" : (card.tv.scanSignal > -55 ? "Strong signal" : "Signal found")
-          color: card.tv.scanSignal !== null && card.tv.scanSignal > -55 ? C.Color.accent : (card.tv.scanSignal !== null ? card.tv.bar.foreground : C.Color.muted)
+          text: card.tv.scanSignal === null ? "Listening…" : (card.tv.scanSignal >= 15 ? "Strong signal" : "Signal found")
+          color: card.tv.scanSignal !== null && card.tv.scanSignal >= 15 ? C.Color.accent : (card.tv.scanSignal !== null ? card.tv.bar.foreground : C.Color.muted)
           font.family: card.tv.bar.fontFamily
           font.pixelSize: Style.font.heading
           font.bold: true
@@ -113,7 +113,7 @@ BorderSurface {
         Text {
           anchors.right: parent.right
           textFormat: Text.PlainText
-          text: card.tv.scanSignal !== null ? (card.tv.scanSignal.toFixed(1) + " dBm") : ""
+          text: card.tv.scanSignal !== null ? (card.tv.scanSignal.toFixed(1) + " dB") : ""
           color: C.Color.muted
           font.family: card.tv.bar.fontFamily
           font.pixelSize: Style.font.heading

@@ -22,7 +22,7 @@ yagi play "8.1 FOX" | next | prev | stop | sync | pause | live | seek 10
 yagi record start "8.1 FOX" 1h | stop | list | play <file> | delete <file>
 yagi record later | unlater | keep | unkeep | due | finish
 yagi series | series add <station> --title T --channel 19.2 | series remove <id> | series keep <id> 10
-yagi list | guide | guide refresh | guide search Browns | status | scan | scan --full
+yagi list | guide | guide refresh | guide once | guide search Browns | status | scan | scan --full
 yagi signal check 8.1   # C/N and damaged packets every 2 s; live tuner or a free one
 yagi favorite toggle 8.1
 yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off
@@ -30,11 +30,11 @@ yagi hidden list | hidden hide 19.1 | hidden show 19.1
 omarchy-shell shell broadcast richardb.yagi play "8.1 FOX"   # also: stop next prev live guide reloadChannels open close toggle
 ```
 
-Live TV is always the whole tower. A recording is one station; one with no video or audio ID records the whole tower once, and the next recording is just that station. Guide: a grid of channels by half hour, search lights matches in it (titles and descriptions); a Shows tab lists one row per show. Watch / Record / Record series (`yagi series`). The record timer (`record due`, every minute) starts queued shows, joins back-to-back episodes into one run, and launches `record finish` to split runs and mark ads. After HUD lua: Close TV and retune.
+Live TV is always the whole tower. A recording is one station; one with no video or audio ID records the whole tower once, and the next recording is just that station. Scan and the Guide read the tuner directly. Guide: a grid of channels by half hour, search lights matches in it (titles and descriptions); a Shows tab lists one row per show. The first Guide open reads listings once when the scan has channels and the Guide does not. Refresh reads once more and does not start `yagi-record.timer`. Watch / Record / Record series (`yagi series`). Record-now works with the timer off. `yagi install` is optional: it keeps the Guide fresh and starts scheduled and series recordings. The record timer (`record due`, every minute) starts queued shows, joins back-to-back episodes into one run, and launches `record finish` to split runs and mark ads. After HUD lua: Close TV and retune.
 
 ## Keys
 
-Panel: j/k move, Enter picks, Esc closes, `g` Guide, `v` Recordings. Guide: arrows move, Enter opens the card, `/` search, `s` Grid or Shows, `r` Record, `a` Record series. Recordings: ←/→ Recorded or Scheduled. Enter opens a show, then plays. Esc backs out of the show, then closes. `x` twice deletes an episode. Shift+K locks. Picking a channel or recording focuses the TV window (`yagi focus`).
+Panel: j/k move, Enter picks, Esc closes, `g` Guide, `v` Recordings. Guide: arrows move, Enter opens the card, `/` search, `s` Grid or Shows, Refresh reads listings once, `r` Record, `a` Record series. Recordings: ←/→ Recorded or Scheduled. Enter opens a show, then plays. Esc backs out of the show, then closes. `x` twice deletes an episode. Shift+K locks. Picking a channel or recording focuses the TV window (`yagi focus`).
 
 TV window:
 

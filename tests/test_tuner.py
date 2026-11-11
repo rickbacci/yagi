@@ -35,11 +35,43 @@ class TestTuner(unittest.TestCase):
             self.assertIn("delivery_systems", d)
 
     def test_get_available_tuner(self):
-        # Must return an adapter or None without throwing an exception
-        tuner = TunerManager.get_available_tuner(require_atsc=True)
-        if tuner:
-            self.assertTrue(tuner.supports_atsc)
-            self.assertFalse(tuner.is_busy)
+        from unittest.mock import MagicMock
+        busy = MagicMock(adapter_id=0, supports_atsc=True, is_busy=True)
+        other = MagicMock(adapter_id=1, supports_atsc=False, is_busy=False)
+        free = MagicMock(adapter_id=2, supports_atsc=True, is_busy=False)
+        with patch.object(TunerManager, "list_tuners", return_value=[busy, other, free]):
+            self.assertIs(TunerManager.get_available_tuner(require_atsc=True), free)
+        with patch.object(TunerManager, "list_tuners", return_value=[busy, other]):
+            self.assertIsNone(TunerManager.get_available_tuner(require_atsc=True))
+
+    def test_delivery_systems_come_from_the_frontend_ioctl(self):
+        import ctypes
+        import struct
+        from engine.tuner import (
+            _DTV_DELIVERY_SYSTEM,
+            _DTV_ENUM_DELSYS,
+            _FE_GET_PROPERTY,
+            _current_system,
+            _delivery_systems,
+        )
+
+        def ioctl(_fd, req, arg):
+            self.assertEqual(req, _FE_GET_PROPERTY)
+            _count, ptr = struct.unpack("<I4xQ", arg)
+            cmd = struct.unpack_from("<I", ctypes.string_at(ptr, 4))[0]
+            blob = bytearray(76)
+            if cmd == _DTV_ENUM_DELSYS:
+                struct.pack_into("<III", blob, 16, 3, 11, 16)
+                struct.pack_into("<I", blob, 48, 3)
+            elif cmd == _DTV_DELIVERY_SYSTEM:
+                struct.pack_into("<I", blob, 16, 11)
+            else:
+                raise AssertionError(cmd)
+            ctypes.memmove(ptr, bytes(blob), 76)
+
+        with patch("engine.tuner.fcntl.ioctl", side_effect=ioctl):
+            self.assertEqual(_delivery_systems(4), ["DVBT", "ATSC", "DVBT2"])
+            self.assertEqual(_current_system(4), "ATSC")
 
     def test_decode_frontend_snr_is_tenths_of_a_db(self):
         reading = decode_frontend(0x1F, 55704, 200)
