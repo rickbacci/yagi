@@ -28,6 +28,8 @@ Height and line-of-sight matter. VHF-High (7–13) wants longer elements. UHF (1
 
 A good average is not enough: artifacts are short bursts the demod could not repair. `yagi signal check 8.1` prints C/N and the packets the tuner flagged as damaged every 2 s, on live TV's tuner when you watch that tower, else on a free one. Use it while you move the antenna, the amp gain, or the stick. More gain helps until C/N stops rising; past that it overdrives.
 
+`yagi signal check favorites` tunes each favorite tower once (subchannels share a carrier) for 16 s and appends the block to `~/.config/yagi/signal-log.txt`. `all` does every tower already in the lineup. `--note` stores where the antenna was. A lineup scan is a different job: it rewrites `channels.json`.
+
 A USB 3 port can put noise on VHF-High. On the tested dualHD that was 4–5% of frames damaged on RF 8, and 0% after moving the stick to a USB 2.0 port. Keep the stick off USB 3 ports and away from the PC.
 
 Close the TV before you unplug or move the stick. Pulled while streaming, em28xx can hang in its disconnect; the tuners do not come back and whatever had the stick's IR input open freezes until a reboot.

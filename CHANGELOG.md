@@ -8,6 +8,8 @@
 
 ## 0.1.6
 
+- `yagi signal check favorites` and `all` tune each tower once and append the block to `~/.config/yagi/signal-log.txt`, so the next antenna move can be compared. `--note` stores where the antenna was.
+- The picture starts in English when the station sends it. `a` selects the other language, and the next station starts in English again.
 - Guide search is as tall as the Grid and Shows buttons. The field was only the text line, so its padding clipped the glyphs once the text size was larger than the default.
 - The Shows list builds only the rows on screen. A month of history is a few thousand shows, and building every row made search slow.
 - Channel up tunes 19.10 by its own name. 19.1 and 19.10 share the tune name WOIO-HD, and channel up was staying on the first one.

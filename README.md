@@ -92,6 +92,7 @@ The TV window, once it has focus:
 | f or double-click | Fullscreen. Again, or Esc, returns to the small picture |
 | i | Picture stats |
 | c | Captions |
+| a | The other audio, when this station sends more than one. The next station starts in English again |
 | m | Mute. The wheel changes the volume. The next open uses this volume and mute |
 
 From a terminal, if `yagi` is on your `PATH`:

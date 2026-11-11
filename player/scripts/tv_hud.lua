@@ -34,8 +34,9 @@ local update_badge = function() end
 
 local pointer_in = false
 local hud_visible = false
+local menu_on = false
 local hide_timer = nil
-local HIDE_DELAY = 3.5
+local HIDE_DELAY = 4.5
 local LIVE_SLACK = 2.5
 local PAUSE_WINDOW = 3600
 
@@ -444,6 +445,94 @@ local function wanted_program()
     return nil
 end
 
+-- The first audio in the mux is often the Spanish SAP. English is the default
+-- when this station sends it. A station with no English plays what it sends.
+-- `a` cycles the rest of this station's audio. The next station starts in
+-- English again.
+local AUDIO_NAMES = { eng = "English", spa = "Spanish" }
+
+local function audios_for_program(tracks, sid)
+    local list = {}
+    for _, t in ipairs(tracks or {}) do
+        if t.type == "audio" and (not sid or sid <= 0 or t["program-id"] == sid) then
+            list[#list + 1] = t
+        end
+    end
+    return list
+end
+
+local function audio_for_program(tracks, sid)
+    local first, eng
+    for _, t in ipairs(audios_for_program(tracks, sid)) do
+        if not first then first = t.id end
+        if not eng and t.lang == "eng" then eng = t.id end
+    end
+    return eng or first
+end
+
+local function next_audio(tracks, sid, current)
+    local list = audios_for_program(tracks, sid)
+    if #list == 0 then return nil end
+    for i, t in ipairs(list) do
+        if t.id == current then return list[(i % #list) + 1] end
+    end
+    local want = audio_for_program(tracks, sid)
+    for _, t in ipairs(list) do
+        if t.id == want then return t end
+    end
+    return list[1]
+end
+
+local function audio_label(track)
+    if type(track) ~= "table" then return "Audio" end
+    return AUDIO_NAMES[track.lang] or track.lang or "Audio"
+end
+
+-- The other language, when this station sends one. One track is not a choice.
+local function audio_option(tracks, sid, current)
+    local list = audios_for_program(tracks, sid)
+    if #list < 2 then return nil end
+    local nxt = next_audio(tracks, sid, current)
+    if not nxt or nxt.id == current then return nil end
+    return "a " .. audio_label(nxt)
+end
+
+-- Two rows, same order every time. A control that can do nothing is absent.
+local function hint_controls(state)
+    state = type(state) == "table" and state or {}
+    local move, set = {}, {}
+    local function add(row, key, label)
+        row[#row + 1] = { key, label }
+    end
+    if not state.library then add(move, "j k", "Channel") end
+    add(move, "Space", state.paused and "Play" or "Pause")
+    add(move, "← →", "10s")
+    add(move, "↑ ↓", "1 min")
+    if state.library then add(move, "PgUp", "Ads") end
+    if state.other and state.other ~= "" then add(set, "a", state.other) end
+    add(set, "c", "Captions")
+    if not state.library then
+        add(set, "r", state.recording and "Stop" or "Record")
+    end
+    if state.paused and not state.library then add(set, "y", "Save") end
+    add(set, "l", "Live")
+    add(set, "m", state.muted and "Muted" or ("Vol " .. tostring(state.volume or 100)))
+    return move, set
+end
+
+local function cycle_audio()
+    local sid = wanted_program()
+    local tracks = mp.get_property_native("track-list") or {}
+    local cur = mp.get_property_number("aid", -1)
+    local pick = next_audio(tracks, sid, cur)
+    if not pick then
+        mp.osd_message("No audio", 2)
+        return
+    end
+    if pick.id ~= cur then mp.set_property_number("aid", pick.id) end
+    mp.osd_message(audio_label(pick), 2)
+end
+
 -- True once this station's picture track is chosen, or there is nothing to choose.
 -- Stations on one tower keep their own clocks, up to ~25 s apart. A switch while
 -- playing keeps the old clock and holds the new picture that long, so settle
@@ -451,13 +540,14 @@ end
 local function select_program(settle)
     local sid = wanted_program()
     if not sid or sid <= 0 then return true end
-    local vid, aid
-    for _, t in ipairs(mp.get_property_native("track-list") or {}) do
-        if t["program-id"] == sid then
-            if t.type == "video" and not vid then vid = t.id end
-            if t.type == "audio" and not aid then aid = t.id end
+    local tracks = mp.get_property_native("track-list") or {}
+    local vid
+    for _, t in ipairs(tracks) do
+        if t["program-id"] == sid and t.type == "video" and not vid then
+            vid = t.id
         end
     end
+    local aid = audio_for_program(tracks, sid)
     local changed = false
     if vid and mp.get_property_number("vid", -1) ~= vid then
         mp.set_property_number("vid", vid)
@@ -1030,22 +1120,57 @@ local function render_hud()
     end
 
     local vol = math.floor(mp.get_property_number("volume", 100) or 100)
-    local vol_label = is_muted and ("{\\1c" .. theme.urgent .. "\\b1}Muted{\\1c" .. theme.fg .. "\\b0}") or ("Vol " .. tostring(vol))
-    local action = paused and "Space Play" or "Space Pause"
-    local record = is_recording and "r Stop recording" or "r Record"
-    local hints
-    if is_library then
-        hints = string.format("← → 10s    ↑ ↓ 1 min    PgUp skip ads    %s    l Live TV    m Mute    %s", action, vol_label)
-    elseif is_ts or delayed then
-        hints = string.format("j k Channel    ← → 10s    ↑ ↓ 1 min    %s    y Save    %s    l Live    m Mute    %s", action, record, vol_label)
-    else
-        hints = string.format("j k Channel    %s    %s    m Mute    %s", action, record, vol_label)
+    local other_label = nil
+    local tracks = mp.get_property_native("track-list")
+    local sid = wanted_program()
+    local cur_aid = mp.get_property_number("aid", -1)
+    local nxt = next_audio(tracks, sid, cur_aid)
+    if nxt and nxt.id ~= cur_aid then other_label = audio_label(nxt) end
+    local move, set = hint_controls({
+        library = is_library,
+        paused = paused,
+        recording = is_recording,
+        other = other_label,
+        muted = is_muted,
+        volume = vol,
+    })
+    -- One control per line, on the right, under the top bar. There is no
+    -- menu widget here. The key column is "Space" (75px at this size) plus a
+    -- little ink, the word column is "Captions" (101px), and the pad is 16.
+    local row_h = 42
+    local pad, key_col, word_col, col_gap = 16, 88, 112, 16
+    local menu_right = 1280 - pad
+    local word_x = menu_right - word_col
+    local key_x = word_x - col_gap
+    local menu_left = key_x - key_col - pad
+    local menu_top = 124
+    local function paint_item(item, y)
+        local word_colr = item[2] == "Muted" and theme.urgent or theme.fg
+        ass = ass .. string.format(
+            "{\\an6\\pos(%d,%d)\\bord0\\shad0\\fnSans-Serif\\b1\\fs26\\1c%s}%s\n",
+            key_x, y, theme.fg, item[1]
+        )
+        ass = ass .. string.format(
+            "{\\an4\\pos(%d,%d)\\bord0\\shad0\\fnSans-Serif\\fs26\\1c%s}%s\n",
+            word_x, y, word_colr, item[2]
+        )
     end
-    ass = ass .. box(0, 676, 1280, 44, theme.bg, "18")
-    ass = ass .. string.format(
-        "{\\an5\\pos(640,698)\\bord0\\shad0\\fnSans-Serif\\fs18\\1c%s}%s\n",
-        theme.fg, hints
-    )
+    local rows = #move + #set
+    local gap = (#move > 0 and #set > 0) and 22 or 0
+    local menu_h = 28 + rows * row_h + gap
+    if menu_on and rows > 0 then
+        ass = ass .. box(menu_left, menu_top - 22, 1280 - menu_left, menu_h, theme.bg, "18")
+        local y = menu_top
+        for _, item in ipairs(move) do
+            paint_item(item, y)
+            y = y + row_h
+        end
+        if gap > 0 then y = y + gap end
+        for _, item in ipairs(set) do
+            paint_item(item, y)
+            y = y + row_h
+        end
+    end
 
     overlay.data = ass
     overlay:update()
@@ -1069,9 +1194,15 @@ local function hide_hud()
     update_badge()
 end
 
+local function hide_menu()
+    menu_on = false
+    if hud_visible then pcall(render_hud) end
+end
+
 local function show_hud()
     local ok, err = pcall(function()
         reload_data()
+        menu_on = true
         render_hud()
         hud_visible = true
         update_badge()
@@ -1086,10 +1217,14 @@ local function show_hud()
         if mp.get_property_bool("pause", false) then
             return
         end
-        if is_timeshift_playback() and timeshift_behind() then
-            return
-        end
-        hide_timer = mp.add_timeout(HIDE_DELAY, hide_hud)
+        -- Behind live, the top bar stays. The column leaves with the timer.
+        hide_timer = mp.add_timeout(HIDE_DELAY, function()
+            if is_timeshift_playback() and timeshift_behind() then
+                hide_menu()
+            else
+                hide_hud()
+            end
+        end)
     end)
     if not ok then
         mp.msg.error("show_hud: " .. tostring(err))
@@ -1740,6 +1875,7 @@ mp.add_forced_key_binding("c", "tv_sub_cycle", function()
     mp.command("cycle sub")
     show_hud()
 end)
+mp.add_forced_key_binding("a", "tv_audio_cycle", cycle_audio)
 local function recording_for_channel(ch)
     if not ch then return nil end
     local ch_num = ch.channel_number
