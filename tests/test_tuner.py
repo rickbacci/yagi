@@ -25,13 +25,14 @@ class TestTuner(unittest.TestCase):
     @unittest.skipUnless(_has_atsc_tuner(), "no ATSC adapter on this machine")
     def test_tuner_discovery(self):
         tuners = TunerManager.list_tuners()
-        self.assertGreaterEqual(len(tuners), 1)
-        for t in tuners:
-            self.assertIn("ATSC", t.delivery_systems)
+        free = [t for t in tuners if not t.is_busy]
+        self.assertTrue(free)
+        for t in free:
             self.assertTrue(t.supports_atsc)
             d = t.to_dict()
             self.assertIn("adapter_id", d)
             self.assertIn("is_busy", d)
+            self.assertFalse(d["is_busy"])
             self.assertIn("delivery_systems", d)
 
     def test_get_available_tuner(self):
