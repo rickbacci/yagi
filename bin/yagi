@@ -7,6 +7,7 @@ import os
 import sys
 import argparse
 import json
+import signal
 import subprocess
 import time
 
@@ -17,7 +18,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from engine.tuner import TunerManager
-from engine.scanner import AtscScanner, write_scan_status
+from engine.scanner import AtscScanner
 from engine.paths import (
     CHANNELS_JSON_PATH,
     FAVORITES_JSON_PATH,
@@ -70,6 +71,8 @@ def apply_stdin(args, fields):
 
 
 def cmd_status(args):
+    from engine.scanner import read_scan_status
+    read_scan_status()
     if getattr(args, "count", False):
         from engine import pool
         print(len(pool.adapters()))
@@ -177,6 +180,10 @@ def cmd_scan(args):
     print(f"🛰️  Starting ATSC Over-The-Air Scan ({mode})")
     print("=" * 60)
 
+    def _stop(_signum, _frame):
+        raise KeyboardInterrupt
+
+    previous = signal.signal(signal.SIGTERM, _stop)
     scanner = AtscScanner(adapter_id=args.adapter)
     found_count = 0
 
@@ -194,14 +201,17 @@ def cmd_scan(args):
                 found_count += 1
                 ch_info = event.get("channel", {})
                 print(f"\n  ✨ [FOUND] {ch_info.get('name')} on Physical Ch {ch_info.get('physical_channel')} ({ch_info.get('band')})")
+            elif status == "error":
+                print("\n" + (event.get("message") or "Scan stopped."))
             elif status == "complete":
                 print("\n" + "=" * 60)
                 print(f"✅ Scan Complete! Discovered {event.get('total_found', 0)} Over-The-Air channels.")
                 print(f"Saved to: {CHANNELS_JSON_PATH}")
                 print("=" * 60)
     except KeyboardInterrupt:
-        write_scan_status({"status": "aborted", "is_scanning": False, "percent": 0})
-        print("\n\n⚠️ Scan interrupted by user.")
+        print("\nScan stopped.")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def cmd_list(args):

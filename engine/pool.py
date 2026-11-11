@@ -80,7 +80,8 @@ def claims(active_path: Optional[str] = None) -> Dict[int, str]:
     guide = _read_json(GUIDE_STATUS_PATH)
     if guide.get("running") and _alive(int(guide.get("pid") or 0)) and guide.get("adapter") is not None:
         out[int(guide["adapter"])] = "guide"
-    scan = _read_json(SCAN_STATUS_PATH)
+    from engine.scanner import read_scan_status
+    scan = read_scan_status()
     if scan.get("is_scanning") and time.time() - float(scan.get("updated_at") or 0) < SCAN_HEARTBEAT_SECS:
         out[int(scan.get("adapter_id") if scan.get("adapter_id") is not None else 1)] = "scan"
     live = Timeshift.load_state()

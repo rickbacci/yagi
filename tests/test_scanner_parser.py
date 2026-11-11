@@ -111,9 +111,10 @@ class TestScannerParser(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             status = os.path.join(tmp, "scan_status.json")
             with patch("engine.scanner.SCAN_STATUS_PATH", status), \
-                 patch.object(AtscScanner, "_work_tuner_ready", return_value=False):
+                 patch.object(AtscScanner, "_block_message", return_value="Tuner busy: a recording is using it"):
                 events = list(scanner.scan(quick_mode=True))
             self.assertEqual(events[0]["status"], "error")
+            self.assertEqual(events[0]["message"], "Tuner busy: a recording is using it")
             self.assertEqual(events[0]["adapter_id"], 1)
             self.assertFalse(events[0]["is_scanning"])
             with open(status, encoding="utf-8") as f:
@@ -145,7 +146,7 @@ class TestScannerParser(unittest.TestCase):
                  patch("engine.scanner.CHANNELS_JSON_PATH", channels), \
                  patch("engine.scanner.MPV_CHANNELS_CONF", mpv), \
                  patch("engine.guide.sync_guide_from_channels"), \
-                 patch.object(AtscScanner, "_work_tuner_ready", return_value=True):
+                 patch.object(AtscScanner, "_block_message", return_value=""):
                 events = list(scanner.scan(quick_mode=True, read_tower=read_tower))
             self.assertEqual(events[0]["status"], "starting")
             self.assertIn("scanning", [ev["status"] for ev in events])
@@ -175,7 +176,7 @@ class TestScannerParser(unittest.TestCase):
                  patch("engine.scanner.CHANNELS_JSON_PATH", channels), \
                  patch("engine.scanner.MPV_CHANNELS_CONF", mpv), \
                  patch("engine.guide.sync_guide_from_channels"), \
-                 patch.object(AtscScanner, "_work_tuner_ready", return_value=True):
+                 patch.object(AtscScanner, "_block_message", return_value=""):
                 gen = scanner.scan(quick_mode=True, read_tower=read_tower)
                 for ev in gen:
                     if ev["status"] == "channel_found":
@@ -201,7 +202,7 @@ class TestScannerParser(unittest.TestCase):
                  patch("engine.scanner.CHANNELS_JSON_PATH", channels), \
                  patch("engine.scanner.MPV_CHANNELS_CONF", mpv), \
                  patch("engine.guide.sync_guide_from_channels"), \
-                 patch.object(AtscScanner, "_work_tuner_ready", return_value=True):
+                 patch.object(AtscScanner, "_block_message", return_value=""):
                 events = list(scanner.scan(quick_mode=True, read_tower=lambda _a, _i: (b"", None)))
             self.assertEqual(events[-1]["status"], "complete")
             self.assertEqual(events[-1]["total_found"], 0)
@@ -217,13 +218,129 @@ class TestScannerParser(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             status = os.path.join(tmp, "scan_status.json")
             with patch("engine.scanner.SCAN_STATUS_PATH", status), \
-                 patch.object(AtscScanner, "_work_tuner_ready", return_value=True):
+                 patch.object(AtscScanner, "_block_message", return_value=""):
                 gen = scanner.scan(quick_mode=True, read_tower=boom)
                 self.assertEqual(next(gen)["status"], "starting")
                 with self.assertRaises(OSError):
                     next(gen)
             with open(status, encoding="utf-8") as handle:
-                self.assertEqual(json.load(handle)["status"], "idle")
+                saved = json.load(handle)
+            self.assertEqual(saved["status"], "error")
+            self.assertFalse(saved["is_scanning"])
+            self.assertIn("no frontend", saved["message"])
+
+
+    def test_a_busy_tuner_stops_the_scan_with_a_reason(self):
+        import errno
+        scanner = AtscScanner(adapter_id=1)
+
+        def busy(_adapter, _info):
+            raise OSError(errno.EBUSY, "Device or resource busy")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status = os.path.join(tmp, "scan_status.json")
+            with patch("engine.scanner.SCAN_STATUS_PATH", status), \
+                 patch.object(AtscScanner, "_block_message", return_value=""):
+                gen = scanner.scan(quick_mode=True, read_tower=busy)
+                self.assertEqual(next(gen)["status"], "starting")
+                with self.assertRaises(OSError):
+                    next(gen)
+            with open(status, encoding="utf-8") as handle:
+                saved = json.load(handle)
+        self.assertEqual(saved["status"], "error")
+        self.assertFalse(saved["is_scanning"])
+        self.assertEqual(saved["message"], "Tuner busy: a recording is using it")
+
+    def test_closing_the_scan_leaves_a_finished_status(self):
+        scanner = AtscScanner(adapter_id=1)
+        with tempfile.TemporaryDirectory() as tmp:
+            status = os.path.join(tmp, "scan_status.json")
+            with patch("engine.scanner.SCAN_STATUS_PATH", status), \
+                 patch.object(AtscScanner, "_block_message", return_value=""):
+                gen = scanner.scan(quick_mode=True, read_tower=lambda _a, _i: (b"", None))
+                self.assertEqual(next(gen)["status"], "starting")
+                self.assertEqual(next(gen)["status"], "scanning")
+                gen.close()
+            with open(status, encoding="utf-8") as handle:
+                saved = json.load(handle)
+        self.assertEqual(saved["status"], "error")
+        self.assertFalse(saved["is_scanning"])
+        self.assertEqual(saved["message"], "Scan stopped before it finished.")
+
+    def test_a_recording_on_the_tuner_refuses_before_the_scan_starts(self):
+        from engine.scanner import RECORDING_BUSY
+        scanner = AtscScanner(adapter_id=1)
+        started = {"n": 0}
+
+        def read_tower(_adapter, _info):
+            started["n"] += 1
+            return b"", None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status = os.path.join(tmp, "scan_status.json")
+            with patch("engine.scanner.SCAN_STATUS_PATH", status), \
+                 patch("engine.pool.claims", return_value={1: "record"}):
+                events = list(scanner.scan(quick_mode=True, read_tower=read_tower))
+            with open(status, encoding="utf-8") as handle:
+                saved = json.load(handle)
+        self.assertEqual(started["n"], 0)
+        self.assertEqual(events[0]["status"], "error")
+        self.assertEqual(events[0]["message"], RECORDING_BUSY)
+        self.assertFalse(saved["is_scanning"])
+
+    def test_a_recording_on_the_other_tuner_still_scans(self):
+        scanner = AtscScanner(adapter_id=0)
+        with tempfile.TemporaryDirectory() as tmp:
+            status = os.path.join(tmp, "scan_status.json")
+            with patch("engine.scanner.SCAN_STATUS_PATH", status), \
+                 patch("engine.pool.claims", return_value={1: "record"}), \
+                 patch("engine.scanner.TunerManager.adapter_is_free", return_value=True), \
+                 patch("engine.guide.sync_guide_from_channels"):
+                events = list(scanner.scan(quick_mode=True, read_tower=lambda _a, _i: (b"", None)))
+        self.assertEqual(events[0]["status"], "starting")
+        self.assertEqual(events[-1]["status"], "complete")
+        self.assertFalse(events[-1]["is_scanning"])
+
+    def test_a_dead_scan_is_cleared_when_the_status_is_read(self):
+        import subprocess
+        from engine.scanner import read_scan_status
+        proc = subprocess.Popen(["/bin/true"])
+        proc.wait()
+        with tempfile.TemporaryDirectory() as tmp:
+            status = os.path.join(tmp, "scan_status.json")
+            write_scan_status({
+                "status": "scanning",
+                "is_scanning": True,
+                "pid": proc.pid,
+                "percent": 46,
+                "index": 14,
+                "total": 30,
+                "total_found": 0,
+            }, status_path=status)
+            cleared = read_scan_status(status)
+            with open(status, encoding="utf-8") as handle:
+                saved = json.load(handle)
+            write_scan_status({
+                "status": "scanning",
+                "is_scanning": True,
+                "percent": 46,
+                "total_found": 0,
+            }, status_path=status)
+            nameless = read_scan_status(status)
+            write_scan_status({
+                "status": "scanning",
+                "is_scanning": True,
+                "pid": os.getpid(),
+                "percent": 10,
+                "total_found": 0,
+            }, status_path=status)
+            live = read_scan_status(status)
+        self.assertFalse(cleared["is_scanning"])
+        self.assertEqual(cleared["message"], "Scan stopped before it finished.")
+        self.assertEqual(saved["status"], "error")
+        self.assertFalse(nameless["is_scanning"])
+        self.assertTrue(live["is_scanning"])
+        self.assertEqual(live["pid"], os.getpid())
 
 
 if __name__ == "__main__":

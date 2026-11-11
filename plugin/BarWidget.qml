@@ -39,6 +39,7 @@ BarWidget {
 
   // Scan HUD state
   property bool isScanning: false
+  property string scanNote: ""
   property int scanPercent: 0
   property int scanChannel: 0
   property string scanBand: ""
@@ -1006,6 +1007,7 @@ BarWidget {
   }
 
   function startScan() {
+    root.scanNote = ""
     root.isScanning = true
     root.scanPercent = 1
     root.scanTotalFound = 0
@@ -1110,6 +1112,10 @@ BarWidget {
       var isHeartbeatValid = status.updated_at ? (now - status.updated_at < 15) : false
       var liveScan = (status.is_scanning === true) && isHeartbeatValid
       root.isScanning = liveScan || scanProc.running
+      if (liveScan || status.status === "complete")
+        root.scanNote = ""
+      else if (status.message)
+        root.scanNote = status.message
       root.scanPercent = status.percent || 0
       root.scanChannel = status.channel || 0
       root.scanBand = status.band || ""
@@ -1811,6 +1817,8 @@ BarWidget {
     onExited: function(code) {
       root.isScanning = false
       root.reloadChannelData()
+      tunerCountProc.running = false
+      tunerCountProc.running = true
     }
   }
 
@@ -1993,6 +2001,11 @@ BarWidget {
 
             PanelHeader { tv: root; width: parent.width }
             ScanCard { tv: root; width: parent.width }
+            StatusCard {
+              tv: root
+              width: parent.width
+              message: root.scanNote
+            }
             NowPlayingCard { tv: root; width: parent.width }
 
             Repeater {

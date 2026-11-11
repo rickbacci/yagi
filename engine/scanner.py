@@ -4,6 +4,7 @@ Tunes each physical channel and reads PAT, PMT, and the virtual channel table.
 """
 
 import contextlib
+import errno
 import os
 import json
 import time
@@ -11,6 +12,53 @@ from typing import List, Dict, Generator, Any, Optional, Callable, Tuple
 from engine import pool
 from engine.tuner import TunerManager
 from engine.paths import CHANNELS_JSON_PATH, MPV_CHANNELS_CONF, SCAN_STATUS_PATH, state_lock
+
+
+RECORDING_BUSY = "Tuner busy: a recording is using it"
+STOPPED_EARLY = "Scan stopped before it finished."
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def scan_stop_reason(exc: BaseException) -> str:
+    """Plain reason a scan did not finish."""
+    if isinstance(exc, KeyboardInterrupt):
+        return "Scan stopped."
+    if isinstance(exc, OSError) and exc.errno == errno.EBUSY:
+        return RECORDING_BUSY
+    text = str(exc).strip()
+    if text:
+        return f"Scan stopped: {text}"
+    return STOPPED_EARLY
+
+
+def read_scan_status(status_path: Optional[str] = None) -> Dict[str, Any]:
+    """The scan status. A scan whose process is gone is recorded as stopped."""
+    target = status_path or SCAN_STATUS_PATH
+    try:
+        with open(target, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    if data.get("is_scanning") and not _pid_alive(int(data.get("pid") or 0)):
+        data = dict(data)
+        data["status"] = "error"
+        data["is_scanning"] = False
+        data["message"] = STOPPED_EARLY
+        write_scan_status(data, status_path=target)
+    return data
 
 
 def write_scan_status(status_dict: Dict[str, Any], status_path: Optional[str] = None) -> None:
@@ -187,11 +235,21 @@ class AtscScanner:
         picked = pool.pick_work(wait_for_guide=False)
         return -1 if picked is None else picked
 
-    def _work_tuner_ready(self, adapter: int) -> bool:
+    def _block_message(self, adapter: int) -> str:
+        """Why this tuner cannot be scanned, or empty when it is free."""
         from engine import pool
-        if adapter in pool.claims():
-            return False
-        return TunerManager.adapter_is_free(adapter)
+        job = pool.claims().get(adapter)
+        if job == "record":
+            return RECORDING_BUSY
+        if job == "live":
+            return "Tuner busy: live TV is using it"
+        if job == "guide":
+            return "Tuner busy: the Guide is using it"
+        if job == "scan":
+            return "A scan is already running."
+        if not TunerManager.adapter_is_free(adapter):
+            return RECORDING_BUSY
+        return ""
 
     def _read_channel(self, tuner, freq: int, timeout_multiplier: float) -> Tuple[bytes, Optional[float]]:
         """Lock one pilot and read the tower. The frequency is not rounded."""
@@ -234,21 +292,29 @@ class AtscScanner:
 
         # Held for the whole scan. Recordings, live TV, and the Guide tune under it too.
         tuner_lock = contextlib.ExitStack()
+        block = ""
         try:
             if adapter < 0:
                 raise TimeoutError(adapter)
             tuner_lock.enter_context(state_lock(pool.lock_key(adapter), timeout=0.5))
-            ready = self._work_tuner_ready(adapter)
+            block = self._block_message(adapter)
         except TimeoutError:
-            ready = False
-        if not ready:
+            held = pool.claims()
+            if "record" in held.values():
+                block = RECORDING_BUSY
+            elif "live" in held.values():
+                block = "Tuner busy: live TV is using it"
+            else:
+                block = pool.busy_text()
+        if block:
             tuner_lock.close()
             ev_busy = {
                 "status": "error",
                 "is_scanning": False,
                 "adapter_id": adapter,
-                "message": pool.busy_text(),
+                "message": block,
                 "percent": 0,
+                "total_found": 0,
             }
             write_scan_status(ev_busy)
             yield ev_busy
@@ -258,6 +324,7 @@ class AtscScanner:
             "status": "starting",
             "is_scanning": True,
             "adapter_id": adapter,
+            "pid": os.getpid(),
             "total_channels": total_freqs,
             "quick_mode": quick_mode,
             "percent": 0
@@ -267,7 +334,9 @@ class AtscScanner:
 
         discovered_channels: List[Dict[str, Any]] = []
         scan_completed = False
+        stop_reason = ""
         tuner = None
+        percent = 0
         try:
             if read_tower is None:
                 from engine.tower_dump import Tuner
@@ -277,6 +346,7 @@ class AtscScanner:
                 ev_scan = {
                     "status": "scanning",
                     "is_scanning": True,
+                    "pid": os.getpid(),
                     "index": index + 1,
                     "total": total_freqs,
                     "percent": percent,
@@ -306,6 +376,7 @@ class AtscScanner:
                         "percent": percent,
                         "channels": discovered_channels,
                     }
+                    ev_found["pid"] = os.getpid()
                     write_scan_status(ev_found)
                     yield ev_found
 
@@ -317,22 +388,37 @@ class AtscScanner:
                 "total_found": len(discovered_channels),
                 "channels": discovered_channels,
             }
+            scan_completed = True
             write_scan_status(ev_done)
             yield ev_done
-            scan_completed = True
-            return discovered_channels
+        except GeneratorExit:
+            stop_reason = STOPPED_EARLY
+            raise
+        except KeyboardInterrupt:
+            stop_reason = "Scan stopped."
+            raise
+        except Exception as exc:
+            stop_reason = scan_stop_reason(exc)
+            raise
         finally:
-            if tuner is not None:
-                tuner.close()
+            try:
+                if tuner is not None:
+                    tuner.close()
+            except Exception:
+                pass
             if not scan_completed:
                 write_scan_status({
-                    "status": "idle",
+                    "status": "error",
                     "is_scanning": False,
-                    "percent": 0,
+                    "pid": os.getpid(),
+                    "message": stop_reason or STOPPED_EARLY,
+                    "percent": percent,
                     "total_found": len(discovered_channels),
                     "channels": discovered_channels,
                 })
             tuner_lock.close()
+        if scan_completed:
+            return discovered_channels
 
     @classmethod
     def save_channels(cls, channels: List[Dict[str, Any]], json_path: Optional[str] = None, mpv_path: Optional[str] = None) -> None:
