@@ -3,6 +3,7 @@
 ## 0.1.7
 
 - Scan, the Guide read, and the adapter check talk to the tuner directly. A new install is plugin add, enable, put it on the bar, and restart the shell.
+- A scan that stops early says why and leaves the status finished. A recording that already holds the tuner is named when Scan is pressed. A status whose scan process is gone is cleared the next time it is read.
 - The picture places itself: bottom right, one third of the monitor tall, 16:9. A Hyprland rule is not required. An older rule that pins class `yagi` still blocks fullscreen.
 - The first time you open the Guide with channels and no listings, it reads once. Refresh, next to Grid and Shows, reads again. Neither starts the record timer.
 - `yagi install` stays optional. It keeps the Guide fresh and starts scheduled and series recordings. Watch, pause, and record-now work without it.
