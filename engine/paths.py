@@ -20,6 +20,7 @@ _XDG_CONFIG = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config
 CONFIG_DIR = os.path.join(_XDG_CONFIG, "yagi")
 CHANNELS_JSON_PATH = os.path.join(CONFIG_DIR, "channels.json")
 FAVORITES_JSON_PATH = os.path.join(CONFIG_DIR, "favorites.json")
+SIGNAL_LOG_PATH = os.path.join(CONFIG_DIR, "signal-log.txt")
 HIDDEN_JSON_PATH = os.path.join(CONFIG_DIR, "hidden.json")
 GUIDE_JSON_PATH = os.path.join(CONFIG_DIR, "guide.json")
 GUIDE_HISTORY_PATH = os.path.join(CONFIG_DIR, "guide_history.json")

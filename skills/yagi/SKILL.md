@@ -23,7 +23,7 @@ yagi record start "8.1 FOX" 1h | stop | list | play <file> | delete <file>
 yagi record later | unlater | keep | unkeep | due | finish
 yagi series | series add <station> --title T --channel 19.2 | series remove <id> | series keep <id> 10
 yagi list | guide | guide refresh | guide search Browns | status | scan | scan --full
-yagi signal check 8.1   # C/N and damaged packets every 2 s; live tuner or a free one
+yagi signal check 8.1 | favorites | all   # C/N and damaged packets. favorites and all: one tune per tower, appended to ~/.config/yagi/signal-log.txt
 yagi favorite toggle 8.1
 yagi pref filter favorites|all|hidden | pref library-max auto|50|100|250|off
 yagi hidden list | hidden hide 19.1 | hidden show 19.1
@@ -38,7 +38,7 @@ Panel: j/k move, Enter picks, Esc closes, `g` Guide, `v` Recordings. Guide: arro
 
 TV window:
 
-Space pause / play still behind · `l` live · ←/→ skip 10s · ↑/↓ 1 minute · PgUp/PgDn next/last ad break (games never auto-skip) · inside the last 10s, → is live · j/k channel · r record · y save the pause · c captions · m / middle-click mute · wheel volume.
+Space pause / play still behind · `l` live · ←/→ skip 10s · ↑/↓ 1 minute · PgUp/PgDn next/last ad break (games never auto-skip) · inside the last 10s, → is live · j/k channel · r record · y save the pause · c captions · a other audio, when the station sends two · m / middle-click mute · wheel volume.
 
 ## Paths
 
