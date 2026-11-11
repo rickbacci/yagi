@@ -32,7 +32,7 @@ The bar and the picture overlay run the command `yagi`, so `bin/` needs to be on
 
 ## Picture window
 
-This rule is optional. Yagi pins the small picture itself, and a stock install does not need it. Use it when an older rule pins class `yagi` and fullscreen will not stick. Do not set `pin = true` here. A pin is put back the moment the window leaves fullscreen.
+Yagi places and pins the small picture itself, and a stock install does not need a window rule. Use this rule when an older rule pins class `yagi` and fullscreen will not stick. Do not set `pin = true` here. A pin is put back the moment the window leaves fullscreen.
 
 The opacity line is what the rest of the window rules expect:
 

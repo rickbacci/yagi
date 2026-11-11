@@ -146,8 +146,8 @@ omarchy plugin remove richardb.yagi
 
 ## Picture window
 
-The picture is a floating window of class `yagi`, at the bottom right, about a third of the monitor tall. Yagi pins that small window itself. You do not need a Hyprland rule to watch. In the picture, `f` or a double-click fullscreens. `f`, double-click, or Esc returns to the small window. Super+F does not unpin, so it still does nothing while the picture is pinned. `i` shows player stats (resolution, codec, hardware decode).
+The picture is a floating window of class `yagi`, at the bottom right, about a third of the monitor tall. Yagi places and pins that window itself. You do not need a Hyprland rule to watch. In the picture, `f` or a double-click fullscreens. `f`, double-click, or Esc returns to the small window. Super+F does not unpin, so it still does nothing while the picture is pinned. `i` shows player stats (resolution, codec, hardware decode).
 
-If an older rule pins class `yagi`, fullscreen will not stick: the rule pins the window again the moment it leaves fullscreen. The optional rule that leaves pinning to Yagi is in [CONTRIBUTING.md](CONTRIBUTING.md).
+If an older rule pins class `yagi`, fullscreen will not stick: the rule pins the window again the moment it leaves fullscreen. The rule that leaves pinning to Yagi is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Development notes and tests are in that same file.

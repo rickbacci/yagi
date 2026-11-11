@@ -80,6 +80,9 @@ def _open_follow_reader(fifo_path: str, follow_pid: int, timeout: float = FOLLOW
 # Same lua as /usr/share/omarchy/default/hypr/bindings/tiling.lua Super+F.
 OMARCHY_FULLSCREEN_LUA = 'hl.dsp.window.fullscreen({ mode = "fullscreen" })'
 
+# The small picture sits 40px in from the bottom-right corner.
+TV_MARGIN = 40
+
 
 def _hypr_json(subcommand: str):
     result = subprocess.run(
@@ -112,11 +115,85 @@ def focus_tv_window(wait: float = 3.0) -> bool:
         time.sleep(0.2)
 
 
-def ensure_tv_pinned(wait: float = 3.0) -> None:
-    """Pin the small picture. A fullscreen window is left alone.
+def picture_span(monitor: Dict[str, Any]) -> Optional[tuple]:
+    """Bottom-right box: one third of the monitor tall, 16:9, 40px inset.
 
-    The Hyprland rule must not set pin. A pin in that rule comes back the
-    moment this window is not fullscreen, and fullscreen then no-ops.
+    Hyprland reports width and height in mode pixels and x, y in layout
+    pixels. Dispatch uses layout pixels, so the mode size is divided by scale.
+    """
+    try:
+        scale = float(monitor.get("scale") or 1) or 1
+        mw = int(float(monitor["width"]) / scale)
+        mh = int(float(monitor["height"]) / scale)
+        origin_x = int(float(monitor.get("x") or 0))
+        origin_y = int(float(monitor.get("y") or 0))
+    except (TypeError, ValueError, KeyError):
+        return None
+    if int(monitor.get("transform") or 0) % 2 == 1:
+        mw, mh = mh, mw
+    height = mh // 3
+    width = (mh * 16) // 27
+    if width < 1 or height < 1:
+        return None
+    return (
+        origin_x + mw - width - TV_MARGIN,
+        origin_y + mh - height - TV_MARGIN,
+        width,
+        height,
+    )
+
+
+def _monitor_for(client: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    monitors = _hypr_json("monitors") or []
+    if not isinstance(monitors, list):
+        return None
+    mid = client.get("monitor")
+    for mon in monitors:
+        if isinstance(mon, dict) and mon.get("id") == mid:
+            return mon
+    for mon in monitors:
+        if isinstance(mon, dict) and mon.get("focused"):
+            return mon
+    return None
+
+
+def _tv_place_lua(addr: str, box: tuple) -> List[str]:
+    x, y, width, height = box
+    win = f"address:{addr}"
+    return [
+        f'hl.dsp.window.float({{ action = "on", window = "{win}" }})',
+        f'hl.dsp.window.resize({{ x = {width}, y = {height}, relative = false, window = "{win}" }})',
+        f'hl.dsp.window.move({{ x = {x}, y = {y}, relative = false, window = "{win}" }})',
+        f'hl.dsp.window.set_prop({{ window = "{win}", prop = "border_size", value = 0 }})',
+        f'hl.dsp.window.set_prop({{ window = "{win}", prop = "keep_aspect_ratio", value = 1 }})',
+        f'hl.dsp.window.set_prop({{ window = "{win}", prop = "no_shortcuts_inhibit", value = 1 }})',
+        f'hl.dsp.window.set_prop({{ window = "{win}", prop = "opacity", value = "1 1" }})',
+        f'hl.dsp.window.tag({{ window = "{win}", tag = "-default-opacity" }})',
+    ]
+
+
+def _place_small_picture(client: Dict[str, Any]) -> None:
+    """Float, size, and park the picture. A fullscreen window is left alone."""
+    if int(client.get("fullscreen") or 0) != 0:
+        return
+    addr = client.get("address")
+    if not addr:
+        return
+    mon = _monitor_for(client)
+    if not mon:
+        return
+    box = picture_span(mon)
+    if not box:
+        return
+    for lua in _tv_place_lua(str(addr), box):
+        _hypr_dispatch(lua)
+
+
+def ensure_tv_pinned(wait: float = 3.0) -> None:
+    """Place the small picture and pin it. A fullscreen window is left alone.
+
+    Pin is not a window rule. A pin in a rule comes back the moment this
+    window is not fullscreen, and fullscreen then no-ops.
     """
     try:
         deadline = time.time() + wait
@@ -125,6 +202,7 @@ def ensure_tv_pinned(wait: float = 3.0) -> None:
             if client:
                 if int(client.get("fullscreen") or 0) != 0 or client.get("pinned"):
                     return
+                _place_small_picture(client)
                 addr = client.get("address")
                 if addr:
                     _hypr_dispatch(f'hl.dsp.window.pin({{ window = "address:{addr}" }})')
@@ -176,11 +254,12 @@ def _toggle_omarchy_fullscreen(target_tv: bool = False, exit_only: bool = False)
     win = f', window = "address:{addr}"' if is_tv else ""
     if is_tv and was_fs:
         _hypr_dispatch(f'hl.dsp.window.fullscreen({{ mode = "fullscreen"{win} }})')
-        # The size rule returns once fullscreen is 0. Pin after that, not before.
+        # Place once fullscreen is 0, then pin. Pinning first no-ops the resize.
         deadline = time.time() + 0.8
         while True:
             after = _hypr_tv_client() or {}
             if int(after.get("fullscreen") or 0) == 0:
+                _place_small_picture(after)
                 if not after.get("pinned"):
                     _hypr_dispatch(f'hl.dsp.window.pin({{ window = "address:{addr}" }})')
                 return

@@ -3,6 +3,7 @@
 ## 0.1.7
 
 - Scan, the Guide read, and the adapter check talk to the tuner directly. A new install is plugin add, enable, put it on the bar, and restart the shell.
+- The picture places itself: bottom right, one third of the monitor tall, 16:9. A Hyprland rule is not required. An older rule that pins class `yagi` still blocks fullscreen.
 - The first time you open the Guide with channels and no listings, it reads once. Refresh, next to Grid and Shows, reads again. Neither starts the record timer.
 - `yagi install` stays optional. It keeps the Guide fresh and starts scheduled and series recordings. Watch, pause, and record-now work without it.
 - `yagi signal check favorites` and `all` tune each tower once and append the block to `~/.config/yagi/signal-log.txt`, so the next antenna move can be compared. `--note` stores where the antenna was. The picture starts in English when the station sends it. `a` selects the other language, and the next station starts in English again.

@@ -23,6 +23,9 @@ from player.controller import (
     is_follow_path,
     channel_index,
     _toggle_omarchy_fullscreen,
+    _tv_place_lua,
+    ensure_tv_pinned,
+    picture_span,
     OMARCHY_FULLSCREEN_LUA,
     reap_after_exit,
     spawn_reap,
@@ -1273,6 +1276,81 @@ class TestLuaChannelKeys(unittest.TestCase):
         self.assertNotIn("Projects/personal", src)
 
 
+THIS_MONITOR = {
+    "id": 0,
+    "x": 0,
+    "y": 0,
+    "width": 3440,
+    "height": 1440,
+    "scale": 1.25,
+    "transform": 0,
+    "focused": True,
+}
+
+
+def _dispatched(mock_run):
+    return [
+        call.args[0][2]
+        for call in mock_run.call_args_list
+        if call.args[0][:2] == ["hyprctl", "dispatch"]
+    ]
+
+
+class TestPicturePlacement(unittest.TestCase):
+    def test_span_is_one_third_tall_and_bottom_right(self):
+        self.assertEqual(picture_span(THIS_MONITOR), (2030, 728, 682, 384))
+
+    def test_span_uses_layout_pixels_and_a_monitor_offset(self):
+        mon = {"x": 2752, "y": 0, "width": 1920, "height": 1080, "scale": 1, "transform": 0}
+        self.assertEqual(picture_span(mon), (2752 + 1920 - 640 - 40, 1080 - 360 - 40, 640, 360))
+
+    def test_a_rotated_monitor_swaps_the_mode_size(self):
+        mon = {"x": 0, "y": 0, "width": 1920, "height": 1080, "scale": 1, "transform": 1}
+        width, height = 1080, 1920
+        box_h = height // 3
+        box_w = (height * 16) // 27
+        self.assertEqual(picture_span(mon), (width - box_w - 40, height - box_h - 40, box_w, box_h))
+
+    @patch("player.controller.subprocess.run")
+    def test_a_new_picture_is_placed_then_pinned(self, mock_run):
+        tv = {"class": "yagi", "address": "0xabc", "pinned": False, "fullscreen": 0, "monitor": 0}
+
+        def fake_run(cmd, capture_output=True, text=True):
+            m = MagicMock()
+            m.returncode = 0
+            m.stderr = ""
+            if cmd[:3] == ["hyprctl", "clients", "-j"]:
+                m.stdout = json.dumps([tv])
+            elif cmd[:3] == ["hyprctl", "monitors", "-j"]:
+                m.stdout = json.dumps([THIS_MONITOR])
+            else:
+                m.stdout = "ok"
+            return m
+
+        mock_run.side_effect = fake_run
+        ensure_tv_pinned(wait=0.1)
+        self.assertEqual(
+            _dispatched(mock_run),
+            _tv_place_lua("0xabc", (2030, 728, 682, 384))
+            + ['hl.dsp.window.pin({ window = "address:0xabc" })'],
+        )
+
+    @patch("player.controller.subprocess.run")
+    def test_a_fullscreen_picture_is_left_alone(self, mock_run):
+        tv = {"class": "yagi", "address": "0xabc", "pinned": False, "fullscreen": 2, "monitor": 0}
+
+        def fake_run(cmd, capture_output=True, text=True):
+            m = MagicMock()
+            m.returncode = 0
+            m.stderr = ""
+            m.stdout = json.dumps([tv])
+            return m
+
+        mock_run.side_effect = fake_run
+        ensure_tv_pinned(wait=0.1)
+        self.assertEqual(_dispatched(mock_run), [])
+
+
 class TestOmarchyFullscreen(unittest.TestCase):
     @patch("player.controller.subprocess.run")
     def test_unpins_tv_then_uses_omarchy_dispatcher(self, mock_run):
@@ -1298,11 +1376,7 @@ class TestOmarchyFullscreen(unittest.TestCase):
 
         mock_run.side_effect = fake_run
         _toggle_omarchy_fullscreen(target_tv=True)
-        dispatched = [
-            call.args[0][2]
-            for call in mock_run.call_args_list
-            if call.args[0][:2] == ["hyprctl", "dispatch"]
-        ]
+        dispatched = _dispatched(mock_run)
         self.assertEqual(
             dispatched[0],
             'hl.dsp.window.pin({ window = "address:0xabc" })',
@@ -1327,12 +1401,7 @@ class TestOmarchyFullscreen(unittest.TestCase):
 
         mock_run.side_effect = fake_run
         _toggle_omarchy_fullscreen()
-        dispatched = [
-            call.args[0][2]
-            for call in mock_run.call_args_list
-            if call.args[0][:2] == ["hyprctl", "dispatch"]
-        ]
-        self.assertEqual(dispatched, [OMARCHY_FULLSCREEN_LUA])
+        self.assertEqual(_dispatched(mock_run), [OMARCHY_FULLSCREEN_LUA])
 
     @patch("player.controller.subprocess.run")
     def test_exit_only_leaves_fullscreen_and_pins_again(self, mock_run):
@@ -1341,6 +1410,7 @@ class TestOmarchyFullscreen(unittest.TestCase):
             "address": "0xabc",
             "pinned": False,
             "fullscreen": 2,
+            "monitor": 0,
         }
         after = {**tv, "fullscreen": 0}
 
@@ -1352,19 +1422,18 @@ class TestOmarchyFullscreen(unittest.TestCase):
                 m.stdout = json.dumps(tv)
             elif cmd[:3] == ["hyprctl", "clients", "-j"]:
                 m.stdout = json.dumps([after])
+            elif cmd[:3] == ["hyprctl", "monitors", "-j"]:
+                m.stdout = json.dumps([THIS_MONITOR])
             else:
                 m.stdout = "ok"
             return m
 
         mock_run.side_effect = fake_run
         _toggle_omarchy_fullscreen(target_tv=True, exit_only=True)
-        dispatched = [
-            call.args[0][2]
-            for call in mock_run.call_args_list
-            if call.args[0][:2] == ["hyprctl", "dispatch"]
-        ]
+        dispatched = _dispatched(mock_run)
         self.assertEqual(dispatched[0], 'hl.dsp.window.fullscreen({ mode = "fullscreen", window = "address:0xabc" })')
-        self.assertEqual(dispatched[1], 'hl.dsp.window.pin({ window = "address:0xabc" })')
+        self.assertEqual(dispatched[1:-1], _tv_place_lua("0xabc", (2030, 728, 682, 384)))
+        self.assertEqual(dispatched[-1], 'hl.dsp.window.pin({ window = "address:0xabc" })')
 
     @patch("player.controller.subprocess.run")
     def test_exit_only_does_nothing_when_the_picture_is_small(self, mock_run):
@@ -1381,12 +1450,7 @@ class TestOmarchyFullscreen(unittest.TestCase):
 
         mock_run.side_effect = fake_run
         _toggle_omarchy_fullscreen(target_tv=True, exit_only=True)
-        dispatched = [
-            call.args[0][2]
-            for call in mock_run.call_args_list
-            if call.args[0][:2] == ["hyprctl", "dispatch"]
-        ]
-        self.assertEqual(dispatched, [])
+        self.assertEqual(_dispatched(mock_run), [])
 
 
 class TestCliNextPrev(unittest.TestCase):
