@@ -5,11 +5,11 @@
 - Scan, the Guide read, and the adapter check talk to the tuner directly. A new install is plugin add, enable, put it on the bar, and restart the shell.
 - The first time you open the Guide with channels and no listings, it reads once. Refresh, next to Grid and Shows, reads again. Neither starts the record timer.
 - `yagi install` stays optional. It keeps the Guide fresh and starts scheduled and series recordings. Watch, pause, and record-now work without it.
+- `yagi signal check favorites` and `all` tune each tower once and append the block to `~/.config/yagi/signal-log.txt`, so the next antenna move can be compared. `--note` stores where the antenna was. The picture starts in English when the station sends it. `a` selects the other language, and the next station starts in English again.
+- When Comskip crashes, the log says it crashed instead of saying it found no breaks.
 
 ## 0.1.6
 
-- `yagi signal check favorites` and `all` tune each tower once and append the block to `~/.config/yagi/signal-log.txt`, so the next antenna move can be compared. `--note` stores where the antenna was.
-- The picture starts in English when the station sends it. `a` selects the other language, and the next station starts in English again.
 - Guide search is as tall as the Grid and Shows buttons. The field was only the text line, so its padding clipped the glyphs once the text size was larger than the default.
 - The Shows list builds only the rows on screen. A month of history is a few thousand shows, and building every row made search slow.
 - Channel up tunes 19.10 by its own name. 19.1 and 19.10 share the tune name WOIO-HD, and channel up was staying on the first one.
