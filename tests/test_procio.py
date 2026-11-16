@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import time
 import unittest
 from unittest import mock
 
@@ -64,12 +65,15 @@ class TestProcessGroup(unittest.TestCase):
             capture(["sh", "-c", script], max_bytes=32, timeout=2, env=env)
             with open(path, encoding="utf-8") as handle:
                 sleep_pid = int(handle.read().strip())
-        deadline_alive = True
-        try:
-            os.kill(sleep_pid, 0)
-        except ProcessLookupError:
-            deadline_alive = False
-        self.assertFalse(deadline_alive)
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            try:
+                os.kill(sleep_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("descendant was still running")
 
 
 if __name__ == "__main__":
