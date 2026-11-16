@@ -40,6 +40,16 @@ class TestPreReview(unittest.TestCase):
         parent = tempfile.mkdtemp(prefix="pre-review-")
         path = os.path.join(parent, "old")
         try:
+            have = subprocess.run(
+                ["git", "-c", "safe.directory=*", "-C", ROOT, "cat-file", "-t", BLOCKED],
+                capture_output=True, text=True,
+            )
+            if have.returncode != 0:
+                fetched = subprocess.run(
+                    ["git", "-c", "safe.directory=*", "-C", ROOT, "fetch", "--depth=1", "origin", BLOCKED],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(fetched.returncode, 0, fetched.stderr)
             added = subprocess.run(
                 ["git", "-c", "safe.directory=*", "-C", ROOT, "worktree", "add", "--detach", path, BLOCKED],
                 capture_output=True, text=True,

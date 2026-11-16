@@ -135,29 +135,40 @@ def _drain(pipe, buf: bytearray, stop_at: int) -> None:
 
 
 def _kill_group(proc: subprocess.Popen) -> None:
-    """SIGKILL the session started for this child, including descendants.
+    """Stop this child and every process it started.
 
-    A child that never left our process group must not be killed with
-    killpg: that signal would hit the test runner and the CI job too.
+    killpg is only used for a process group that is not ours. Signaling
+    our own group is SIGKILL for the test runner and the CI job.
     """
     pid = proc.pid
     if not pid or pid <= 1 or pid == os.getpid():
         return
+    mine = os.getpgrp()
     try:
-        pgid = os.getpgid(pid)
-    except (ProcessLookupError, PermissionError, OSError):
+        sid = os.getsid(pid)
+    except OSError:
         _kill_pid(proc)
         return
-    # getpgrp() is this process's group. killpg of that id kills us.
-    if pgid <= 1 or pgid == os.getpgrp():
-        _kill_pid(proc)
-        _kill_descendants(pid)
-        return
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError):
-        _kill_pid(proc)
-        _kill_descendants(pid)
+    # Snapshot first. Killing the leader reparents the children.
+    if sid > 1 and sid != os.getsid(0):
+        groups = _session_groups(sid, mine)
+        for pgid in groups:
+            if pgid <= 1 or pgid == mine:
+                continue
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except OSError:
+                pass
+    else:
+        for child in _descendants(pid):
+            if child <= 1 or child == os.getpid():
+                continue
+            try:
+                if os.getpgid(child) == mine:
+                    os.kill(child, signal.SIGKILL)
+            except OSError:
+                pass
+    _kill_pid(proc)
 
 
 def _kill_pid(proc: subprocess.Popen) -> None:
@@ -167,22 +178,40 @@ def _kill_pid(proc: subprocess.Popen) -> None:
         pass
 
 
-def _kill_descendants(pid: int) -> None:
-    """Kill children of pid without signaling the caller's process group."""
+def _descendants(pid: int) -> list:
+    found = []
     for child in _children(pid):
-        _kill_descendants(child)
-        try:
-            os.kill(child, signal.SIGKILL)
-        except OSError:
-            pass
+        found.append(child)
+        found.extend(_descendants(child))
+    return found
 
 
 def _children(pid: int) -> list:
     found = []
+    for entry in _proc_ids():
+        if entry[1] == pid:
+            found.append(entry[0])
+    return found
+
+
+def _session_groups(sid: int, mine: int) -> list:
+    groups = []
+    seen = set()
+    for pid, _ppid, pgrp, session in _proc_ids():
+        if session != sid or pgrp <= 1 or pgrp == mine or pgrp in seen:
+            continue
+        seen.add(pgrp)
+        groups.append(pgrp)
+    return groups
+
+
+def _proc_ids():
+    """pid, ppid, pgrp, session for each live process."""
+    rows = []
     try:
-        entries = os.scandir("/proc")
+        entries = list(os.scandir("/proc"))
     except OSError:
-        return found
+        return rows
     for entry in entries:
         if not entry.name.isdigit():
             continue
@@ -195,6 +224,11 @@ def _children(pid: int) -> list:
         if end < 0:
             continue
         fields = stat[end + 2:].split()
-        if len(fields) > 1 and fields[1] == str(pid):
-            found.append(int(entry.name))
-    return found
+        # state ppid pgrp session
+        if len(fields) < 4:
+            continue
+        try:
+            rows.append((int(entry.name), int(fields[1]), int(fields[2]), int(fields[3])))
+        except ValueError:
+            continue
+    return rows
