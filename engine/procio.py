@@ -135,15 +135,66 @@ def _drain(pipe, buf: bytearray, stop_at: int) -> None:
 
 
 def _kill_group(proc: subprocess.Popen) -> None:
-    """SIGKILL the session started for this child, including descendants."""
+    """SIGKILL the session started for this child, including descendants.
+
+    A child that never left our process group must not be killed with
+    killpg: that signal would hit the test runner and the CI job too.
+    """
     pid = proc.pid
-    if not pid:
+    if not pid or pid <= 1 or pid == os.getpid():
         return
     try:
-        os.killpg(pid, signal.SIGKILL)
+        pgid = os.getpgid(pid)
     except (ProcessLookupError, PermissionError, OSError):
-        pass
+        _kill_pid(proc)
+        return
+    # getpgrp() is this process's group. killpg of that id kills us.
+    if pgid <= 1 or pgid == os.getpgrp():
+        _kill_pid(proc)
+        _kill_descendants(pid)
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        _kill_pid(proc)
+        _kill_descendants(pid)
+
+
+def _kill_pid(proc: subprocess.Popen) -> None:
     try:
         proc.kill()
     except OSError:
         pass
+
+
+def _kill_descendants(pid: int) -> None:
+    """Kill children of pid without signaling the caller's process group."""
+    for child in _children(pid):
+        _kill_descendants(child)
+        try:
+            os.kill(child, signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def _children(pid: int) -> list:
+    found = []
+    try:
+        entries = os.scandir("/proc")
+    except OSError:
+        return found
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry.name}/stat", encoding="utf-8") as handle:
+                stat = handle.read()
+        except OSError:
+            continue
+        end = stat.rfind(")")
+        if end < 0:
+            continue
+        fields = stat[end + 2:].split()
+        if len(fields) > 1 and fields[1] == str(pid):
+            found.append(int(entry.name))
+    return found

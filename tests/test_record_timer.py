@@ -137,9 +137,14 @@ class TestOwnScope(unittest.TestCase):
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 try:
-                    os.killpg(proc.pid, signal.SIGKILL)
+                    pgid = os.getpgid(proc.pid)
                 except OSError:
-                    pass
+                    pgid = os.getpgrp()
+                if pgid != os.getpgrp() and pgid > 1:
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                    except OSError:
+                        pass
                 proc.wait(timeout=5)
 
 
