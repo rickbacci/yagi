@@ -27,8 +27,6 @@ from engine.dvr import (
     KEEP_FREE_GIB,
     GROW_BYTES,
 )
-from engine.tuner import TunerAdapter
-
 # The live timer holds the real Tuner 1 lock during a Guide update.
 _TUNER_LOCK = patch("engine.pool.LOCK_PREFIX", f"test-tuner-dvr-{os.getpid()}-")
 

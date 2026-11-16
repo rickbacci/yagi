@@ -12,7 +12,6 @@ trimmed to the same span a split episode gets. Games keep every minute.
 
 import os
 import re
-import subprocess
 import sys
 import time
 from datetime import datetime

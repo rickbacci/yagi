@@ -138,16 +138,30 @@ def _drain(pipe, buf: bytearray, stop_at: int) -> None:
         buf.extend(chunk[:room])
 
 
+def _killpg_if_not_ours(pgid: int) -> None:
+    """Signal one process group, and never the caller's group.
+
+    Signaling our own group is SIGKILL for the test runner and the CI job.
+    """
+    if pgid <= 1 or pgid == os.getpgrp():
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
 def _kill_group(proc: subprocess.Popen) -> None:
     """Stop this child and every process it started.
 
-    killpg is only used for a process group that is not ours. Signaling
-    our own group is SIGKILL for the test runner and the CI job.
+    Descendants are stopped by pid first, so a background job that left
+    its leader's group still dies. Other groups in the child's session
+    go through _killpg_if_not_ours. A child that stayed in our session
+    is stopped by pid only.
     """
     pid = proc.pid
     if not pid or pid <= 1 or pid == os.getpid():
         return
-    mine = os.getpgrp()
     my_sid = os.getsid(0)
     sid = getattr(proc, "_yagi_sid", None)
     if not sid:
@@ -155,8 +169,6 @@ def _kill_group(proc: subprocess.Popen) -> None:
             sid = os.getsid(pid)
         except OSError:
             sid = None
-    # Children first, by pid. That does not signal our process group, and it
-    # still reaches a background job that left its leader's group.
     for child in _descendants(pid):
         if child <= 1 or child == os.getpid():
             continue
@@ -164,19 +176,14 @@ def _kill_group(proc: subprocess.Popen) -> None:
             os.kill(child, signal.SIGKILL)
         except OSError:
             pass
-    # Then any other group in the child's session, never our own group.
     if sid and sid > 1 and sid != my_sid:
-        for pgid in _session_groups(sid, mine):
-            if pgid <= 1 or pgid == mine or pgid == os.getpgrp():
-                continue
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except OSError:
-                pass
+        for _pid, _ppid, pgrp, session in _proc_ids():
+            if session == sid:
+                _killpg_if_not_ours(pgrp)
         for other, _ppid, pgrp, session in _proc_ids():
             if session != sid or other <= 1 or other == os.getpid():
                 continue
-            if pgrp == mine or pgrp == os.getpgrp():
+            if pgrp == os.getpgrp():
                 continue
             try:
                 os.kill(other, signal.SIGKILL)
@@ -206,17 +213,6 @@ def _children(pid: int) -> list:
         if entry[1] == pid:
             found.append(entry[0])
     return found
-
-
-def _session_groups(sid: int, mine: int) -> list:
-    groups = []
-    seen = set()
-    for pid, _ppid, pgrp, session in _proc_ids():
-        if session != sid or pgrp <= 1 or pgrp == mine or pgrp in seen:
-            continue
-        seen.add(pgrp)
-        groups.append(pgrp)
-    return groups
 
 
 def _proc_ids():

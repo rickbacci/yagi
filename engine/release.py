@@ -1,7 +1,9 @@
 """The record timer runs a copy of the last commit, never the working tree.
 
-Each commit unpacks to ~/.local/share/yagi/releases/<sha>, and current
-points at it. An edit saved halfway in the repo never reaches a recording.
+Each commit unpacks to $XDG_DATA_HOME/yagi/releases/<sha>, or to
+~/.local/share/yagi/releases/<sha> when XDG_DATA_HOME is unset, and
+current points at it. An edit saved halfway in the repo never reaches
+a recording.
 The git hook runs this file on its own. The repo root goes on the path so
 the bounded git capture in engine.procio imports, and nothing else is required.
 
@@ -25,7 +27,10 @@ if _ROOT not in sys.path:
 
 from engine.procio import capture
 
-DEFAULT_ROOT = os.path.expanduser("~/.local/share/yagi")
+def default_root() -> str:
+    """The published copy: $XDG_DATA_HOME/yagi, or ~/.local/share/yagi."""
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(base, "yagi")
 # A record finish or Guide update can still be running from an older copy.
 KEEP_NEWEST = 3
 KEEP_SECS = 24 * 3600
@@ -82,10 +87,11 @@ def snapshot_paths(repo: str) -> List[str]:
 
 
 def _git(repo: str, *args: str) -> bytes:
-    # CI checks this tree out as another user inside a container. Git then
-    # refuses the directory unless safe.directory is set for this command.
+    # CI checks this tree out as another user inside a container. Name this
+    # checkout. A star would mark every directory on the machine as safe.
+    repo = os.path.abspath(repo)
     result = capture(
-        ["git", "-c", "safe.directory=*", "-C", repo, *args],
+        ["git", "-c", f"safe.directory={repo}", "-C", repo, *args],
         max_bytes=64 * 1024 * 1024,
         timeout=120,
         check=True,
@@ -93,7 +99,8 @@ def _git(repo: str, *args: str) -> bytes:
     return result.stdout
 
 
-def current_sha(root: str = DEFAULT_ROOT) -> str:
+def current_sha(root: Optional[str] = None) -> str:
+    root = default_root() if root is None else root
     try:
         return os.path.basename(os.readlink(os.path.join(root, "current")))
     except OSError:
@@ -112,8 +119,9 @@ def _prune(releases: str, keep: set, now: float) -> None:
         shutil.rmtree(entry.path, ignore_errors=True)
 
 
-def publish(repo: str, root: str = DEFAULT_ROOT, now: Optional[float] = None) -> str:
+def publish(repo: str, root: Optional[str] = None, now: Optional[float] = None) -> str:
     """Unpack HEAD and point current at it. Returns the short sha."""
+    root = default_root() if root is None else root
     sha = _git(repo, "rev-parse", "--short=12", "HEAD").decode().strip()
     releases = os.path.join(root, "releases")
     os.makedirs(releases, mode=0o700, exist_ok=True)
@@ -146,7 +154,8 @@ def publish(repo: str, root: str = DEFAULT_ROOT, now: Optional[float] = None) ->
     return sha
 
 
-def source_repo(root: str = DEFAULT_ROOT) -> str:
+def source_repo(root: Optional[str] = None) -> str:
+    root = default_root() if root is None else root
     try:
         with open(os.path.join(root, "source"), encoding="utf-8") as f:
             return f.read().strip()
@@ -154,8 +163,9 @@ def source_repo(root: str = DEFAULT_ROOT) -> str:
         return ""
 
 
-def refresh(root: str = DEFAULT_ROOT) -> Optional[str]:
+def refresh(root: Optional[str] = None) -> Optional[str]:
     """Publish the source repo's HEAD if it moved. Returns the new sha, or None."""
+    root = default_root() if root is None else root
     repo = source_repo(root)
     if not repo:
         return None
@@ -173,8 +183,9 @@ def unit_dir() -> str:
     return os.path.join(config, "systemd", "user")
 
 
-def install(repo: str, root: str = DEFAULT_ROOT, units: Optional[str] = None, run=subprocess.run) -> str:
+def install(repo: str, root: Optional[str] = None, units: Optional[str] = None, run=subprocess.run) -> str:
     """Publish HEAD and start the record timer. Returns the sha it runs."""
+    root = default_root() if root is None else root
     sha = publish(repo, root)
     units = units or unit_dir()
     os.makedirs(units, exist_ok=True)
@@ -185,8 +196,9 @@ def install(repo: str, root: str = DEFAULT_ROOT, units: Optional[str] = None, ru
     return sha
 
 
-def uninstall(root: str = DEFAULT_ROOT, units: Optional[str] = None, run=subprocess.run) -> None:
+def uninstall(root: Optional[str] = None, units: Optional[str] = None, run=subprocess.run) -> None:
     """Stop the timer and remove its copies. Recordings and settings stay."""
+    root = default_root() if root is None else root
     run(["systemctl", "--user", "disable", "--now", TIMER], check=False)
     units = units or unit_dir()
     for name in UNITS:

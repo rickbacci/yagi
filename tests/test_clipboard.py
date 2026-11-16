@@ -138,6 +138,43 @@ class TestClipboardText(unittest.TestCase):
         self.assertEqual(lines[-3:], ["--no-newline", "-t", "text/plain"])
         self.assertNotIn("News", " ".join(lines))
 
+    def test_a_full_guide_search_fits_and_one_more_byte_does_not(self):
+        from engine.clipboard import MAX_BYTES
+
+        # GuidePage.qml searchLimit is 64 UTF-16 code units. U+4E00 is one
+        # code unit and three UTF-8 bytes, so a full field is 192 bytes.
+        field = "一" * 64
+        self.assertEqual(MAX_BYTES, 256)
+        self.assertEqual(len(field.encode()), 192)
+        self.assertLess(len(field.encode()), MAX_BYTES)
+        with tempfile.TemporaryDirectory() as folder:
+            old = os.environ.get("PATH", "")
+            os.environ["PATH"] = folder + os.pathsep + old
+            try:
+                _install_paste(
+                    folder,
+                    "#!/bin/sh\npython3 -c 'import sys; sys.stdout.buffer.write(bytes.fromhex(\""
+                    + field.encode().hex()
+                    + "\"))'\n",
+                )
+                self.assertEqual(read_clipboard_text(timeout=2), field)
+                _install_paste(
+                    folder,
+                    "#!/bin/sh\npython3 -c 'import sys; sys.stdout.buffer.write(b\"x\"*"
+                    + str(MAX_BYTES)
+                    + ")'\n",
+                )
+                self.assertEqual(read_clipboard_text(timeout=2), "x" * MAX_BYTES)
+                _install_paste(
+                    folder,
+                    "#!/bin/sh\npython3 -c 'import sys; sys.stdout.buffer.write(b\"x\"*"
+                    + str(MAX_BYTES + 1)
+                    + ")'\n",
+                )
+                self.assertEqual(read_clipboard_text(timeout=2), "x" * MAX_BYTES)
+            finally:
+                os.environ["PATH"] = old
+
 
 if __name__ == "__main__":
     unittest.main()

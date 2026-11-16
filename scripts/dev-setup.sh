@@ -15,7 +15,7 @@ fi
 
 "${APT[@]}" update
 "${APT[@]}" install -y \
-  python3 luajit psmisc nodejs ffmpeg mpv procps \
+  python3 python3-pip luajit psmisc nodejs ffmpeg mpv procps jq \
   qt6-declarative-dev-tools \
   qml6-module-qtquick \
   qml6-module-qtquick-controls \
@@ -37,6 +37,14 @@ if ! command -v lua >/dev/null 2>&1; then
 fi
 if [ -x /usr/lib/qt6/bin/qmltestrunner ] && ! command -v qmltestrunner >/dev/null 2>&1; then
   "${LINK[@]}" /usr/lib/qt6/bin/qmltestrunner /usr/local/bin/qmltestrunner
+fi
+if [ -x /usr/lib/qt6/bin/qmllint ] && ! command -v qmllint >/dev/null 2>&1; then
+  "${LINK[@]}" /usr/lib/qt6/bin/qmllint /usr/local/bin/qmllint
+fi
+if [ "$(id -u)" -eq 0 ]; then
+  python3 -m pip install --break-system-packages ruff
+else
+  sudo -n python3 -m pip install --break-system-packages ruff
 fi
 
 # A user manager lets the cgroup test run. Machines without systemd (the

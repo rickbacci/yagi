@@ -125,6 +125,56 @@ class TestRelease(unittest.TestCase):
         self.assertFalse(os.path.exists(self.root))
         self.assertIn(["systemctl", "--user", "disable", "--now", TIMER], calls)
 
+    def test_data_home_is_the_release_root(self):
+        from engine.release import default_root
+
+        with unittest.mock.patch.dict(os.environ, {"XDG_DATA_HOME": self.tmp.name}):
+            self.assertEqual(default_root(), os.path.join(self.tmp.name, "yagi"))
+
+    def test_without_data_home_the_release_root_is_local_share(self):
+        from engine.release import default_root
+
+        env = {key: value for key, value in os.environ.items() if key != "XDG_DATA_HOME"}
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(default_root(), os.path.expanduser("~/.local/share/yagi"))
+
+    def test_the_timer_unit_follows_data_home(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "systemd", "user", "yagi-record.service"), encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("${XDG_DATA_HOME:-$HOME/.local/share}/yagi/current/bin/yagi", text)
+
+    def test_git_names_this_checkout(self):
+        from engine import release
+
+        seen = {}
+
+        def fake(argv, **_kw):
+            seen["argv"] = list(argv)
+            return subprocess.CompletedProcess(argv, 0, b"abc\n", b"")
+
+        with unittest.mock.patch.object(release, "capture", side_effect=fake):
+            self.assertEqual(release._git(self.repo, "rev-parse", "HEAD"), b"abc\n")
+        self.assertIn(f"safe.directory={os.path.abspath(self.repo)}", seen["argv"])
+        self.assertNotIn("safe.directory=*", seen["argv"])
+
+
+class TestReleaseTag(unittest.TestCase):
+    def test_the_tag_checker_uses_manifest_and_does_not_publish(self):
+        import subprocess
+        import sys
+
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "check-release-tag.py")
+        good = subprocess.run([sys.executable, script, "v0.1.7"], capture_output=True, text=True, timeout=30)
+        bad = subprocess.run([sys.executable, script, "v9.9.9"], capture_output=True, text=True, timeout=30)
+        notes = subprocess.run([sys.executable, script, "--notes"], capture_output=True, text=True, timeout=30)
+        self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+        self.assertIn("v0.1.7 matches manifest.json", good.stdout)
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("does not match manifest.json", bad.stdout)
+        self.assertEqual(notes.returncode, 0, notes.stderr)
+        self.assertIn("yagi install", notes.stdout.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

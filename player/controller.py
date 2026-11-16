@@ -38,9 +38,9 @@ from engine.dvr import MIN_PLAYABLE_BYTES
 from engine.hidden import is_hidden_channel, load_hidden
 from engine.pool import BothTunersBusy
 from engine.timeshift import (
-    LIVE_SLACK,
+    LIVE_SLACK as LIVE_SLACK,
     Timeshift,
-    align_ts,
+    align_ts as align_ts,
     is_timeshift_path,
 )
 from player.transport import Transport
@@ -914,14 +914,29 @@ class MpvController:
         cmd.append(f"--log-file={log_path}")
         cmd.append("--script-opts=" + ",".join(script_opts))
         cmd.append(play_url)
-        self.proc = subprocess.Popen(
-            own_scope(cmd, slice_name=LIVE_SLICE),
-            stdin=stdin,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            pass_fds=tuple(getattr(self, "_play_link", None).fds) if getattr(self, "_play_link", None) else (),
-        )
+        try:
+            self.proc = subprocess.Popen(
+                own_scope(cmd, slice_name=LIVE_SLICE),
+                stdin=stdin,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                pass_fds=tuple(getattr(self, "_play_link", None).fds) if getattr(self, "_play_link", None) else (),
+            )
+        except FileNotFoundError:
+            self.proc = None
+            if fifo_fd is not None:
+                try:
+                    os.close(fifo_fd)
+                except OSError:
+                    pass
+                Timeshift.stop_follow()
+            link = getattr(self, "_play_link", None)
+            if link is not None:
+                link.release()
+                self._play_link = None
+            Timeshift.fail_tune(channel or "", station or "", message="mpv is not installed.")
+            return False
         if fifo_fd is not None:
             os.close(fifo_fd)
         chmod_private_file(log_path)

@@ -7,6 +7,12 @@ field stays read-only so Qt never does that. Paste comes through here:
 a short deadline and a hard byte cap, and the text is never put on argv.
 The cap is applied while the bytes are read, and the whole wl-paste
 process group is stopped once the cap or the deadline is hit.
+
+The only caller is guide search (plugin/GuidePage.qml searchLimit, and
+bin/yagi clipboard-text). The field keeps 64 UTF-16 code units. The
+largest UTF-8 encoding of one code unit is 3 bytes, so a full field is
+192 bytes. 256 is the next round bound and leaves 64 bytes of headroom.
+Nothing in Yagi pastes a URL, a path, or tuner data from the clipboard.
 """
 
 import shutil

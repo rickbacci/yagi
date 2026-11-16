@@ -35,34 +35,53 @@ class TestPreReview(unittest.TestCase):
         )
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertIn("Pre-review check passed.", res.stdout)
+        for title in (
+            "Parsers stop at the end of the buffer, and repeated sections do not pile up.",
+            "Captured command output is size-capped, and a timeout kills the process group.",
+            "The release snapshot stays on the allowlist, and automatic setup does not use privilege.",
+            "Clipboard paste is capped at 256 bytes, which holds a full guide search.",
+            "Git names the checkout it reads, and the read is size-capped.",
+            "A captured command never signals the caller's own process group.",
+            "A machine with no tuner is not told that both tuners are busy.",
+            "A missing mpv does not crash the player.",
+            "The release copy and the record timer follow XDG_DATA_HOME.",
+            "Agent and dev files stay out of the plugin copy.",
+            "Omarchy plugin validate accepts this plugin.",
+            "qmllint accepts the plugin QML.",
+            "ruff accepts the Python.",
+        ):
+            self.assertIn(f"PASS  {title}", res.stdout)
 
     def test_the_blocked_commit_fails_each_finding(self):
         parent = tempfile.mkdtemp(prefix="pre-review-")
         path = os.path.join(parent, "old")
+        # The checkout under test is the only directory git has to trust.
+        # A worktree we create is owned by us, so it does not need its own entry.
+        git = ["git", "-c", f"safe.directory={ROOT}", "-C", ROOT]
         try:
             have = subprocess.run(
-                ["git", "-c", "safe.directory=*", "-C", ROOT, "cat-file", "-t", BLOCKED],
-                capture_output=True, text=True,
+                git + ["cat-file", "-t", BLOCKED],
+                capture_output=True, text=True, timeout=30,
             )
             if have.returncode != 0:
                 fetched = subprocess.run(
-                    ["git", "-c", "safe.directory=*", "-C", ROOT, "fetch", "--depth=1", "origin", BLOCKED],
-                    capture_output=True, text=True,
+                    git + ["fetch", "--depth=1", "origin", BLOCKED],
+                    capture_output=True, text=True, timeout=120,
                 )
                 self.assertEqual(fetched.returncode, 0, fetched.stderr)
             added = subprocess.run(
-                ["git", "-c", "safe.directory=*", "-C", ROOT, "worktree", "add", "--detach", path, BLOCKED],
-                capture_output=True, text=True,
+                git + ["worktree", "add", "--detach", path, BLOCKED],
+                capture_output=True, text=True, timeout=120,
             )
             self.assertEqual(added.returncode, 0, added.stderr)
             res = subprocess.run(
                 [sys.executable, CHECK, path],
-                capture_output=True, text=True,
+                capture_output=True, text=True, timeout=180,
             )
         finally:
             subprocess.run(
-                ["git", "-c", "safe.directory=*", "-C", ROOT, "worktree", "remove", "--force", path],
-                capture_output=True,
+                git + ["worktree", "remove", "--force", path],
+                capture_output=True, timeout=60,
             )
             shutil.rmtree(parent, ignore_errors=True)
         self.assertNotEqual(res.returncode, 0, res.stdout)

@@ -1,6 +1,7 @@
 """A captured child must not be able to signal the caller's process group."""
 
 import os
+import signal
 import subprocess
 import time
 import unittest
@@ -60,26 +61,34 @@ class TestProcessGroup(unittest.TestCase):
         )
         import stat
         import tempfile
-        with tempfile.TemporaryDirectory() as folder:
-            path = os.path.join(folder, "pid")
-            exe = os.path.join(folder, "producer")
-            with open(exe, "w", encoding="utf-8") as handle:
-                handle.write(script)
-            os.chmod(exe, stat.S_IRWXU)
-            env = dict(os.environ)
-            env["P"] = path
-            capture([exe], max_bytes=32, timeout=2, env=env)
-            with open(path, encoding="utf-8") as handle:
-                sleep_pid = int(handle.read().strip())
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline:
-            try:
-                os.kill(sleep_pid, 0)
-            except ProcessLookupError:
-                break
-            time.sleep(0.05)
-        else:
-            self.fail("descendant was still running")
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                path = os.path.join(folder, "pid")
+                exe = os.path.join(folder, "producer")
+                with open(exe, "w", encoding="utf-8") as handle:
+                    handle.write(script)
+                os.chmod(exe, stat.S_IRWXU)
+                env = dict(os.environ)
+                env["P"] = path
+                capture([exe], max_bytes=32, timeout=2, env=env)
+                with open(path, encoding="utf-8") as handle:
+                    sleep_pid = int(handle.read().strip())
+                deadline = time.monotonic() + 1.0
+                while time.monotonic() < deadline:
+                    try:
+                        os.kill(sleep_pid, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.05)
+                else:
+                    os.kill(sleep_pid, signal.SIGKILL)
+                    self.fail("descendant was still running")
+        finally:
+            if sleep_pid:
+                try:
+                    os.kill(sleep_pid, signal.SIGKILL)
+                except OSError:
+                    pass
 
 
 if __name__ == "__main__":

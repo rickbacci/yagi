@@ -160,4 +160,4 @@ From the repo root:
 python3 scripts/pre_review.py
 ```
 
-Exit 0 means the check passed. A failure names the class in plain English: snapshot contents, unbounded command output, a parser that reads past its buffer, or privilege in a file an agent runs on its own. `scripts/dev-setup.sh` installs packages and enables linger; run that only when you mean to. The automatic setup hook does not.
+Exit 0 means the check passed. A failure names the class in plain English: snapshot contents, unbounded command output, a parser that reads past its buffer, privilege in a file an agent runs on its own, the guide paste cap, and the plugin checks (`omarchy plugin validate`, `qmllint`, `ruff`). `scripts/dev-setup.sh` installs packages and enables linger; run that only when you mean to. The automatic setup hook does not.

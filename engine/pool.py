@@ -12,7 +12,7 @@ import os
 import time
 from typing import Dict, List, Optional, Tuple
 
-from engine.paths import GUIDE_STATUS_PATH, SCAN_STATUS_PATH, get_runtime_socket
+from engine.paths import GUIDE_STATUS_PATH, get_runtime_socket
 
 DVB_ROOT = "/dev/dvb"
 SCAN_HEARTBEAT_SECS = 15
@@ -47,7 +47,12 @@ def adapters() -> Tuple[int, ...]:
 
 
 def busy_text() -> str:
-    return "The tuner is busy." if len(adapters()) == 1 else "Both tuners are busy."
+    count = len(adapters())
+    if count <= 0:
+        return "No tuner is connected."
+    if count == 1:
+        return "The tuner is busy."
+    return "Both tuners are busy."
 
 
 def _read_json(path: str) -> Dict:
@@ -103,6 +108,8 @@ def pick_live(held: Optional[Dict[int, str]] = None) -> int:
     """The tuner live TV should use. Raises BothTunersBusy when nothing can give way."""
     held = claims() if held is None else held
     order = adapters()
+    if not order:
+        raise BothTunersBusy(busy_text())
     for adapter in order:
         if held.get(adapter) == "live":
             return adapter
