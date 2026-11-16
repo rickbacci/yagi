@@ -840,26 +840,29 @@ def _qmllint(root: str) -> List[str]:
     if not files:
         return ["plugin/ has no QML to lint."]
     # Import and type warnings need the Omarchy shell modules, which CI does
-    # not have. Syntax errors still fail. The test stubs stand in for the shell.
-    argv = [
-        binary,
-        "--import", "info",
-        "--unqualified", "info",
-        "--property", "info",
-        "--type", "info",
-        "--required", "info",
-        "--alias", "info",
-        "--signal", "info",
-        "--deprecated", "info",
-    ]
+    # not have. Ubuntu's qmllint can demote those to info. Arch's current
+    # binary does not have those flags, so there a syntax error is what fails.
+    help_res = _tool([binary, "--help"], 30)
+    help_text = (help_res.stdout or "") + "\n" + (help_res.stderr or "")
+    argv = [binary]
+    can_demote = False
+    for flag in (
+        "import", "unqualified", "property", "type", "required", "alias", "signal", "deprecated",
+    ):
+        if f"--{flag}" in help_text:
+            argv.extend([f"--{flag}", "info"])
+            can_demote = True
     stubs = os.path.join(root, "tests", "qmlstub")
-    if os.path.isdir(stubs):
+    if os.path.isdir(stubs) and "-I" in help_text:
         argv.extend(["-I", stubs])
     argv.extend(files)
     res = _tool(argv, 120)
+    text = (res.stderr or "") + "\n" + (res.stdout or "")
     if res.returncode == 0:
         return []
-    detail = _snippet((res.stderr or "") + "\n" + (res.stdout or ""))
+    if not can_demote and "Syntax error" not in text:
+        return []
+    detail = _snippet(text)
     return [f"qmllint failed: {detail or 'exit ' + str(res.returncode)}"]
 
 
