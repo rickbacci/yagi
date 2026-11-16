@@ -82,8 +82,10 @@ def snapshot_paths(repo: str) -> List[str]:
 
 
 def _git(repo: str, *args: str) -> bytes:
+    # CI checks this tree out as another user inside a container. Git then
+    # refuses the directory unless safe.directory is set for this command.
     result = capture(
-        ["git", "-C", repo, *args],
+        ["git", "-c", "safe.directory=*", "-C", repo, *args],
         max_bytes=64 * 1024 * 1024,
         timeout=120,
         check=True,

@@ -41,7 +41,7 @@ class TestPreReview(unittest.TestCase):
         path = os.path.join(parent, "old")
         try:
             added = subprocess.run(
-                ["git", "-C", ROOT, "worktree", "add", "--detach", path, BLOCKED],
+                ["git", "-c", "safe.directory=*", "-C", ROOT, "worktree", "add", "--detach", path, BLOCKED],
                 capture_output=True, text=True,
             )
             self.assertEqual(added.returncode, 0, added.stderr)
@@ -50,7 +50,10 @@ class TestPreReview(unittest.TestCase):
                 capture_output=True, text=True,
             )
         finally:
-            subprocess.run(["git", "-C", ROOT, "worktree", "remove", "--force", path], capture_output=True)
+            subprocess.run(
+                ["git", "-c", "safe.directory=*", "-C", ROOT, "worktree", "remove", "--force", path],
+                capture_output=True,
+            )
             shutil.rmtree(parent, ignore_errors=True)
         self.assertNotEqual(res.returncode, 0, res.stdout)
         text = res.stdout + res.stderr

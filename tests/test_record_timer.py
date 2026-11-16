@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -132,7 +133,14 @@ class TestOwnScope(unittest.TestCase):
             self.assertNotEqual(group, mine)
         finally:
             proc.kill()
-            proc.wait()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                proc.wait(timeout=5)
 
 
 class TestGuideStepsAside(unittest.TestCase):

@@ -453,10 +453,14 @@ def _publish_filters(source: str) -> bool:
 
 
 def _tracked(root: str) -> List[str]:
-    res = subprocess.run(
-        ["git", "-C", root, "ls-files", "-z"],
-        check=True, capture_output=True,
-    )
+    try:
+        res = subprocess.run(
+            ["git", "-c", "safe.directory=*", "-C", root, "ls-files", "-z"],
+            check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        err = (exc.stderr or b"").decode("utf-8", "replace").strip()
+        raise OSError(err or f"git ls-files exited {exc.returncode}") from exc
     return [part.decode("utf-8", "surrogateescape") for part in res.stdout.split(b"\0") if part]
 
 
