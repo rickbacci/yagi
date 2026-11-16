@@ -1311,11 +1311,11 @@ class TestPicturePlacement(unittest.TestCase):
         box_w = (height * 16) // 27
         self.assertEqual(picture_span(mon), (width - box_w - 40, height - box_h - 40, box_w, box_h))
 
-    @patch("player.controller.subprocess.run")
+    @patch("player.controller.capture")
     def test_a_new_picture_is_placed_then_pinned(self, mock_run):
         tv = {"class": "yagi", "address": "0xabc", "pinned": False, "fullscreen": 0, "monitor": 0}
 
-        def fake_run(cmd, capture_output=True, text=True):
+        def fake_run(cmd, **_kw):
             m = MagicMock()
             m.returncode = 0
             m.stderr = ""
@@ -1335,11 +1335,11 @@ class TestPicturePlacement(unittest.TestCase):
             + ['hl.dsp.window.pin({ window = "address:0xabc" })'],
         )
 
-    @patch("player.controller.subprocess.run")
+    @patch("player.controller.capture")
     def test_a_fullscreen_picture_is_left_alone(self, mock_run):
         tv = {"class": "yagi", "address": "0xabc", "pinned": False, "fullscreen": 2, "monitor": 0}
 
-        def fake_run(cmd, capture_output=True, text=True):
+        def fake_run(cmd, **_kw):
             m = MagicMock()
             m.returncode = 0
             m.stderr = ""
@@ -1352,7 +1352,7 @@ class TestPicturePlacement(unittest.TestCase):
 
 
 class TestOmarchyFullscreen(unittest.TestCase):
-    @patch("player.controller.subprocess.run")
+    @patch("player.controller.capture")
     def test_unpins_tv_then_uses_omarchy_dispatcher(self, mock_run):
         tv = {
             "class": "yagi",
@@ -1362,7 +1362,7 @@ class TestOmarchyFullscreen(unittest.TestCase):
         }
         after = {**tv, "pinned": False, "fullscreen": 2}
 
-        def fake_run(cmd, capture_output=True, text=True):
+        def fake_run(cmd, **_kw):
             m = MagicMock()
             m.returncode = 0
             m.stderr = ""
@@ -1387,9 +1387,9 @@ class TestOmarchyFullscreen(unittest.TestCase):
         )
         self.assertEqual(len(dispatched), 2)
 
-    @patch("player.controller.subprocess.run")
+    @patch("player.controller.capture")
     def test_other_windows_keep_stock_omarchy_fullscreen(self, mock_run):
-        def fake_run(cmd, capture_output=True, text=True):
+        def fake_run(cmd, **_kw):
             m = MagicMock()
             m.returncode = 0
             m.stderr = ""
@@ -1403,7 +1403,7 @@ class TestOmarchyFullscreen(unittest.TestCase):
         _toggle_omarchy_fullscreen()
         self.assertEqual(_dispatched(mock_run), [OMARCHY_FULLSCREEN_LUA])
 
-    @patch("player.controller.subprocess.run")
+    @patch("player.controller.capture")
     def test_exit_only_leaves_fullscreen_and_pins_again(self, mock_run):
         tv = {
             "class": "yagi",
@@ -1414,7 +1414,7 @@ class TestOmarchyFullscreen(unittest.TestCase):
         }
         after = {**tv, "fullscreen": 0}
 
-        def fake_run(cmd, capture_output=True, text=True):
+        def fake_run(cmd, **_kw):
             m = MagicMock()
             m.returncode = 0
             m.stderr = ""
@@ -1435,11 +1435,11 @@ class TestOmarchyFullscreen(unittest.TestCase):
         self.assertEqual(dispatched[1:-1], _tv_place_lua("0xabc", (2030, 728, 682, 384)))
         self.assertEqual(dispatched[-1], 'hl.dsp.window.pin({ window = "address:0xabc" })')
 
-    @patch("player.controller.subprocess.run")
+    @patch("player.controller.capture")
     def test_exit_only_does_nothing_when_the_picture_is_small(self, mock_run):
         tv = {"class": "yagi", "address": "0xabc", "pinned": True, "fullscreen": 0}
 
-        def fake_run(cmd, capture_output=True, text=True):
+        def fake_run(cmd, **_kw):
             m = MagicMock()
             m.returncode = 0
             m.stderr = ""

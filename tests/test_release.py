@@ -85,6 +85,29 @@ class TestRelease(unittest.TestCase):
         self.assertEqual(moved, current_sha(self.root))
         self.assertEqual(self._current(), "two")
 
+    def test_agent_and_dev_files_stay_out_of_the_snapshot(self):
+        os.makedirs(os.path.join(self.repo, ".cursor"))
+        os.makedirs(os.path.join(self.repo, "scripts"))
+        os.makedirs(os.path.join(self.repo, "engine"))
+        for path, text in (
+            ("AGENTS.md", "agent\n"),
+            (os.path.join(".cursor", "environment.json"), "{}\n"),
+            (os.path.join("scripts", "dev-setup.sh"), "#!/bin/sh\n"),
+            (".env", "TOKEN=1\n"),
+            (os.path.join("engine", ".env"), "TOKEN=1\n"),
+        ):
+            with open(os.path.join(self.repo, path), "w", encoding="utf-8") as handle:
+                handle.write(text)
+        self._commit("one")
+        publish(self.repo, self.root)
+        current = os.path.join(self.root, "current")
+        self.assertEqual(self._current(), "one")
+        self.assertFalse(os.path.exists(os.path.join(current, "AGENTS.md")))
+        self.assertFalse(os.path.exists(os.path.join(current, ".cursor")))
+        self.assertFalse(os.path.exists(os.path.join(current, "scripts")))
+        self.assertFalse(os.path.exists(os.path.join(current, ".env")))
+        self.assertFalse(os.path.exists(os.path.join(current, "engine", ".env")))
+
     def test_install_starts_the_timer_and_uninstall_leaves_nothing(self):
         os.makedirs(os.path.join(self.repo, "systemd", "user"))
         for name in UNITS:

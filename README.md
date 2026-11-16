@@ -151,3 +151,13 @@ The picture is a floating window of class `yagi`, at the bottom right, about a t
 If an older rule pins class `yagi`, fullscreen will not stick: the rule pins the window again the moment it leaves fullscreen. The rule that leaves pinning to Yagi is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Development notes and tests are in that same file.
+
+## Before a review
+
+From the repo root:
+
+```bash
+python3 scripts/pre_review.py
+```
+
+Exit 0 means the check passed. A failure names the class in plain English: snapshot contents, unbounded command output, a parser that reads past its buffer, or privilege in a file an agent runs on its own. `scripts/dev-setup.sh` installs packages and enables linger; run that only when you mean to. The automatic setup hook does not.

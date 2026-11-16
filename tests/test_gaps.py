@@ -149,11 +149,11 @@ class TestChannelHelpers(unittest.TestCase):
 
         with patch.object(MpvController, "is_running", return_value=False), \
              patch("player.controller._stated_player_pid", return_value=0), \
-             patch("player.controller.subprocess.check_output", return_value=(
+             patch("player.controller.capture", return_value=subprocess.CompletedProcess(["pgrep"], 0, stdout=(
                  "4321 mpv --input-ipc-server=/no/such/sock --wayland-app-id=yagi\n"
                  "4322 mpv --input-ipc-server=/real/yagi-mpv.sock --wayland-app-id=yagi\n"
                  "99 other\n"
-             )), \
+             ))), \
              patch("player.controller.os.kill", side_effect=kill), \
              patch("player.controller.Timeshift.load_state", return_value={"pid": 7, "follow_pid": 8}), \
              patch("player.controller.os.path.exists", return_value=False):
@@ -248,7 +248,7 @@ class TestTimeshiftStop(unittest.TestCase):
                 threading.Thread(target=serve, daemon=True).start()
                 self.assertTrue(ready.wait(2), "follow socket did not start listening")
                 self.assertEqual(Timeshift.follow_pos(), 1880)
-            with patch("engine.timeshift.subprocess.check_output", return_value="12 mpv --stream-dump=/x yagi/timeshift/live.ts\nbad\n1 mpv --stream-dump=/x yagi/timeshift/live.ts\n"), \
+            with patch("engine.timeshift.capture", return_value=subprocess.CompletedProcess(["pgrep"], 0, stdout="12 mpv --stream-dump=/x yagi/timeshift/live.ts\nbad\n1 mpv --stream-dump=/x yagi/timeshift/live.ts\n")), \
                  patch.object(Timeshift, "_kill_pid") as kill:
                 Timeshift._reap_orphan_dumps(keep_pid=12)
             kill.assert_not_called()
@@ -259,16 +259,16 @@ class TestTimeshiftStop(unittest.TestCase):
                 "43 bash -c pgrep -af tower_dump.py; tail /c/yagi/timeshift/dump.log --stream-dump=\n"
                 "44 python3 /r/engine/tower_dump.py 0 551028615 /other/yagi/timeshift/live.ts /s /l\n"
             )
-            with patch("engine.timeshift.subprocess.check_output", return_value=listing), \
+            with patch("engine.timeshift.capture", return_value=subprocess.CompletedProcess(["pgrep"], 0, stdout=listing)), \
                  patch("engine.timeshift.TIMESHIFT_DIR", "/c/yagi/timeshift"), \
                  patch.object(Timeshift, "_kill_pid") as kill:
                 Timeshift._reap_orphan_dumps()
             self.assertEqual([c.args[0] for c in kill.call_args_list], [40, 42])
-            with patch("engine.timeshift.subprocess.check_output", side_effect=OSError):
+            with patch("engine.timeshift.capture", side_effect=OSError):
                 Timeshift._reap_orphan_dumps()
             with patch("engine.timeshift.systemd_user", return_value=True), \
                  patch("engine.timeshift.stop_unit", return_value=True) as stop, \
-                 patch("engine.timeshift.subprocess.check_output") as sweep:
+                 patch("engine.timeshift.capture") as sweep:
                 Timeshift._reap_orphan_dumps()
             self.assertEqual([c.args[0] for c in stop.call_args_list], ["yagi-dump0.scope", "yagi-dump1.scope"])
             sweep.assert_not_called()
@@ -277,13 +277,13 @@ class TestTimeshiftStop(unittest.TestCase):
         runs = [subprocess.TimeoutExpired("fuser", 0.4), MagicMock(returncode=1)]
         with patch("engine.timeshift.os.path.exists", return_value=True), \
              patch("engine.timeshift.time.sleep"), \
-             patch("engine.timeshift.subprocess.run", side_effect=runs) as run:
+             patch("engine.timeshift.capture", side_effect=runs) as run:
             Timeshift._wait_frontend_free(timeout=1, adapter_id=0)
         self.assertEqual(run.call_count, 2)
 
     def test_wait_frontend_free_returns_without_fuser(self):
         with patch("engine.timeshift.os.path.exists", return_value=True), \
-             patch("engine.timeshift.subprocess.run", side_effect=FileNotFoundError) as run:
+             patch("engine.timeshift.capture", side_effect=FileNotFoundError) as run:
             Timeshift._wait_frontend_free(timeout=1, adapter_id=0)
         self.assertEqual(run.call_count, 1)
 

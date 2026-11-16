@@ -426,6 +426,66 @@ class TestPsip(unittest.TestCase):
             self.assertEqual(kept["error"], "zap failed")
             self.assertFalse(kept["running"])
 
+    def _declare_count(self, section, count):
+        from engine.psip import mpeg_crc32
+
+        data = bytearray(section)
+        data[9] = count & 0xFF
+        crc = mpeg_crc32(bytes(data[:-4]))
+        data[-4:] = crc.to_bytes(4, "big")
+        return bytes(data)
+
+    def test_a_short_eit_does_not_invent_events(self):
+        from engine.psip import parse_eit
+
+        empty = self._declare_count(pack_eit_section(3, []), 255)
+        self.assertEqual(parse_eit(empty)["events"], [])
+        gps = gps_for_eastern(2026, 9, 21, 19, 0)
+        one = self._declare_count(pack_eit_section(3, [{
+            "event_id": 11,
+            "title": "Local News",
+            "gps_start": gps,
+            "duration_sec": 1800,
+        }]), 255)
+        parsed = parse_eit(one)
+        self.assertEqual([row["title"] for row in parsed["events"]], ["Local News"])
+
+    def test_repeated_short_sections_do_not_pile_up(self):
+        empty = self._declare_count(pack_eit_section(3, []), 255)
+        tvct = pack_tvct_section([{"short_name": "WJW", "major": 8, "minor": 1, "source_id": 3}])
+        none = parse_atsc_ts(b"", sections=[tvct, *([empty] * 40)])
+        self.assertEqual(none.get("8.1", []), [])
+        gps = gps_for_eastern(2026, 9, 21, 19, 0)
+        one = self._declare_count(pack_eit_section(3, [{
+            "event_id": 11,
+            "title": "Local News",
+            "gps_start": gps,
+            "duration_sec": 1800,
+        }]), 255)
+        programs = parse_atsc_ts(b"", sections=[tvct, *([one] * 40)])
+        self.assertEqual(len(programs["8.1"]), 1)
+        self.assertEqual(programs["8.1"][0]["title"], "Local News")
+
+    def test_events_are_capped_per_channel(self):
+        gps = gps_for_eastern(2026, 9, 21, 19, 0)
+        rows = [{
+            "event_id": i + 1,
+            "title": f"Show {i}",
+            "gps_start": gps + i * 60,
+            "duration_sec": 30,
+        } for i in range(6)]
+        tvct = pack_tvct_section([{"short_name": "WJW", "major": 8, "minor": 1, "source_id": 3}])
+        eit = pack_eit_section(3, rows)
+        with patch("engine.psip.MAX_EVENTS_PER_CHANNEL", 2), patch("engine.psip.MAX_EVENTS_TOTAL", 100):
+            programs = parse_atsc_ts(b"", sections=[tvct, eit])
+        self.assertEqual(len(programs["8.1"]), 2)
+
+    def test_a_short_string_and_channel_table_stop(self):
+        from engine.psip import parse_multiple_string, parse_tvct_rows
+
+        self.assertEqual(parse_multiple_string(bytes([255])), "")
+        self.assertEqual(parse_tvct_rows(self._declare_count(pack_tvct_section([]), 255)), {})
+
     def test_description_huffman_roundtrip(self):
         from engine.atsc_huffman import DESCRIPTION, decode_description, encode
 

@@ -241,7 +241,7 @@ class TestDvrEngine(unittest.TestCase):
                 raise FileNotFoundError("fuser")
 
             err = io.StringIO()
-            with patch("engine.episodes.subprocess.run", side_effect=missing_fuser), \
+            with patch("engine.episodes.capture", side_effect=missing_fuser), \
                     patch("engine.dvr.resolve_library_budget_bytes", return_value=1), \
                     redirect_stderr(err):
                 removed = DvrManager.enforce_library_budget(

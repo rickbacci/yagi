@@ -16,6 +16,7 @@ import threading
 from typing import Optional, Dict, Any, List
 from urllib.parse import unquote
 
+from engine.procio import capture
 from engine.paths import (
     MPV_SOCKET_PATH,
     CHANNELS_JSON_PATH,
@@ -85,11 +86,13 @@ TV_MARGIN = 40
 
 
 def _hypr_json(subcommand: str):
-    result = subprocess.run(
-        ["hyprctl", subcommand, "-j"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = capture(
+            ["hyprctl", subcommand, "-j"],
+            max_bytes=2 * 1024 * 1024, timeout=5, text=True, errors="replace",
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
     if result.returncode != 0:
         err = (result.stdout + result.stderr).strip()
         print(f"hyprctl {subcommand} -j failed: {err}", file=sys.stderr)
@@ -215,11 +218,13 @@ def ensure_tv_pinned(wait: float = 3.0) -> None:
 
 
 def _hypr_dispatch(lua: str) -> bool:
-    result = subprocess.run(
-        ["hyprctl", "dispatch", lua],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = capture(
+            ["hyprctl", "dispatch", lua],
+            max_bytes=65536, timeout=5, text=True, errors="replace",
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
     out = (result.stdout + result.stderr).strip()
     if result.returncode != 0 or (out and out != "ok"):
         print(f"hyprctl dispatch {lua!r} failed: {out}", file=sys.stderr)
@@ -763,12 +768,10 @@ class MpvController:
             pids.add(stated)
         ours = f"--input-ipc-server={self.socket_path}"
         try:
-            out = subprocess.check_output(
-                ["pgrep", "-a", "mpv"],
-                stderr=subprocess.DEVNULL,
-                text=True,
-            )
-            for line in out.splitlines():
+            res = capture(["pgrep", "-a", "mpv"], max_bytes=1024 * 1024, timeout=2, text=True)
+            if res.returncode != 0:
+                raise subprocess.CalledProcessError(res.returncode, ["pgrep", "-a", "mpv"])
+            for line in (res.stdout or "").splitlines():
                 args = line.split()
                 if "--wayland-app-id=yagi" not in args or ours not in args:
                     continue
@@ -776,7 +779,7 @@ class MpvController:
                     pids.add(int(line.split(None, 1)[0]))
                 except ValueError:
                     pass
-        except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
         dump_pid = int(Timeshift.load_state().get("pid") or 0)
         follow_pid = int(Timeshift.load_state().get("follow_pid") or 0)

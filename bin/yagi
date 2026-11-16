@@ -724,13 +724,8 @@ def _launch_service(cmd, unit: str, description: str, runtime_max_sec: int):
         subprocess.Popen(wrapped, stdin=subprocess.DEVNULL, start_new_session=True)
         return None
     try:
-        started = subprocess.run(
-            wrapped,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
+        from engine.procio import capture
+        started = capture(wrapped, max_bytes=65536, timeout=20, text=True)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return str(exc)
     if started.returncode != 0:

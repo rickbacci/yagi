@@ -13,6 +13,8 @@ import subprocess
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 
+from engine.procio import capture
+
 MIN_BREAK_SEC = 25
 MAX_BREAK_SEC = 7 * 60
 MAX_SPOT_SEC = 125
@@ -125,9 +127,9 @@ def ffmpeg_ads(path: str, side: Dict[str, Any]) -> List[List[float]]:
             "-af", "silencedetect=noise=-50dB:d=0.1",
             "-f", "null", "-",
         ]
-        res = subprocess.run(
-            cmd, capture_output=True, text=True, errors="replace",
-            timeout=DETECT_TIMEOUT_SEC, pass_fds=tuple(shield.fds),
+        res = capture(
+            cmd, max_bytes=8 * 1024 * 1024, timeout=DETECT_TIMEOUT_SEC,
+            text=True, errors="replace", pass_fds=tuple(shield.fds),
         )
     finally:
         shield.release()
@@ -164,10 +166,10 @@ def _with_program_table(path: str, side: Dict[str, Any], folder: str) -> Optiona
     dest = os.path.join(folder, "source.ts")
     shield = HeldLinks()
     try:
-        res = subprocess.run(
+        res = capture(
             ["nice", "-n", "19", "ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-i", shield.hide(path),
              *_maps(side), "-c", "copy", "-f", "mpegts", dest],
-            capture_output=True, timeout=DETECT_TIMEOUT_SEC, pass_fds=tuple(shield.fds),
+            max_bytes=1024 * 1024, timeout=DETECT_TIMEOUT_SEC, pass_fds=tuple(shield.fds),
         )
     finally:
         shield.release()
@@ -192,9 +194,9 @@ def comskip_ads(exe: str, path: str, side: Optional[Dict[str, Any]] = None) -> L
         edl = ""
         try:
             seen = shield.hide(source)
-            res = subprocess.run(
+            res = capture(
                 ["nice", "-n", "19", exe, f"--ini={ini}", f"--output={out}", "--quiet", seen],
-                capture_output=True, timeout=DETECT_TIMEOUT_SEC, pass_fds=tuple(shield.fds),
+                max_bytes=1024 * 1024, timeout=DETECT_TIMEOUT_SEC, pass_fds=tuple(shield.fds),
             )
             edl = os.path.join(out, os.path.splitext(os.path.basename(seen))[0] + ".edl")
             global last_comskip_failure
@@ -213,9 +215,9 @@ def media_seconds(path: str) -> float:
 
     shield = HeldLinks()
     try:
-        res = subprocess.run(
+        res = capture(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", shield.hide(path)],
-            capture_output=True, text=True, timeout=60, pass_fds=tuple(shield.fds),
+            max_bytes=65536, timeout=60, text=True, pass_fds=tuple(shield.fds),
         )
         return float(res.stdout.strip() or 0)
     except (OSError, subprocess.SubprocessError, ValueError):

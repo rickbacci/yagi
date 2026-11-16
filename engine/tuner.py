@@ -62,7 +62,10 @@ def _delivery_systems(fd: int) -> List[str]:
     count = max(0, min(8, struct.unpack_from("<I", blob, 48)[0]))
     names: List[str] = []
     for i in range(count):
-        value = struct.unpack_from("<I", blob, 16 + i * 4)[0]
+        off = 16 + i * 4
+        if off + 4 > len(blob):
+            break
+        value = struct.unpack_from("<I", blob, off)[0]
         name = _DELIVERY_NAMES.get(value)
         if name and name not in names:
             names.append(name)

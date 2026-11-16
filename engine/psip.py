@@ -34,6 +34,16 @@ GPS_UNIX_OFFSET = 315964800
 GPS_LEAP_SECONDS = 18
 EPG_ADAPTER = WORK_ADAPTER
 EPG_DWELL_SECS = 8.0
+# One tower's listings, kept while a dump is parsed. Repeated sections dedupe
+# as they arrive, and a hostile count cannot grow this without bound.
+MAX_EVENTS_PER_CHANNEL = 1024
+MAX_EVENTS_TOTAL = 4096
+MAX_SOURCES = 512
+MAX_DESCRIPTION_KEYS = 4096
+
+
+class ShortSection(Exception):
+    """The section ended before the field the table asked to read."""
 
 
 class BitWriter:
@@ -68,10 +78,10 @@ class BitReader:
         self.pos = 0
 
     def u(self, width: int) -> int:
+        if width < 0 or self.remaining() < width:
+            raise ShortSection()
         value = 0
         for _ in range(width):
-            if self.pos // 8 >= len(self.data):
-                return value
             byte = self.data[self.pos // 8]
             bit = 7 - (self.pos % 8)
             value = (value << 1) | ((byte >> bit) & 1)
@@ -79,6 +89,8 @@ class BitReader:
         return value
 
     def raw(self, nbytes: int) -> bytes:
+        if nbytes < 0 or self.remaining() < nbytes * 8:
+            raise ShortSection()
         out = bytearray()
         for _ in range(nbytes):
             out.append(self.u(8) & 0xFF)
@@ -143,19 +155,32 @@ def parse_multiple_string(data: bytes, strip: bool = True) -> str:
     if not data:
         return ""
     r = BitReader(data)
-    nstrings = r.u(8)
+    try:
+        nstrings = r.u(8)
+    except ShortSection:
+        return ""
     # Each string is one language. Its segments are pieces of one text.
     strings: List[tuple] = []
     for _ in range(nstrings):
-        lang = r.raw(3)
-        nseg = r.u(8)
-        pieces: List[str] = []
-        for _ in range(nseg):
-            compression = r.u(8)
-            mode = r.u(8)
-            nbytes = r.u(8)
-            chunk = r.raw(nbytes)
-            pieces.append(_segment_text(compression, mode, chunk))
+        # language (3) plus the segment count. Stop when the rest is shorter.
+        if r.remaining() < 32:
+            break
+        try:
+            lang = r.raw(3)
+            nseg = r.u(8)
+            pieces: List[str] = []
+            for _ in range(nseg):
+                if r.remaining() < 24:
+                    break
+                compression = r.u(8)
+                mode = r.u(8)
+                nbytes = r.u(8)
+                if r.remaining() < nbytes * 8:
+                    break
+                chunk = r.raw(nbytes)
+                pieces.append(_segment_text(compression, mode, chunk))
+        except ShortSection:
+            break
         text = "".join(pieces)
         if strip:
             text = text.strip()
@@ -165,6 +190,20 @@ def parse_multiple_string(data: bytes, strip: bool = True) -> str:
         if lang == b"eng":
             return text
     return strings[0][1] if strings else ""
+
+
+def _table_bytes(section: bytes) -> bytes:
+    """Table body that is actually present, without a CRC that was delivered."""
+    if len(section) < 4:
+        return b""
+    declared = ((section[1] & 0x0F) << 8) | section[2]
+    available = len(section) - 3
+    usable = min(max(0, declared), available)
+    if declared >= 4 and 3 + declared <= len(section):
+        usable -= 4
+    if usable <= 0:
+        return b""
+    return section[3:3 + usable]
 
 
 def _segment_text(compression: int, mode: int, chunk: bytes) -> str:
@@ -397,28 +436,41 @@ def parse_tvct(section: bytes) -> Dict[int, str]:
 
 def parse_tvct_rows(section: bytes) -> Dict[int, Dict[str, Any]]:
     """source_id to the broadcast's channel number and its MPEG program number."""
-    r = BitReader(section[8:] if len(section) > 8 else b"")
-    r.u(8)
-    nch = r.u(8)
+    body = _table_bytes(section)
+    # protocol_version sits 5 bytes into the body, then the channel count.
+    r = BitReader(body[5:] if len(body) > 5 else b"")
+    try:
+        r.u(8)
+        nch = r.u(8)
+    except ShortSection:
+        return {}
     mapping: Dict[int, Dict[str, Any]] = {}
     for _ in range(nch):
-        raw_name = r.raw(14)
+        # Fixed channel fields are 32 bytes before the descriptor loop.
+        if r.remaining() < 32 * 8:
+            break
         try:
-            short = raw_name.decode("utf-16-be").replace("\x00", "").strip()
-        except Exception:
-            short = ""
-        r.u(4)
-        major = r.u(10)
-        minor = r.u(10)
-        r.u(8)
-        r.u(32)
-        r.u(16)
-        program_number = r.u(16)
-        r.u(16)
-        source_id = r.u(16)
-        r.u(6)
-        dlen = r.u(10)
-        r.raw(dlen)
+            raw_name = r.raw(14)
+            try:
+                short = raw_name.decode("utf-16-be").replace("\x00", "").strip()
+            except Exception:
+                short = ""
+            r.u(4)
+            major = r.u(10)
+            minor = r.u(10)
+            r.u(8)
+            r.u(32)
+            r.u(16)
+            program_number = r.u(16)
+            r.u(16)
+            source_id = r.u(16)
+            r.u(6)
+            dlen = r.u(10)
+            if r.remaining() < dlen * 8:
+                break
+            r.raw(dlen)
+        except ShortSection:
+            break
         mapping[source_id] = {
             "number": f"{major}.{minor}",
             "program": program_number,
@@ -430,28 +482,41 @@ def parse_tvct_rows(section: bytes) -> Dict[int, Dict[str, Any]]:
 
 
 def parse_eit(section: bytes) -> Dict[str, Any]:
-    r = BitReader(section[3:] if len(section) > 3 else b"")
-    source_id = r.u(16)
-    r.u(2)
-    r.u(5)
-    r.u(1)
-    r.u(8)
-    r.u(8)
-    r.u(8)
-    n_ev = r.u(8)
+    r = BitReader(_table_bytes(section))
+    try:
+        source_id = r.u(16)
+        r.u(2)
+        r.u(5)
+        r.u(1)
+        r.u(8)
+        r.u(8)
+        r.u(8)
+        n_ev = r.u(8)
+    except ShortSection:
+        return {"source_id": 0, "events": []}
     events: List[Dict[str, Any]] = []
     for _ in range(n_ev):
-        r.u(2)
-        event_id = r.u(14)
-        gps_start = r.u(32)
-        r.u(2)
-        r.u(2)
-        duration = r.u(20)
-        tlen = r.u(8)
-        title = parse_multiple_string(r.raw(tlen))
-        r.u(4)
-        dlen = r.u(12)
-        r.raw(dlen)
+        # event_id through title_length. A short section stops here.
+        if r.remaining() < 80:
+            break
+        try:
+            r.u(2)
+            event_id = r.u(14)
+            gps_start = r.u(32)
+            r.u(2)
+            r.u(2)
+            duration = r.u(20)
+            tlen = r.u(8)
+            if r.remaining() < tlen * 8 + 16:
+                break
+            title = parse_multiple_string(r.raw(tlen))
+            r.u(4)
+            dlen = r.u(12)
+            if r.remaining() < dlen * 8:
+                break
+            r.raw(dlen)
+        except ShortSection:
+            break
         start_dt = gps_to_datetime(gps_start)
         end_dt = gps_to_datetime(gps_start + duration)
         events.append({
@@ -467,19 +532,23 @@ def parse_eit(section: bytes) -> Dict[str, Any]:
 
 def parse_ett(section: bytes) -> Dict[str, Any]:
     """One extended-text section. Event messages use ETM_id low bits 10."""
-    if len(section) < 17:
+    body = _table_bytes(section)
+    if len(body) < 10:
         return {}
-    r = BitReader(section[3:])
-    r.u(16)
-    r.u(2)
-    r.u(5)
-    r.u(1)
-    section_number = r.u(8)
-    r.u(8)
-    r.u(8)
-    etm_id = r.u(32)
+    r = BitReader(body)
+    try:
+        r.u(16)
+        r.u(2)
+        r.u(5)
+        r.u(1)
+        section_number = r.u(8)
+        r.u(8)
+        r.u(8)
+        etm_id = r.u(32)
+    except ShortSection:
+        return {}
     # Kept as sent. A long text splits across sections, sometimes at a space.
-    text = parse_multiple_string(section[13:-4], strip=False)
+    text = parse_multiple_string(body[10:], strip=False)
     return {
         "source_id": (etm_id >> 16) & 0xFFFF,
         "event_id": (etm_id >> 2) & 0x3FFF,
@@ -502,24 +571,46 @@ def parse_atsc_ts(
     """
     sources: Dict[int, str] = {}
     by_source: Dict[int, List[Dict[str, Any]]] = {}
-    descriptions: Dict[tuple, List[tuple]] = {}
+    seen: Dict[int, set] = {}
+    total = 0
+    descriptions: Dict[tuple, Dict[int, str]] = {}
     for section in sections if sections is not None else collect_sections(ts_data):
         if not section:
             continue
         table_id = section[0]
         if table_id == TABLE_TVCT:
             for source_id, row in parse_tvct_rows(section).items():
+                if source_id not in sources and len(sources) >= MAX_SOURCES:
+                    continue
                 mapped = (lineup_by_program or {}).get(int(row["program"]))
                 sources[source_id] = mapped or row["number"]
         elif table_id == TABLE_EIT:
             parsed = parse_eit(section)
             sid = int(parsed["source_id"])
-            by_source.setdefault(sid, []).extend(parsed["events"])
+            if sid not in by_source and len(by_source) >= MAX_SOURCES:
+                continue
+            bucket = by_source.setdefault(sid, [])
+            have = seen.setdefault(sid, set())
+            for event in parsed["events"]:
+                if len(bucket) >= MAX_EVENTS_PER_CHANNEL or total >= MAX_EVENTS_TOTAL:
+                    break
+                key = (event.get("gps_start"), event.get("title"))
+                if key in have:
+                    continue
+                have.add(key)
+                bucket.append(event)
+                total += 1
         elif table_id == TABLE_ETT:
             ett = parse_ett(section)
             if ett.get("is_event") and ett.get("text"):
                 key = (int(ett["source_id"]), int(ett["event_id"]))
-                descriptions.setdefault(key, []).append((int(ett["section_number"]), ett["text"]))
+                if key not in descriptions and len(descriptions) >= MAX_DESCRIPTION_KEYS:
+                    continue
+                parts = descriptions.setdefault(key, {})
+                number = int(ett["section_number"])
+                if number not in parts and len(parts) >= 256:
+                    continue
+                parts[number] = ett["text"]
     programs: Dict[str, List[Dict[str, Any]]] = {}
     for source_id, events in by_source.items():
         number = sources.get(source_id) or str(source_id)
@@ -539,15 +630,12 @@ def parse_atsc_ts(
     return programs
 
 
-def _event_description(descriptions: Dict[tuple, List[tuple]], source_id: int, event_id: Any) -> str:
-    parts = descriptions.get((int(source_id), int(event_id or 0))) or []
+def _event_description(descriptions: Dict[tuple, Dict[int, str]], source_id: int, event_id: Any) -> str:
+    parts = descriptions.get((int(source_id), int(event_id or 0))) or {}
     if not parts:
         return ""
     # Stations repeat each section many times. One copy per section number.
-    by_section: Dict[int, str] = {}
-    for number, text in parts:
-        by_section.setdefault(int(number), text)
-    return "".join(by_section[n] for n in sorted(by_section)).strip()
+    return "".join(parts[n] for n in sorted(parts)).strip()
 
 
 class GuideYield(Exception):

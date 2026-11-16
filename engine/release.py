@@ -2,7 +2,8 @@
 
 Each commit unpacks to ~/.local/share/yagi/releases/<sha>, and current
 points at it. An edit saved halfway in the repo never reaches a recording.
-Standard library only: the git hooks run this without the app's environment.
+The git hook runs this file on its own. The repo root goes on the path so
+the bounded git capture in engine.procio imports, and nothing else is required.
 
 `omarchy plugin update` is a git pull, and a pull runs no hooks, so each timer
 tick also republishes when the source repo's HEAD has moved.
@@ -10,12 +11,19 @@ tick also republishes when the source repo's HEAD has moved.
 
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import time
-from typing import Optional
+from typing import List, Optional
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from engine.procio import capture
 
 DEFAULT_ROOT = os.path.expanduser("~/.local/share/yagi")
 # A record finish or Guide update can still be running from an older copy.
@@ -25,8 +33,62 @@ TIMER = "yagi-record.timer"
 UNITS = ("yagi-record.service", TIMER)
 
 
+# What the record timer needs from HEAD. Agent notes, Cursor setup, tests,
+# and developer scripts stay in the git checkout and out of this copy.
+SNAPSHOT_DIRS = (
+    "assets/",
+    "bin/",
+    "engine/",
+    "markets/",
+    "player/",
+    "plugin/",
+    "systemd/",
+)
+SNAPSHOT_FILES = frozenset({
+    "CHANGELOG.md",
+    "DESIGN.md",
+    "HARDWARE_AND_TROUBLESHOOTING.md",
+    "LICENSE",
+    "README.md",
+    "manifest.json",
+})
+# A secret under an allowed directory still stays out.
+_SNAPSHOT_DENY = re.compile(
+    r"(^|/)\.env($|\.)|(^|/)id_rsa($|\.)|\.(pem|p12|key)$|(^|/)credentials([^/]|$)|(^|/)secrets?(/|$)",
+    re.IGNORECASE,
+)
+
+
+def snapshot_allowed(path: str) -> bool:
+    name = path.replace("\\", "/").lstrip("./")
+    if not name or _SNAPSHOT_DENY.search(name):
+        return False
+    if name in SNAPSHOT_FILES:
+        return True
+    return any(name.startswith(prefix) for prefix in SNAPSHOT_DIRS)
+
+
+def snapshot_paths(repo: str) -> List[str]:
+    """Tracked files publish() unpacks. Everything else in HEAD is left behind."""
+    raw = _git(repo, "ls-files", "-z")
+    names = []
+    for part in raw.split(b"\0"):
+        if not part:
+            continue
+        name = part.decode("utf-8", "surrogateescape")
+        if snapshot_allowed(name):
+            names.append(name)
+    return names
+
+
 def _git(repo: str, *args: str) -> bytes:
-    return subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True).stdout
+    result = capture(
+        ["git", "-C", repo, *args],
+        max_bytes=64 * 1024 * 1024,
+        timeout=120,
+        check=True,
+    )
+    return result.stdout
 
 
 def current_sha(root: str = DEFAULT_ROOT) -> str:
@@ -58,7 +120,11 @@ def publish(repo: str, root: str = DEFAULT_ROOT, now: Optional[float] = None) ->
         tmp = os.path.join(releases, f".{sha}.tmp.{os.getpid()}")
         shutil.rmtree(tmp, ignore_errors=True)
         os.makedirs(tmp, mode=0o700)
-        with tarfile.open(fileobj=io.BytesIO(_git(repo, "archive", "--format=tar", "HEAD"))) as tar:
+        members = snapshot_paths(repo)
+        if not members:
+            raise RuntimeError("HEAD has no files for the record-timer snapshot")
+        blob = _git(repo, "archive", "--format=tar", "HEAD", *members)
+        with tarfile.open(fileobj=io.BytesIO(blob)) as tar:
             tar.extractall(tmp, filter="data")
         os.rename(tmp, dest)
     previous = current_sha(root)

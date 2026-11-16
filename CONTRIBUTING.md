@@ -7,12 +7,17 @@ User setup is in [README.md](README.md). Why the play path works is `DESIGN.md`.
 From the repo root, install the test tools once, then run the suite:
 
 ```bash
-bash scripts/setup-test-env.sh
+bash scripts/dev-setup.sh
 python3 -m unittest
 python3 bin/yagi status
+python3 scripts/pre_review.py
 ```
 
-`scripts/setup-test-env.sh` installs python3, luajit (also available as `lua`), psmisc (`fuser`, so the library cap can see a file that is open), nodejs, ffmpeg, mpv, procps, and Qt 6's `qmltestrunner` with the Quick modules. GitHub Actions runs that script and then `python3 -m unittest` on every pull request and every push to `main`. A missing one of those tools fails the suite; it is not a skip. The suite instantiates `plugin/BarWidget.qml` and every page offscreen with Qt 6 (`/usr/lib/qt6/bin/qmltestrunner`, or another binary that reports Qt 6). A Qt 5 `qmltestrunner` earlier on `PATH` is not used. If that runner is missing, the failure names `qt6-declarative` / `qt6-declarative-dev-tools`. When pid 1 is systemd, the suite also checks that a scope leaves the caller's cgroup, using the real `XDG_RUNTIME_DIR`. A missing user-manager socket fails that test. It skips only when pid 1 is not systemd. The other skip is the live ATSC tuner test.
+`scripts/dev-setup.sh` is opt-in. It installs python3, luajit (also available as `lua`), psmisc (`fuser`, so the library cap can see a file that is open), nodejs, ffmpeg, mpv, procps, and Qt 6's `qmltestrunner` with the Quick modules, and it enables linger so the user manager exists. Run it when you mean to. Cursor's automatic install hook is `scripts/setup-test-env.sh`, which only checks that those tools are already on `PATH`. GitHub Actions runs `scripts/dev-setup.sh` and then `python3 -m unittest` on every pull request and every push to `main`.
+
+`python3 scripts/pre_review.py` is the check to run before sending a tree for review. It fails if the release snapshot would ship agent or dev files, if a command reads unbounded output or a timeout leaves its process group running, if a broadcast parser trusts a declared count past the bytes it has, or if an automatic agent setup uses sudo, a package manager, or loginctl. Exit 0 is pass. Anything else prints a FAIL line for each class.
+
+A missing one of those tools fails the suite; it is not a skip. The suite instantiates `plugin/BarWidget.qml` and every page offscreen with Qt 6 (`/usr/lib/qt6/bin/qmltestrunner`, or another binary that reports Qt 6). A Qt 5 `qmltestrunner` earlier on `PATH` is not used. If that runner is missing, the failure names `qt6-declarative` / `qt6-declarative-dev-tools`. When pid 1 is systemd, the suite also checks that a scope leaves the caller's cgroup, using the real `XDG_RUNTIME_DIR`. A missing user-manager socket fails that test. It skips only when pid 1 is not systemd. The other skip is the live ATSC tuner test.
 
 Tests set their own `XDG_*` directories and do not read or write `~/Videos/TV` or `~/.config/yagi`. They also do not put sockets in `/tmp`. They reject a non-item, such as a hover handler or a timer, placed directly in `KeyboardPanel`. That panel's default property only accepts items, and a handler there stops the bar from loading. They also reject an editable text field (`TextField`, `TextInput`, `TextEdit`, `TextArea`) that is not inside a `Loader` whose `active` starts false.
 

@@ -1099,7 +1099,7 @@ class TestTimeshift(unittest.TestCase):
             })
             with patch("engine.timeshift.MPV_CHANNELS_CONF", conf), \
                  patch("engine.timeshift.CHANNELS_JSON_PATH", listed), \
-                 patch("subprocess.run", return_value=MagicMock(stdout=probe)):
+                 patch("engine.timeshift.capture", return_value=subprocess.CompletedProcess(["ffprobe"], 0, stdout=probe)):
                 self.assertTrue(Timeshift._remember_pids(dump))
                 self.assertFalse(Timeshift._conf_needs_full_mux("WEWSHD"))
             with open(conf, encoding="utf-8") as f:
@@ -1208,7 +1208,7 @@ class TestTimeshift(unittest.TestCase):
             })
             with patch("engine.timeshift.MPV_CHANNELS_CONF", conf), \
                  patch("engine.timeshift.CHANNELS_JSON_PATH", listed), \
-                 patch("subprocess.run", return_value=MagicMock(stdout=probe)):
+                 patch("engine.timeshift.capture", return_value=subprocess.CompletedProcess(["ffprobe"], 0, stdout=probe)):
                 self.assertTrue(Timeshift._remember_pids(dump, 195028615))
                 self.assertFalse(Timeshift._conf_needs_full_mux("WUAB"))
             with open(conf, encoding="utf-8") as f:
