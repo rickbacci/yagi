@@ -155,29 +155,31 @@ def _kill_group(proc: subprocess.Popen) -> None:
             sid = os.getsid(pid)
         except OSError:
             sid = None
-    # A different session is the child's. Stop every group in it except ours.
-    # A child that stayed in our session is stopped by pid, never by killpg.
+    # Children first, by pid. That does not signal our process group, and it
+    # still reaches a background job that left its leader's group.
+    for child in _descendants(pid):
+        if child <= 1 or child == os.getpid():
+            continue
+        try:
+            os.kill(child, signal.SIGKILL)
+        except OSError:
+            pass
+    # Then any other group in the child's session, never our own group.
     if sid and sid > 1 and sid != my_sid:
         for pgid in _session_groups(sid, mine):
-            if pgid <= 1 or pgid == mine:
+            if pgid <= 1 or pgid == mine or pgid == os.getpgrp():
                 continue
             try:
                 os.killpg(pgid, signal.SIGKILL)
             except OSError:
                 pass
         for other, _ppid, pgrp, session in _proc_ids():
-            if session != sid or other <= 1 or other == os.getpid() or pgrp == mine:
+            if session != sid or other <= 1 or other == os.getpid():
+                continue
+            if pgrp == mine or pgrp == os.getpgrp():
                 continue
             try:
                 os.kill(other, signal.SIGKILL)
-            except OSError:
-                pass
-    else:
-        for child in _descendants(pid):
-            if child <= 1 or child == os.getpid():
-                continue
-            try:
-                os.kill(child, signal.SIGKILL)
             except OSError:
                 pass
     _kill_pid(proc)

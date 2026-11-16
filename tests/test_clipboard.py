@@ -58,6 +58,7 @@ class TestClipboardText(unittest.TestCase):
             _install_paste(
                 folder,
                 "#!/bin/sh\n"
+                "set +m\n"
                 "python3 -c 'import os,time; open(os.environ[\"YAGI_SLEEP_PID\"],\"w\").write(str(os.getpid())); time.sleep(60)' &\n"
                 "i=0\n"
                 "while [ ! -s \"$YAGI_SLEEP_PID\" ]; do\n"

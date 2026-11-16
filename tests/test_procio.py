@@ -50,6 +50,7 @@ class TestProcessGroup(unittest.TestCase):
     def test_a_descendant_in_the_new_session_dies(self):
         sleep_pid = None
         script = (
+            "set +m\n"
             "python3 -c 'import os,time; open(os.environ[\"P\"],\"w\").write(str(os.getpid())); time.sleep(30)' &\n"
             "i=0\n"
             "while [ ! -s \"$P\" ]; do i=$((i+1)); [ \"$i\" -gt 200 ] && exit 1; sleep 0.01; done\n"
