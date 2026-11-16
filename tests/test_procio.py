@@ -51,18 +51,24 @@ class TestProcessGroup(unittest.TestCase):
     def test_a_descendant_in_the_new_session_dies(self):
         sleep_pid = None
         script = (
+            "#!/bin/sh\n"
             "set +m\n"
             "python3 -c 'import os,time; open(os.environ[\"P\"],\"w\").write(str(os.getpid())); time.sleep(30)' &\n"
             "i=0\n"
             "while [ ! -s \"$P\" ]; do i=$((i+1)); [ \"$i\" -gt 200 ] && exit 1; sleep 0.01; done\n"
             "python3 -c 'import sys,time; sys.stdout.buffer.write(b\"z\"*64); sys.stdout.buffer.flush(); time.sleep(30)'\n"
         )
+        import stat
         import tempfile
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "pid")
+            exe = os.path.join(folder, "producer")
+            with open(exe, "w", encoding="utf-8") as handle:
+                handle.write(script)
+            os.chmod(exe, stat.S_IRWXU)
             env = dict(os.environ)
             env["P"] = path
-            capture(["sh", "-c", script], max_bytes=32, timeout=2, env=env)
+            capture([exe], max_bytes=32, timeout=2, env=env)
             with open(path, encoding="utf-8") as handle:
                 sleep_pid = int(handle.read().strip())
         deadline = time.monotonic() + 1.0
