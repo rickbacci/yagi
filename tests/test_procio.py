@@ -53,7 +53,7 @@ class TestProcessGroup(unittest.TestCase):
             "python3 -c 'import os,time; open(os.environ[\"P\"],\"w\").write(str(os.getpid())); time.sleep(30)' &\n"
             "i=0\n"
             "while [ ! -s \"$P\" ]; do i=$((i+1)); [ \"$i\" -gt 200 ] && exit 1; sleep 0.01; done\n"
-            "python3 -c 'import sys; sys.stdout.buffer.write(b\"z\"*64)'\n"
+            "python3 -c 'import sys,time; sys.stdout.buffer.write(b\"z\"*64); sys.stdout.buffer.flush(); time.sleep(30)'\n"
         )
         import tempfile
         with tempfile.TemporaryDirectory() as folder:

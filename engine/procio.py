@@ -42,6 +42,10 @@ def capture(
         env=None if env is None else dict(env),
         pass_fds=tuple(pass_fds),
     )
+    try:
+        proc._yagi_sid = os.getsid(proc.pid)  # type: ignore[attr-defined]
+    except OSError:
+        proc._yagi_sid = None  # type: ignore[attr-defined]
     stdout = bytearray()
     stderr = bytearray()
     deadline = time.monotonic() + max(0.0, float(timeout))
@@ -144,19 +148,28 @@ def _kill_group(proc: subprocess.Popen) -> None:
     if not pid or pid <= 1 or pid == os.getpid():
         return
     mine = os.getpgrp()
-    try:
-        sid = os.getsid(pid)
-    except OSError:
-        _kill_pid(proc)
-        return
-    # Snapshot first. Killing the leader reparents the children.
-    if sid > 1 and sid != os.getsid(0):
-        groups = _session_groups(sid, mine)
-        for pgid in groups:
+    my_sid = os.getsid(0)
+    sid = getattr(proc, "_yagi_sid", None)
+    if not sid:
+        try:
+            sid = os.getsid(pid)
+        except OSError:
+            sid = None
+    # A different session is the child's. Stop every group in it except ours.
+    # A child that stayed in our session is stopped by pid, never by killpg.
+    if sid and sid > 1 and sid != my_sid:
+        for pgid in _session_groups(sid, mine):
             if pgid <= 1 or pgid == mine:
                 continue
             try:
                 os.killpg(pgid, signal.SIGKILL)
+            except OSError:
+                pass
+        for other, _ppid, pgrp, session in _proc_ids():
+            if session != sid or other <= 1 or other == os.getpid() or pgrp == mine:
+                continue
+            try:
+                os.kill(other, signal.SIGKILL)
             except OSError:
                 pass
     else:
@@ -164,8 +177,7 @@ def _kill_group(proc: subprocess.Popen) -> None:
             if child <= 1 or child == os.getpid():
                 continue
             try:
-                if os.getpgid(child) == mine:
-                    os.kill(child, signal.SIGKILL)
+                os.kill(child, signal.SIGKILL)
             except OSError:
                 pass
     _kill_pid(proc)
