@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from engine.release import KEEP_NEWEST, KEEP_SECS, TIMER, UNITS, current_sha, install, publish, refresh, uninstall
 
@@ -128,14 +129,14 @@ class TestRelease(unittest.TestCase):
     def test_data_home_is_the_release_root(self):
         from engine.release import default_root
 
-        with unittest.mock.patch.dict(os.environ, {"XDG_DATA_HOME": self.tmp.name}):
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": self.tmp.name}):
             self.assertEqual(default_root(), os.path.join(self.tmp.name, "yagi"))
 
     def test_without_data_home_the_release_root_is_local_share(self):
         from engine.release import default_root
 
         env = {key: value for key, value in os.environ.items() if key != "XDG_DATA_HOME"}
-        with unittest.mock.patch.dict(os.environ, env, clear=True):
+        with mock.patch.dict(os.environ, env, clear=True):
             self.assertEqual(default_root(), os.path.expanduser("~/.local/share/yagi"))
 
     def test_the_timer_unit_follows_data_home(self):
@@ -153,7 +154,7 @@ class TestRelease(unittest.TestCase):
             seen["argv"] = list(argv)
             return subprocess.CompletedProcess(argv, 0, b"abc\n", b"")
 
-        with unittest.mock.patch.object(release, "capture", side_effect=fake):
+        with mock.patch.object(release, "capture", side_effect=fake):
             self.assertEqual(release._git(self.repo, "rev-parse", "HEAD"), b"abc\n")
         self.assertIn(f"safe.directory={os.path.abspath(self.repo)}", seen["argv"])
         self.assertNotIn("safe.directory=*", seen["argv"])

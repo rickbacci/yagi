@@ -20,6 +20,26 @@ def _load_check():
     return module
 
 
+class TestQmllintFlags(unittest.TestCase):
+    def test_a_longer_option_is_not_the_short_one(self):
+        check = _load_check()
+        longer = "\n".join([
+            "  --property-override <name>",
+            "  --type-info <file>",
+            "  --alias-cycle",
+            "  --signal-handler",
+        ])
+        self.assertEqual(check.qmllint_level_flags(longer), [])
+        exact = "\n".join(f"  --{flag} <level>" for flag in ("property", "type", "alias", "signal"))
+        self.assertEqual(
+            check.qmllint_level_flags(exact),
+            ["property", "type", "alias", "signal"],
+        )
+        both = "--property-override <name>\n--property <level>\n"
+        self.assertEqual(check.qmllint_level_flags(both), ["property"])
+        self.assertEqual(check.qmllint_level_flags(""), [])
+
+
 class TestPreReview(unittest.TestCase):
     def test_the_allowlist_matches_the_snapshot(self):
         from engine.release import SNAPSHOT_DIRS, SNAPSHOT_FILES

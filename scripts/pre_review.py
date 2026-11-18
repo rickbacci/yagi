@@ -832,6 +832,24 @@ def _qmllint_bin() -> str:
     return ""
 
 
+_QMLLINT_LEVELS = (
+    "import", "unqualified", "property", "type", "required", "alias", "signal", "deprecated",
+)
+
+
+def qmllint_level_flags(help_text: str) -> List[str]:
+    """Warning-level flags this qmllint actually accepts.
+
+    `--property` must not match `--property-override`. A hyphen is part of
+    the option token, so a word boundary is not enough.
+    """
+    found = []
+    for flag in _QMLLINT_LEVELS:
+        if re.search(r"(?<![\w-])--" + re.escape(flag) + r"(?![\w-])", help_text):
+            found.append(flag)
+    return found
+
+
 def _qmllint(root: str) -> List[str]:
     binary = _qmllint_bin()
     if not binary:
@@ -845,15 +863,12 @@ def _qmllint(root: str) -> List[str]:
     help_res = _tool([binary, "--help"], 30)
     help_text = (help_res.stdout or "") + "\n" + (help_res.stderr or "")
     argv = [binary]
-    can_demote = False
-    for flag in (
-        "import", "unqualified", "property", "type", "required", "alias", "signal", "deprecated",
-    ):
-        if f"--{flag}" in help_text:
-            argv.extend([f"--{flag}", "info"])
-            can_demote = True
+    levels = qmllint_level_flags(help_text)
+    for flag in levels:
+        argv.extend([f"--{flag}", "info"])
+    can_demote = bool(levels)
     stubs = os.path.join(root, "tests", "qmlstub")
-    if os.path.isdir(stubs) and "-I" in help_text:
+    if os.path.isdir(stubs) and re.search(r"(?<![\w-])-I(?![\w-])", help_text):
         argv.extend(["-I", stubs])
     argv.extend(files)
     res = _tool(argv, 120)
