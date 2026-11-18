@@ -27,8 +27,6 @@ from engine.dvr import (
     KEEP_FREE_GIB,
     GROW_BYTES,
 )
-from engine.tuner import TunerAdapter
-
 # The live timer holds the real Tuner 1 lock during a Guide update.
 _TUNER_LOCK = patch("engine.pool.LOCK_PREFIX", f"test-tuner-dvr-{os.getpid()}-")
 
@@ -241,7 +239,7 @@ class TestDvrEngine(unittest.TestCase):
                 raise FileNotFoundError("fuser")
 
             err = io.StringIO()
-            with patch("engine.episodes.subprocess.run", side_effect=missing_fuser), \
+            with patch("engine.episodes.capture", side_effect=missing_fuser), \
                     patch("engine.dvr.resolve_library_budget_bytes", return_value=1), \
                     redirect_stderr(err):
                 removed = DvrManager.enforce_library_budget(

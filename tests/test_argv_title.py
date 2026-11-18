@@ -168,9 +168,9 @@ class TestPlaybackAndToolsArgv(unittest.TestCase):
                 calls.append(list(argv))
                 return __import__("subprocess").CompletedProcess(argv, 0, stdout="", stderr="")
 
-            with patch("engine.ads.subprocess.run", side_effect=run), \
+            with patch("engine.ads.capture", side_effect=run), \
                     patch("engine.ads.shutil.disk_usage", return_value=__import__("unittest").mock.Mock(free=1024)), \
-                    patch("engine.episodes.subprocess.run", side_effect=run):
+                    patch("engine.episodes.capture", side_effect=run):
                 ads.ffmpeg_ads(path, {"title": SECRET})
                 ads.media_seconds(path)
                 ads.comskip_ads("/usr/bin/comskip", path, {"title": SECRET, "service_id": 3})

@@ -277,7 +277,6 @@ def _qt_label(path):
         linked = ldd.stdout or ""
         lib = re.search(r"(libQt6Core\.so[^ ]*)", linked)
         if lib:
-            target = os.path.realpath(lib.group(1)) if os.path.isabs(lib.group(1)) else ""
             # ldd prints "libQt6Core.so.6 => /path/libQt6Core.so.6.4.2"
             resolved = re.search(r"libQt6Core\.so\.6\s*=>\s*(\S+)", linked)
             if resolved:

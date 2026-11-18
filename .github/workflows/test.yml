@@ -12,7 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install test dependencies
-        run: bash scripts/setup-test-env.sh
+        run: bash scripts/dev-setup.sh
+      - name: Pre-review check
+        run: python3 scripts/pre_review.py
       - name: Run the suite
         run: python3 -m unittest
 
@@ -30,8 +32,18 @@ jobs:
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed \
             python qt6-declarative qt5-declarative qt6-svg \
-            luajit psmisc nodejs ffmpeg mpv procps-ng
+            luajit psmisc nodejs ffmpeg mpv procps-ng jq ruff
           test -x /usr/bin/qmltestrunner
           test -x /usr/lib/qt6/bin/qmltestrunner
+          if ! command -v qmllint >/dev/null 2>&1; then
+            if [ -x /usr/lib/qt6/bin/qmllint ]; then
+              ln -sfn /usr/lib/qt6/bin/qmllint /usr/local/bin/qmllint
+            fi
+          fi
+          command -v qmllint
+          command -v ruff
+          command -v jq
+      - name: Pre-review check
+        run: python3 scripts/pre_review.py
       - name: Run the suite
         run: python3 -m unittest

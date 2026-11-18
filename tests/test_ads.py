@@ -94,7 +94,7 @@ class TestComskipSeesTheProgram(unittest.TestCase):
                 return subprocess.CompletedProcess(cmd, 0)
 
             free = mock.Mock(free=100 * 1024 ** 3)
-            with mock.patch.object(ads.subprocess, "run", side_effect=run), \
+            with mock.patch.object(ads, "capture", side_effect=run), \
                     mock.patch.object(ads.shutil, "disk_usage", return_value=free):
                 self.assertEqual(ads.comskip_ads("/usr/bin/comskip", path, {"service_id": 3}), [[100.5, 130.0]])
             remux, comskip = calls
@@ -117,7 +117,7 @@ class TestComskipSeesTheProgram(unittest.TestCase):
             with open(path, "wb") as f:
                 f.write(b"\x47" * 188)
             with mock.patch.object(ads.shutil, "disk_usage", return_value=mock.Mock(free=1024)), \
-                    mock.patch.object(ads.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+                    mock.patch.object(ads, "capture", return_value=subprocess.CompletedProcess([], 0)) as run:
                 self.assertEqual(ads.comskip_ads("/usr/bin/comskip", path), [])
             self.assertEqual(run.call_count, 1)
             shown = run.call_args[0][0][-1]
@@ -202,7 +202,7 @@ class TestComskipCrashMessage(unittest.TestCase):
             with open(path, "wb") as f:
                 f.write(b"\x47" * 188)
             with mock.patch.object(ads, "_with_program_table", return_value=None), \
-                    mock.patch.object(ads.subprocess, "run", return_value=subprocess.CompletedProcess([], -11)):
+                    mock.patch.object(ads, "capture", return_value=subprocess.CompletedProcess([], -11)):
                 self.assertEqual(ads.comskip_ads("/usr/bin/comskip", path), [])
             self.assertIn("SIGSEGV", ads.last_comskip_failure)
 

@@ -1,0 +1,7 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+# Syntax errors and pyflakes. The rest of the style is left alone.
+select = ["E9", "F"]

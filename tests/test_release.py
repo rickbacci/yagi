@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from engine.release import KEEP_NEWEST, KEEP_SECS, TIMER, UNITS, current_sha, install, publish, refresh, uninstall
 
@@ -85,6 +86,29 @@ class TestRelease(unittest.TestCase):
         self.assertEqual(moved, current_sha(self.root))
         self.assertEqual(self._current(), "two")
 
+    def test_agent_and_dev_files_stay_out_of_the_snapshot(self):
+        os.makedirs(os.path.join(self.repo, ".cursor"))
+        os.makedirs(os.path.join(self.repo, "scripts"))
+        os.makedirs(os.path.join(self.repo, "engine"))
+        for path, text in (
+            ("AGENTS.md", "agent\n"),
+            (os.path.join(".cursor", "environment.json"), "{}\n"),
+            (os.path.join("scripts", "dev-setup.sh"), "#!/bin/sh\n"),
+            (".env", "TOKEN=1\n"),
+            (os.path.join("engine", ".env"), "TOKEN=1\n"),
+        ):
+            with open(os.path.join(self.repo, path), "w", encoding="utf-8") as handle:
+                handle.write(text)
+        self._commit("one")
+        publish(self.repo, self.root)
+        current = os.path.join(self.root, "current")
+        self.assertEqual(self._current(), "one")
+        self.assertFalse(os.path.exists(os.path.join(current, "AGENTS.md")))
+        self.assertFalse(os.path.exists(os.path.join(current, ".cursor")))
+        self.assertFalse(os.path.exists(os.path.join(current, "scripts")))
+        self.assertFalse(os.path.exists(os.path.join(current, ".env")))
+        self.assertFalse(os.path.exists(os.path.join(current, "engine", ".env")))
+
     def test_install_starts_the_timer_and_uninstall_leaves_nothing(self):
         os.makedirs(os.path.join(self.repo, "systemd", "user"))
         for name in UNITS:
@@ -101,6 +125,56 @@ class TestRelease(unittest.TestCase):
         self.assertEqual(os.listdir(units), [])
         self.assertFalse(os.path.exists(self.root))
         self.assertIn(["systemctl", "--user", "disable", "--now", TIMER], calls)
+
+    def test_data_home_is_the_release_root(self):
+        from engine.release import default_root
+
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": self.tmp.name}):
+            self.assertEqual(default_root(), os.path.join(self.tmp.name, "yagi"))
+
+    def test_without_data_home_the_release_root_is_local_share(self):
+        from engine.release import default_root
+
+        env = {key: value for key, value in os.environ.items() if key != "XDG_DATA_HOME"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(default_root(), os.path.expanduser("~/.local/share/yagi"))
+
+    def test_the_timer_unit_follows_data_home(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "systemd", "user", "yagi-record.service"), encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("${XDG_DATA_HOME:-$HOME/.local/share}/yagi/current/bin/yagi", text)
+
+    def test_git_names_this_checkout(self):
+        from engine import release
+
+        seen = {}
+
+        def fake(argv, **_kw):
+            seen["argv"] = list(argv)
+            return subprocess.CompletedProcess(argv, 0, b"abc\n", b"")
+
+        with mock.patch.object(release, "capture", side_effect=fake):
+            self.assertEqual(release._git(self.repo, "rev-parse", "HEAD"), b"abc\n")
+        self.assertIn(f"safe.directory={os.path.abspath(self.repo)}", seen["argv"])
+        self.assertNotIn("safe.directory=*", seen["argv"])
+
+
+class TestReleaseTag(unittest.TestCase):
+    def test_the_tag_checker_uses_manifest_and_does_not_publish(self):
+        import subprocess
+        import sys
+
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "check-release-tag.py")
+        good = subprocess.run([sys.executable, script, "v0.1.7"], capture_output=True, text=True, timeout=30)
+        bad = subprocess.run([sys.executable, script, "v9.9.9"], capture_output=True, text=True, timeout=30)
+        notes = subprocess.run([sys.executable, script, "--notes"], capture_output=True, text=True, timeout=30)
+        self.assertEqual(good.returncode, 0, good.stdout + good.stderr)
+        self.assertIn("v0.1.7 matches manifest.json", good.stdout)
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("does not match manifest.json", bad.stdout)
+        self.assertEqual(notes.returncode, 0, notes.stderr)
+        self.assertIn("yagi install", notes.stdout.lower())
 
 
 if __name__ == "__main__":

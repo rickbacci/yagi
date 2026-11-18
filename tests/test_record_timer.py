@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -66,7 +67,7 @@ class TestOwnScope(unittest.TestCase):
 
     def test_stop_unit_waits_on_systemctl(self):
         with mock.patch("engine.paths.systemd_user", return_value=True), \
-                mock.patch("engine.paths.subprocess.run") as run:
+                mock.patch("engine.paths.capture") as run:
             self.assertTrue(stop_unit(LIVE_SLICE))
         self.assertEqual(run.call_args[0][0], ["systemctl", "--user", "stop", LIVE_SLICE])
 
@@ -132,7 +133,19 @@ class TestOwnScope(unittest.TestCase):
             self.assertNotEqual(group, mine)
         finally:
             proc.kill()
-            proc.wait()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    pgid = os.getpgid(proc.pid)
+                except OSError:
+                    pgid = os.getpgrp()
+                if pgid != os.getpgrp() and pgid > 1:
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                proc.wait(timeout=5)
 
 
 class TestGuideStepsAside(unittest.TestCase):
@@ -203,7 +216,7 @@ class TestGuideStepsAside(unittest.TestCase):
             mock.patch("engine.pool.free_count", return_value=2),
             mock.patch("engine.paths.systemd_user", return_value=True),
         ]
-        with mock.patch.object(cli.subprocess, "run", return_value=failed) as run, \
+        with mock.patch("engine.procio.capture", return_value=failed) as run, \
                 mock.patch.object(cli.subprocess, "Popen") as spawn:
             for patch in patches:
                 patch.start()
@@ -219,7 +232,7 @@ class TestGuideStepsAside(unittest.TestCase):
         status = read_guide_status()
         self.assertGreaterEqual(int(status.get("failures") or 0), 1)
         self.assertIn("Failed to start", status.get("error") or "")
-        with mock.patch.object(cli.subprocess, "run") as again, \
+        with mock.patch("engine.procio.capture") as again, \
                 mock.patch.object(cli.subprocess, "Popen") as spawn_again:
             for patch in patches:
                 patch.start()
@@ -239,7 +252,7 @@ class TestGuideStepsAside(unittest.TestCase):
             "XDG_CACHE_HOME", "XDG_VIDEOS_DIR",
         }
         with mock.patch("engine.paths.systemd_user", return_value=True), \
-                mock.patch.object(cli.subprocess, "run", return_value=ok) as run, \
+                mock.patch("engine.procio.capture", return_value=ok) as run, \
                 mock.patch.object(cli.subprocess, "Popen") as spawn:
             cli._start_recording_finish()
             cli._start_recording_finish()
@@ -272,7 +285,7 @@ class TestGuideStepsAside(unittest.TestCase):
         failed = subprocess.CompletedProcess([], 1, "", "Failed to start transient service")
         buf = io.StringIO()
         with mock.patch("engine.paths.systemd_user", return_value=True), \
-                mock.patch.object(cli.subprocess, "run", return_value=failed), \
+                mock.patch("engine.procio.capture", return_value=failed), \
                 mock.patch.object(cli.subprocess, "Popen") as spawn, \
                 redirect_stdout(buf):
             cli._start_recording_finish()

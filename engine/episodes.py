@@ -12,13 +12,13 @@ trimmed to the same span a split episode gets. Games keep every minute.
 
 import os
 import re
-import subprocess
 import sys
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from engine.paths import chmod_private_file, state_lock
+from engine.procio import capture
 from engine.schedule import PAD_LATE_SEC, item_window
 
 # Two listings this close on one channel are one run. A skipped rerun in the
@@ -309,8 +309,8 @@ def in_use(path: str) -> bool:
 
     shield = HeldLinks()
     try:
-        res = subprocess.run(
-            ["fuser", shield.hide(path)], capture_output=True, timeout=2, pass_fds=tuple(shield.fds),
+        res = capture(
+            ["fuser", shield.hide(path)], max_bytes=65536, timeout=2, pass_fds=tuple(shield.fds),
         )
     except FileNotFoundError:
         if not _fuser_missing_logged:

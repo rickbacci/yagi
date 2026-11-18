@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from engine.hidden import hide_channel, is_hidden_channel, load_hidden, show_channel
+from engine.hidden import hide_channel, load_hidden, show_channel
 from player.controller import surfable_channels
 
 

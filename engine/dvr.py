@@ -10,7 +10,6 @@ import json
 import time
 import socket
 import signal
-import threading
 import subprocess
 import shutil
 import sys
@@ -831,6 +830,9 @@ class DvrManager:
                 start_new_session=True,
                 pass_fds=tuple(shield.fds),
             )
+        except FileNotFoundError:
+            shield.release()
+            raise RuntimeError("mpv is not installed.") from None
         except Exception:
             shield.release()
             raise
@@ -938,13 +940,12 @@ class DvrManager:
                     # Parse filename parts: e.g. 8.1-FOX_FOX_8_News_20260920_163200.ts
                     m = re.match(r"^([0-9\.\-]+)-([^_]+)_(.+)_([0-9]{8}_[0-9]{6})\.", entry.name)
                     if m:
-                        ch_num, station, title_raw, ts_raw = m.groups()
+                        ch_num, station, title_raw, _ts = m.groups()
                         title = title_raw.replace("_", " ")
                     else:
                         ch_num = ""
                         station = ""
                         title = entry.name
-                        ts_raw = ""
 
                     side = read_sidecar(entry.path)
                     if side:

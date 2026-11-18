@@ -60,6 +60,15 @@ class TestOneTuner(unittest.TestCase):
                 pool.pick_live({0: "record"})
             self.assertIn("The tuner is busy.", str(busy.exception))
 
+    def test_no_tuner_is_not_called_both_busy(self):
+        with mock.patch.object(pool, "adapters", return_value=()):
+            self.assertEqual(pool.busy_text(), "No tuner is connected.")
+            self.assertIsNone(pool.pick_work({}))
+            with self.assertRaises(pool.BothTunersBusy) as busy:
+                pool.pick_live({})
+            self.assertIn("No tuner is connected.", str(busy.exception))
+            self.assertNotIn("Both tuners", str(busy.exception))
+
 
 class TestYield(unittest.TestCase):
     def test_guide_yields_only_its_own_tuner(self):

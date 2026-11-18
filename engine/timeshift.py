@@ -20,6 +20,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from engine.procio import capture
 from engine.paths import (
     CHANNELS_JSON_PATH,
     FOLLOW_FIFO_PATH,
@@ -812,11 +813,13 @@ class Timeshift:
         spare = {keep_pid} | {int(s.source.get("dump_pid") or 0) for s in copies}
         mine = os.path.join(TIMESHIFT_DIR, "")
         try:
-            out = subprocess.check_output(
+            res = capture(
                 ["pgrep", "-af", "tower_dump.py|--stream-dump="],
-                stderr=subprocess.DEVNULL,
-                text=True,
+                max_bytes=1024 * 1024, timeout=2, text=True,
             )
+            if res.returncode != 0:
+                return
+            out = res.stdout or ""
         except Exception:
             return
         for line in out.splitlines():
@@ -849,11 +852,7 @@ class Timeshift:
                 if not os.path.exists(path):
                     continue
                 try:
-                    res = subprocess.run(
-                        ["fuser", path],
-                        capture_output=True,
-                        timeout=0.4,
-                    )
+                    res = capture(["fuser", path], max_bytes=65536, timeout=0.4)
                     if res.returncode == 0:
                         busy = True
                         break
@@ -975,11 +974,9 @@ class Timeshift:
         try:
             with open(dump_path, "rb") as src, open(sample, "wb") as dst:
                 dst.write(src.read(1024 * 1024))
-            probe = subprocess.run(
+            probe = capture(
                 ["ffprobe", "-v", "fatal", "-show_programs", "-of", "json", sample],
-                capture_output=True,
-                text=True,
-                timeout=15,
+                max_bytes=4 * 1024 * 1024, timeout=15, text=True,
             )
             data = json.loads(probe.stdout or "{}")
         except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):

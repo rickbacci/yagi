@@ -20,9 +20,10 @@ From the repo root, before a commit:
 ```bash
 python3 -m unittest
 bin/yagi status
+python3 scripts/pre_review.py
 ```
 
-Tests sandbox XDG (`tests/__init__.py`) and never put sockets in `/tmp`. After a QML change, `omarchy restart shell`.
+`scripts/dev-setup.sh` is the opt-in that installs test packages and enables linger. Cursor's install hook does not run it. Tests sandbox XDG (`tests/__init__.py`) and never put sockets in `/tmp`. After a QML change, `omarchy restart shell`.
 
 ## Do
 

@@ -13,6 +13,8 @@ import threading
 import time
 from typing import Iterator, List, Optional
 
+from engine.procio import capture
+
 DIR_PRIVATE = 0o700
 FILE_PRIVATE = 0o600
 
@@ -168,9 +170,9 @@ def unit_state(unit: str) -> str:
     if not systemd_user():
         return ""
     try:
-        result = subprocess.run(
+        result = capture(
             ["systemctl", "--user", "is-active", unit],
-            capture_output=True, text=True, timeout=2,
+            max_bytes=4096, timeout=2, text=True,
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -187,7 +189,7 @@ def stop_unit(unit: str) -> bool:
     if not systemd_user():
         return False
     try:
-        subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True, timeout=5)
+        capture(["systemctl", "--user", "stop", unit], max_bytes=65536, timeout=5)
     except (OSError, subprocess.TimeoutExpired):
         return False
     return True

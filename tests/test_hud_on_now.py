@@ -2,7 +2,6 @@
 
 import os
 import subprocess
-import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
